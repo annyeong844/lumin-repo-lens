@@ -2,6 +2,10 @@
 
 Evidence-backed TS/JS repo structure lens for coding assistants.
 
+Current public plugin status: `0.9.0-beta.1`. The engine and plugin
+surfaces are usable, but the Claude Code marketplace package is still in
+public beta before a stable `1.0.0` line.
+
 Lumin Repo Lens is an LLM-facing repo evidence engine for kind,
 vibe-coder-friendly answers. The engine writes machine evidence; Claude
 or another coding assistant reads it and explains what to do next

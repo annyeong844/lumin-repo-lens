@@ -4,8 +4,8 @@
     "name": "annyeong844"
   },
   "metadata": {
-    "description": "Public Claude Code marketplace for Lumin Repo Lens.",
-    "version": "1.11.11"
+    "description": "Public beta marketplace for annyeong844 Claude Code plugins.",
+    "version": "0.9.0-beta.1"
   },
   "plugins": [
     {
