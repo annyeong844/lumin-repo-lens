@@ -1,0 +1,17 @@
+{
+  "name": "annyeong844-marketplace",
+  "owner": {
+    "name": "annyeong844"
+  },
+  "metadata": {
+    "description": "Public Claude Code marketplace for Lumin Repo Lens.",
+    "version": "1.11.11"
+  },
+  "plugins": [
+    {
+      "name": "lumin-repo-lens",
+      "source": "./",
+      "description": "Lumin Repo Lens: evidence-backed TS/JS repo structure lens for Claude Code."
+    }
+  ]
+}

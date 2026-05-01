@@ -1,0 +1,33 @@
+{
+  "name": "lumin-repo-lens-skill",
+  "version": "1.11.11",
+  "description": "Deployable lumin-repo-lens repository evidence skill package.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "luminRepoLens": {
+    "distribution": "skill"
+  },
+  "bin": {
+    "lumin-repo-lens": "./scripts/audit-repo.mjs",
+    "lumin-audit": "./scripts/audit-repo.mjs",
+    "grounded-audit": "./scripts/audit-repo.mjs"
+  },
+  "scripts": {
+    "audit": "node scripts/audit-repo.mjs",
+    "pre-write": "node scripts/audit-repo.mjs --pre-write",
+    "post-write": "node scripts/audit-repo.mjs --post-write",
+    "canon-draft": "node scripts/audit-repo.mjs --canon-draft",
+    "check-canon": "node scripts/audit-repo.mjs --check-canon",
+    "smoke": "node scripts/smoke-test.mjs"
+  },
+  "dependencies": {
+    "@vscode/tree-sitter-wasm": "^0.3.1",
+    "oxc-parser": "^0.126.0",
+    "typescript": "^5.7.0",
+    "web-tree-sitter": "^0.26.8"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  }
+}

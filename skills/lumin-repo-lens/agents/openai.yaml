@@ -1,0 +1,6 @@
+interface:
+  display_name: "Lumin Repo Lens"
+  short_description: "TS/JS repo evidence review"
+  default_prompt: "Use $lumin-repo-lens to review this TS/JS repository and tell me what is stable, what to smooth next, and what to leave alone."
+policy:
+  allow_implicit_invocation: true

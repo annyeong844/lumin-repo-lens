@@ -1,0 +1,19 @@
+{
+  "name": "lumin-repo-lens",
+  "version": "1.11.11",
+  "description": "Lumin Repo Lens: evidence-backed TS/JS repo structure lens for Claude Code.",
+  "author": {
+    "name": "annyeong844"
+  },
+  "repository": "https://github.com/annyeong844/lumin-repo-lens",
+  "license": "MIT",
+  "keywords": [
+    "repo-lens",
+    "vibe-coding",
+    "typescript",
+    "dead-code",
+    "canonical-drift",
+    "refactor-plan",
+    "repository-structure"
+  ]
+}
