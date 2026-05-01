@@ -65,7 +65,7 @@ Internal audit words may be translated:
 | `SAFE_FIX` | low-risk cleanup candidate |
 | `REVIEW_FIX` | review-assisted cleanup candidate |
 | `DEGRADED` | collect evidence first |
-| `[확인 불가]` | not enough evidence yet |
+| `unknown` | not enough evidence yet |
 
 ## Phase Scope Rules
 

@@ -1,6 +1,0 @@
-interface:
-  display_name: "Lumin Canon"
-  short_description: "Canonical fact draft and drift checks"
-  default_prompt: "Use $grounded-canon to draft or check canonical repository facts from lumin-repo-lens evidence."
-policy:
-  allow_implicit_invocation: true

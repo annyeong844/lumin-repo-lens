@@ -6,7 +6,7 @@ instead of walking every checklist item.
 
 This template is output density, not analysis depth. Before filling it,
 do an internal checklist triage pass across all review lenses below and
-mark missing lanes as `[확인 불가]` internally. Use the long `templates/REVIEW_CHECKLIST.md` only
+mark missing lanes as `unknown` internally. Use the long `templates/REVIEW_CHECKLIST.md` only
 when the user asks to see the full checklist walk, due diligence, or
 CI-style validation.
 
@@ -140,7 +140,7 @@ Every concrete claim still needs one of these internal evidence labels:
 
 - `[grounded, <artifact>.json.<field-path> = <value>]`
 - `[degraded, confidence: low|medium|high, <reason>]`
-- `[확인 불가 / unknown, scan range: <range>]`
+- `[unknown, scan range: <range>]`
 
 Do not paste the full label by default. In ordinary chat, translate it
 to a short proof line such as `cycles: 0 (topology.json)` or

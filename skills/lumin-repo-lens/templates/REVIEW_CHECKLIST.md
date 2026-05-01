@@ -6,7 +6,7 @@ When a user asks for a structural review, walk every section with
 grounded evidence first and synthesis last. Closely related prompts may
 be answered together when the same artifact value or scan range proves
 the same point. If a prompt is not evaluated, label it explicitly as
-`[확인 불가 / unknown]` with the scan range instead of silently skipping it.
+`[unknown]` with the scan range instead of silently skipping it.
 
 ---
 
@@ -18,7 +18,7 @@ Every answer carries one label. The `[grounded]` variant MUST include the actual
 
 - `[grounded, <artifact>.json.<field-path> = <value>]` — AST-verified, reproducible, value cited.
 - `[degraded, confidence: low|medium|high, <short reason>]` — partial evidence + reasoning. State which signal is missing.
-- `[확인 불가 / unknown, scan range: <what you inspected>]` — no evidence. State what you checked and came up empty. Do NOT fabricate.
+- `[unknown, scan range: <what you inspected>]` — no evidence. State what you checked and came up empty. Do NOT fabricate.
 
 Good citations look like:
 
@@ -44,7 +44,7 @@ Each item declares **one Primary source** (the binding field for the answer) and
 
 ### Rule 4 — No claim without scan range
 
-"X doesn't exist" is only valid with a stated scan range: "checked `*.mjs` except `node_modules/`, 0 matches for pattern `...`". The `[확인 불가]` label carries the scan range as part of its payload.
+"X doesn't exist" is only valid with a stated scan range: "checked `*.mjs` except `node_modules/`, 0 matches for pattern `...`". The `unknown` label carries the scan range as part of its payload.
 
 ### Rule 5 — Decision density
 
@@ -64,9 +64,9 @@ When `checklist-facts.json` reports `gate: 'fix'` or `'watch'` on a threshold-dr
 
 Rule 6 is what prevents the pre-compute layer from becoming a rubber stamp.
 
-### Rule 7 — `[확인 불가]` is a first-class answer
+### Rule 7 — `unknown` is a first-class answer
 
-Half the items in a review being `[확인 불가]` is NORMAL and acceptable. The checklist is a blind-spot visualizer, not a coverage metric. Confabulating a `[grounded]` answer to avoid looking incomplete is worse than honest unknowns.
+Half the items in a review being `unknown` is NORMAL and acceptable. The checklist is a blind-spot visualizer, not a coverage metric. Confabulating a `[grounded]` answer to avoid looking incomplete is worse than honest unknowns.
 
 ### Rule 8 — Walk pre-computed items first, synthesis last
 
@@ -82,7 +82,7 @@ summary format:
 
 > **Section A summary**: [severity] — [one-sentence characterization]. [optional: highest-leverage fix].
 
-Skip no section. Empty sections emit `**Section X summary**: 모든 항목 [확인 불가] — artifact set not present.`
+Skip no section. Empty sections emit `**Section X summary**: all items unknown — artifact set not present.`
 
 ### Rule 10 — Classify by stated criteria, then synthesize
 
@@ -404,7 +404,7 @@ The final report MUST contain:
 - **HCA-1 — 30-second summary** (5 bullets, top anti-patterns if any)
 - **HCA-2 — Decision points table** (only `fix` items with bucket + 근거)
 - **HCA-3 — Evidence trail index** (artifact paths used)
-- **Body: A / B / C / D / E / F sections** in order, every item answered or labeled `[확인 불가]`
+- **Body: A / B / C / D / E / F sections** in order, every item answered or labeled `unknown`
 - **Correction log** — if the scan revealed a claim from a prior audit that no longer holds.
 
 Do not skip the unlabeled/unknown items. The purpose of the checklist is to make blind spots visible, not to cherry-pick.

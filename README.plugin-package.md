@@ -12,7 +12,7 @@ point at the generated skill surfaces below.
 Included skill surfaces:
 
 - `skills/lumin-repo-lens/`
-- `skills/grounded-write-gate/`
-- `skills/grounded-canon/`
+- `skills/lumin-repo-lens-write-gate/`
+- `skills/lumin-repo-lens-canon/`
 
 The Codex wrapper is excluded by default to avoid Claude Code implicit-invocation overlap.

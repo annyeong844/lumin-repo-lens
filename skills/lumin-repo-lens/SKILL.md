@@ -15,7 +15,7 @@ Expand raw JSON paths, FP ids, tiers, canonical jargon, HCA, or P-phase names on
 
 Operator: the model reading this skill. Reader: a person who may be two months into coding and just wants to know what to do next.
 Use everyday words, not insider tool labels. Compress like a headline, not a press release — file/line/count stay visible, padding drops.
-Use hedging like "looks like" or "~인 것 같아요" only when the internal label is `degraded` or `[확인 불가]`; strict evidence rules still apply.
+Use hedging like "looks like" only when the internal label is `degraded` or `unknown`; strict evidence rules still apply.
 
 ## Core Contract
 
@@ -36,8 +36,8 @@ If terms such as FP23, HCA, P4, Tier C, or SAFE_FIX are unfamiliar, read
 
 ### Hand Off Code-Change Requests
 
-Use sibling skills for lifecycle changes: `grounded-write-gate` owns
-add/edit/move/rename plus post-write checks; `grounded-canon` owns canon
+Use sibling skills for lifecycle changes: `lumin-repo-lens-write-gate` owns
+add/edit/move/rename plus post-write checks; `lumin-repo-lens-canon` owns canon
 draft/drift. This surface stays read-only except audit artifacts and
 pre-existing or explicitly requested living audit docs.
 
@@ -79,7 +79,7 @@ evidence:
 - cyclic dependencies, topology, cross-submodule coupling, barrel fan-out
 - god modules, oversized functions, feature envy, duplicate shapes
 - questions about existing canonical drift artifacts; use
-  `grounded-canon` to draft or check canon
+  `lumin-repo-lens-canon` to draft or check canon
 - multi-repo comparison
 - structural review against the checklist
 - tracked/living audit docs across runs
@@ -107,7 +107,7 @@ marketplace wording gates, read `references/language-support.md`,
 `references/false-positive-index.md`, and `references/operational-gates.md`.
 The long FP case ledger is maintainer-only, not ordinary skill context.
 
-In `grounded-write-gate`, planned file paths are checked for sibling
+In `lumin-repo-lens-write-gate`, planned file paths are checked for sibling
 domain clusters and shape reuse before code changes. This audit surface
 only hands off to that sibling skill; it does not restate the write-gate
 protocol here.
@@ -122,7 +122,7 @@ rules that keep this SKILL.md small:
 - how to treat `manifest.json` and `audit-summary.latest.md`
 - when to use `templates/REVIEW_CHECKLIST_SHORT.md`,
   `templates/REVIEW_CHECKLIST.md`, or `templates/report-template.md`
-- how to label `grounded`, `degraded`, and `확인 불가 / unknown` claims
+- how to label `grounded`, `degraded`, and `unknown` claims
 - how to screen dead-export tiers, duplicate-helper cues, and language
   precision boundaries before writing prose
 
@@ -147,7 +147,7 @@ Stop and re-run or relabel if you are about to:
 
 - emit a count without running the relevant script
 - claim absence without naming the scan range
-- use "looks like", "probably", or "should be" without an internal `degraded` or `[확인 불가]` label
+- use "looks like", "probably", or "should be" without an internal `degraded` or `unknown` label
 - promote degraded evidence to grounded in the final report
 - reuse old artifacts without checking scan range and freshness
 - treat `SAFE_FIX`, `REVIEW_FIX`, `DEGRADED`, or `MUTED` as generic

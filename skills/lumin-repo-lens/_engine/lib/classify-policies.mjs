@@ -89,7 +89,9 @@ export function detectNuxtNitro(rootPkgJson, workspaceDirs) {
       ...(pkg.peerDependencies || {}),
     };
     for (const k of Object.keys(allDeps)) {
-      if (k === 'nuxt' || k === 'nitropack' || k === 'nitro' || k === 'h3' ||
+      // `h3` is used outside Nuxt/Nitro. Do not let it activate broad
+      // filesystem-route mutes for ordinary middleware/plugins folders.
+      if (k === 'nuxt' || k === 'nitropack' || k === 'nitro' ||
           k.startsWith('@nuxt/') || k.startsWith('@nitro/')) return true;
     }
     return false;

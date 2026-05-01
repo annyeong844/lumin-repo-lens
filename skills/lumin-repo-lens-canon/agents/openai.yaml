@@ -1,0 +1,6 @@
+interface:
+  display_name: "Lumin Repo Lens Canon"
+  short_description: "Canonical fact draft and drift checks"
+  default_prompt: "Use $lumin-repo-lens-canon to draft or check canonical repository facts from lumin-repo-lens evidence."
+policy:
+  allow_implicit_invocation: true

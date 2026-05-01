@@ -1,9 +1,9 @@
 ---
-name: grounded-canon
+name: lumin-repo-lens-canon
 description: "Maintainer-only canon surface for Lumin Repo Lens/lumin-repo-lens: draft or check promoted repository facts, canonical drift, canon-draft/check-canon results, parser contracts, and maintainer validation evidence."
 ---
 
-# Grounded Canon
+# Lumin Repo Lens Canon
 
 This is the maintainer-facing canonical fact surface for lumin-repo-lens.
 It owns `canon-draft` and `check-canon` together because draft output is
@@ -13,7 +13,7 @@ Default voice is concise and factual. This surface may use colder
 terminology than the audit surface, but every claim still needs machine
 evidence and scan range.
 Do not use casual hedging. If evidence is missing or degraded, emit
-`[확인 불가]` or a degraded status directly with the scan range.
+`unknown` or a degraded status directly with the scan range.
 
 ## Core Contract
 
@@ -100,4 +100,4 @@ For full details, cite `canon-drift.json`, per-source
 
 If the user shifts to general repo structure, cleanup priority, or
 refactor-plan coaching, hand off to `lumin-repo-lens`. If the
-user shifts to code changes before or after implementation, hand off to `grounded-write-gate`.
+user shifts to code changes before or after implementation, hand off to `lumin-repo-lens-write-gate`.

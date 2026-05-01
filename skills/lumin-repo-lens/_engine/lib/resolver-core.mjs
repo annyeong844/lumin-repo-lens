@@ -14,10 +14,11 @@
 // Resolution order (each stage returns the result OR `undefined` = continue):
 //   1. relative  → stage claims any spec starting with `.`; returns file|null.
 //   2. scoped tsconfig paths (FP-36, nearest-scope-first)
-//   3. exact alias
-//   4. wildcard alias (longest matchPrefix wins)
-//   5. hash-wildcard (Node #imports)
-//   6. root-prefix (FP-16)
+//   3. scoped tsconfig baseUrl (baseUrl-only imports like app/_types)
+//   4. exact alias
+//   5. wildcard alias (longest matchPrefix wins)
+//   6. hash-wildcard (Node #imports)
+//   7. root-prefix (FP-16)
 //   → fallthrough: 'EXTERNAL' sentinel.
 //
 // The EXTERNAL vs UNRESOLVED_INTERNAL distinction matters for the
@@ -178,7 +179,41 @@ function resolveScopedTsconfig(fromFile, spec, scoped) {
   return undefined;
 }
 
-// ── Stage 3: exact alias ─────────────────────────────────
+// ── Stage 3: scoped tsconfig baseUrl ─────────────────────
+//
+// TypeScript resolves non-relative imports against baseUrl before
+// falling back to package lookup. In app-scoped monorepos that often
+// means imports like `app/_types` with no `paths` entry at all. Treat
+// the specifier as internal only when the first segment exists under
+// the app's baseUrl; otherwise leave ordinary package names external.
+
+function firstSegmentCandidate(baseUrlDir, spec) {
+  if (!spec || spec.startsWith('#')) return null;
+  const parts = spec.split('/');
+  if (parts[0]?.startsWith('@')) {
+    if (parts.length < 2) return null;
+    return path.resolve(baseUrlDir, parts[0], parts[1]);
+  }
+  return path.resolve(baseUrlDir, parts[0]);
+}
+
+function resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls) {
+  for (const entry of scopedBaseUrls) {
+    if (!fileIsInsideScope(fromFile, entry.scopeDir)) continue;
+
+    const literal = path.resolve(entry.baseUrlDir, spec);
+    const hit = probeTarget(literal);
+    if (hit) return hit;
+
+    const firstSegment = firstSegmentCandidate(entry.baseUrlDir, spec);
+    if (firstSegment && (dirExists(firstSegment) || probeTarget(firstSegment))) {
+      return 'UNRESOLVED_INTERNAL';
+    }
+  }
+  return undefined;
+}
+
+// ── Stage 4: exact alias ─────────────────────────────────
 
 function resolveExactAlias(spec, aliasMap) {
   if (!aliasMap.has(spec)) return undefined;
@@ -190,7 +225,7 @@ function resolveExactAlias(spec, aliasMap) {
   return probeTarget(entry.path) ?? 'UNRESOLVED_INTERNAL';
 }
 
-// ── Stage 4: wildcard alias lookup ───────────────────────
+// ── Stage 5: wildcard alias lookup ───────────────────────
 //
 // Collect all matching entries and prefer the one with the longest
 // `matchPrefix` (most-specific match, per Node.js exports resolution
@@ -235,7 +270,7 @@ function resolveWildcard(spec, aliasMap) {
   return 'UNRESOLVED_INTERNAL';
 }
 
-// ── Stage 5: hash-wildcard (Node #imports subpath) ───────
+// ── Stage 6: hash-wildcard (Node #imports subpath) ───────
 
 function resolveHashWildcard(spec, aliasMap) {
   let matched = false;
@@ -266,7 +301,7 @@ function resolveHashWildcard(spec, aliasMap) {
   return matched ? 'UNRESOLVED_INTERNAL' : undefined;
 }
 
-// ── Stage 6: root-prefix (FP-16) ─────────────────────────
+// ── Stage 7: root-prefix (FP-16) ─────────────────────────
 //
 // Root-prefix imports like `src/foo/bar.js` without tsconfig paths
 // support. Two interpretations in sequence:
@@ -313,6 +348,10 @@ export function makeResolver(root, aliasMap) {
         return b.matchPrefix.length - a.matchPrefix.length;
       })
     : [];
+  const scopedBaseUrls = Array.isArray(aliasMap.scopedTsconfigBaseUrls)
+    ? [...aliasMap.scopedTsconfigBaseUrls].sort((a, b) =>
+        b.scopeDir.length - a.scopeDir.length)
+    : [];
 
   const resolveRaw = function resolve(fromFile, spec) {
     if (!spec || typeof spec !== 'string') return null;
@@ -320,6 +359,8 @@ export function makeResolver(root, aliasMap) {
 
     let hit;
     hit = resolveScopedTsconfig(fromFile, spec, scoped);
+    if (hit !== undefined) return hit;
+    hit = resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls);
     if (hit !== undefined) return hit;
     hit = resolveExactAlias(spec, aliasMap);
     if (hit !== undefined) return hit;

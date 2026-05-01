@@ -1,9 +1,9 @@
 ---
-name: grounded-write-gate
+name: lumin-repo-lens-write-gate
 description: "Use before/after TS/JS code changes: add, edit, move, rename, refactor, make a helper/type/file/function, or ask if something already exists. Infer intent from plain language, run pre-write reuse screening, then post-write delta checks."
 ---
 
-# Grounded Write Gate
+# Lumin Repo Lens Write Gate
 
 This is the code-change transaction surface for lumin-repo-lens. It owns
 `pre-write` and `post-write` together because `post-write` reads the
@@ -19,8 +19,8 @@ NO STRUCTURAL CLAIM WITHOUT MACHINE EVIDENCE
 NO ABSENCE CLAIM WITHOUT STATED SCAN RANGE
 ```
 
-Use hedging like "looks like" or "~인 것 같아요" only when the internal
-label is `degraded` or `[확인 불가]`.
+Use hedging like "looks like" only when the internal label is `degraded`
+or `unknown`.
 
 ## Shared Engine
 
@@ -93,7 +93,7 @@ before creating a new owner file.
 
 P4 shape lookup is exact. Prefer `shape.typeLiteral` or `shape.hash` in
 the intent when asking for shape reuse. Field-name-only shapes are
-reported as `[확인 불가]`, not fuzzy matches.
+reported as `unknown`, not fuzzy matches.
 
 Report existing owners/helpers/types/dependencies in plain language,
 with compact proof only when needed.
@@ -115,7 +115,7 @@ Check:
 - advisory failures plus baseline, capability, and scan-range confidence
 
 If post-write cannot find the advisory, say that the post-write check is
-`[확인 불가]` and name the missing file. Do not invent a clean result.
+`unknown` and name the missing file. Do not invent a clean result.
 Do not use `pre-write-advisory.latest.json` after another pre-write run
 has happened; rerun pre-write or pass the invocation-specific advisory.
 
@@ -135,4 +135,4 @@ user asks for proof or maintainer detail.
 
 If the user shifts to repo-wide structure, dead code, cycles, or a
 refactor-plan, hand off to `lumin-repo-lens`. If the user shifts
-to canonical draft or drift validation, hand off to `grounded-canon`.
+to canonical draft or drift validation, hand off to `lumin-repo-lens-canon`.

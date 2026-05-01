@@ -48,7 +48,7 @@ For structural/code-quality review, run the pipeline first. Default to
 worth smoothing next, confidence, and next pass. Use
 `templates/REVIEW_CHECKLIST.md` only for explicit full checklist walks,
 due diligence, or CI-style validation. Any unevaluated prompt still
-needs `[확인 불가]` plus scan range.
+needs `unknown` plus scan range.
 
 Checklist gate and output density are separate. The Core Contract makes
 the checklist a required review step, not merely a template. Before any
@@ -80,7 +80,7 @@ classifications, broad conclusions, and chat-persona leakage against
 the cited artifacts or source. Do not delegate this closeout to a string heuristic.
 
 Every answer must be internally backed by `grounded`, `degraded`, or
-`확인 불가 / unknown` evidence. In normal chat, surface a short proof
+`unknown` evidence. In normal chat, surface a short proof
 parenthetical instead of the full label; expand the label only for
 exact-count, formal-report, reviewer-handoff, or "show me the evidence"
 requests.
@@ -97,7 +97,7 @@ Every claim must be internally labeled:
 
 - `grounded`: directly reproducible
 - `degraded`: partial evidence plus confidence
-- `blind` / `확인 불가`: no direct evidence plus named scan range
+- `blind` / `unknown`: no direct evidence plus named scan range
 
 Translate labels into clear prose plus compact proof unless the user
 asks for the full trail.

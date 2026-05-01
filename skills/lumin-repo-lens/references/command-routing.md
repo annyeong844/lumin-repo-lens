@@ -9,7 +9,7 @@ command. It is runtime routing, not optional background context.
 
 - Read the command-selected `SKILL.md` first. Audit/default/welcome/
   refactor-plan commands use `lumin-repo-lens`; pre/post use
-  `grounded-write-gate`; canon-draft/check-canon use `grounded-canon`.
+  `lumin-repo-lens-write-gate`; canon-draft/check-canon use `lumin-repo-lens-canon`.
 - Use the generated package wrapper:
   `node ${CLAUDE_PLUGIN_ROOT}/skills/lumin-repo-lens/scripts/audit-repo.mjs`.
 - If `--root` is omitted, use the current workspace root.
@@ -155,7 +155,7 @@ for explaining cross-submodule flow, cycles, or hub files; cite
 Checklist gate: the checklist is a required review step, not an output
 template. Short output is not permission to skip it. Before composing,
 triage C/D/E/A/B/F using `checklist-facts.json`; mark unavailable lanes
-as `[확인 불가]` internally instead of silently omitting them. If the user
+as `unknown` internally instead of silently omitting them. If the user
 asked for full, deep, exhaustive, due-diligence, CI, or formal review,
 open `templates/REVIEW_CHECKLIST.md` and walk it before drafting.
 

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Lumin Repo Lens Write Gate"
+  short_description: "Pre-write reuse and post-write delta checks"
+  default_prompt: "Use $lumin-repo-lens-write-gate before and after this code change to check reuse opportunities and unplanned type escapes."
+policy:
+  allow_implicit_invocation: true

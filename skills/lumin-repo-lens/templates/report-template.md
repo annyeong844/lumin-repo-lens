@@ -135,7 +135,7 @@ Separate three layers:
 
 Do not move from observation to recommendation without naming the
 classification criterion. If the criterion is not clear, downgrade the
-item to `watch`, `degraded`, or `[확인 불가]` rather than inventing a
+item to `watch`, `degraded`, or `unknown` rather than inventing a
 verdict.
 
 ### Sub-agent / multi-pass synthesis gate

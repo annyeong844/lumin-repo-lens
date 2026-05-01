@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.9.0-beta.3
+
+- Remove legacy `lumin-audit` and `grounded-audit` CLI aliases from the
+  generated package so the public beta presents one current CLI name:
+  `lumin-repo-lens`.
+- Rename the generated sibling skill surfaces to
+  `lumin-repo-lens-write-gate` and `lumin-repo-lens-canon`.
+- Align public English skill/reference/template docs on the `unknown`
+  evidence label.
+- Resolve app-scoped `compilerOptions.baseUrl` imports such as `app/_types`
+  without requiring a `paths` entry.
+- Narrow Nuxt/Nitro muting so a bare `h3` dependency does not hide ordinary
+  `middleware/` or `plugins/` exports in non-Nuxt server projects.
+
 ## 0.9.0-beta.2
 
 - Clean stale legacy `dist/lumin-audit-plugin/` output from the source build

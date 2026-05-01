@@ -110,15 +110,26 @@ const toFwdSlash = (p) => (typeof p === 'string' ? p.replace(/\\/g, '/') : p);
  * Path-shaped fields are always forward-slash (even on Windows).
  */
 export function discoverScopedTsconfigPaths(root) {
+  return discoverScopedTsconfigResolution(root).paths;
+}
+
+/**
+ * Find every tsconfig under `root` and return both scoped `paths`
+ * entries and baseUrl-only scopes. `compilerOptions.baseUrl` is enough
+ * for TypeScript to resolve imports like `app/_types` from an app-local
+ * tsconfig even when there is no `paths` object. Keep that as a separate
+ * list so the resolver can treat missing files as local blindness, while
+ * ordinary package names such as `react` still fall through as external.
+ */
+export function discoverScopedTsconfigResolution(root) {
   const files = [];
   walk(root, files);
-  const entries = [];
+  const pathEntries = [];
+  const baseUrlEntries = [];
 
   for (const configPath of files) {
     const loaded = loadTsconfig(configPath);
     if (!loaded) continue;
-    const paths = loaded.options.paths;
-    if (!paths || typeof paths !== 'object') continue;
 
     const configDir = path.dirname(configPath);
     // TypeScript's resolver puts baseUrl on the options object
@@ -137,13 +148,23 @@ export function discoverScopedTsconfigPaths(root) {
     // apps/admin both extending the same shared config each carry
     // their own scope for matchPrefix disambiguation.
     const scopeDir = configDir;
+    if (loaded.options.baseUrl) {
+      baseUrlEntries.push({
+        configPath: toFwdSlash(configPath),
+        scopeDir: toFwdSlash(scopeDir),
+        baseUrlDir: toFwdSlash(loaded.options.baseUrl),
+      });
+    }
+
+    const paths = loaded.options.paths;
+    if (!paths || typeof paths !== 'object') continue;
 
     for (const [key, val] of Object.entries(paths)) {
       if (!Array.isArray(val) || val.length === 0) continue;
       const starIdx = key.indexOf('*');
       const matchPrefix = starIdx >= 0 ? key.slice(0, starIdx) : key;
       const matchSuffix = starIdx >= 0 ? key.slice(starIdx + 1) : '';
-      entries.push({
+      pathEntries.push({
         configPath: toFwdSlash(configPath),
         scopeDir: toFwdSlash(scopeDir),
         baseUrlDir: toFwdSlash(baseUrlDir),
@@ -156,7 +177,7 @@ export function discoverScopedTsconfigPaths(root) {
     }
   }
 
-  return entries;
+  return { paths: pathEntries, baseUrls: baseUrlEntries };
 }
 
 /**

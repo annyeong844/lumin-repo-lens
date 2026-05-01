@@ -7,7 +7,7 @@ otherwise force the user to learn maintainer vocabulary.
 | --- | --- |
 | `grounded` | Directly reproducible from a named artifact value. |
 | `degraded` | Partial evidence; give the confidence and the reason it is not fully grounded. |
-| `확인 불가` / `unknown` | The needed artifact or scan range is missing; say what was inspected. |
+| `unknown` | The needed artifact or scan range is missing; say what was inspected. |
 | FP family | A known false-positive pattern, such as `publicApi_FP23`. Use it to explain why a raw finding should be muted or downgraded. |
 | `Tier C` | A raw dead-export bucket: no consumer was found in the constructed graph. It is not a deletion verdict. |
 | `SAFE_FIX` | Dead-export candidate with the strongest automated evidence. Still cite the scan range before acting. |

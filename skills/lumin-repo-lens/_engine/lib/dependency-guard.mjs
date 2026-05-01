@@ -106,10 +106,7 @@ function installArgsFor(packageJson) {
 
 function isGeneratedSkillPackage(packageJson) {
   return packageJson?.luminRepoLens?.distribution === 'skill' ||
-    packageJson?.luminAudit?.distribution === 'skill' ||
-    packageJson?.name === 'lumin-repo-lens-skill' ||
-    packageJson?.name === 'lumin-audit-skill' ||
-    packageJson?.name === 'grounded-audit-skill';
+    packageJson?.name === 'lumin-repo-lens-skill';
 }
 
 function quotePathForDisplay(value) {
@@ -132,12 +129,6 @@ function formatMissing(missing) {
 function autoInstallDisabledBy() {
   if (process.env.LUMIN_REPO_LENS_NO_AUTO_INSTALL === '1') {
     return 'LUMIN_REPO_LENS_NO_AUTO_INSTALL';
-  }
-  if (process.env.GROUNDED_AUDIT_NO_AUTO_INSTALL === '1') {
-    return 'GROUNDED_AUDIT_NO_AUTO_INSTALL';
-  }
-  if (process.env.GROUNDED_AUDIT_SKIP_AUTO_INSTALL === '1') {
-    return 'GROUNDED_AUDIT_SKIP_AUTO_INSTALL';
   }
   return null;
 }
@@ -206,20 +197,6 @@ export async function assertRuntimeSetup({ startDir, commandName = 'audit-repo' 
 
   let missing = await checkPackageAvailability(packageRoot);
   if (missing.length === 0) return;
-
-  const disabledBy = autoInstallDisabledBy();
-  if (disabledBy === 'GROUNDED_AUDIT_NO_AUTO_INSTALL') {
-    process.stderr.write(
-      `[${commandName}] GROUNDED_AUDIT_NO_AUTO_INSTALL is deprecated; ` +
-      'use LUMIN_REPO_LENS_NO_AUTO_INSTALL=1 instead.\n',
-    );
-  }
-  if (disabledBy === 'GROUNDED_AUDIT_SKIP_AUTO_INSTALL') {
-    process.stderr.write(
-      `[${commandName}] GROUNDED_AUDIT_SKIP_AUTO_INSTALL is deprecated; ` +
-      'use LUMIN_REPO_LENS_NO_AUTO_INSTALL=1 instead.\n',
-    );
-  }
 
   if (shouldAutoInstall()) {
     runNpmInstall(packageRoot, packageJson, commandName);

@@ -10,7 +10,7 @@
 
 import path from 'node:path';
 import { fileExists } from './paths.mjs';
-import { discoverScopedTsconfigPaths } from './tsconfig-paths.mjs';
+import { discoverScopedTsconfigResolution } from './tsconfig-paths.mjs';
 import { readJsonFile } from './artifacts.mjs';
 
 // Recursively extract a string target from a conditional exports object.
@@ -366,7 +366,9 @@ export function buildAliasMap(root, repoMode) {
   // callers that iterate the Map as `for (const [k, v] of aliasMap)`.
   // Resolver-core reads `.scopedTsconfigPaths` and applies
   // nearest-scope-first for non-relative specifiers.
-  map.scopedTsconfigPaths = discoverScopedTsconfigPaths(root);
+  const tsconfigResolution = discoverScopedTsconfigResolution(root);
+  map.scopedTsconfigPaths = tsconfigResolution.paths;
+  map.scopedTsconfigBaseUrls = tsconfigResolution.baseUrls;
 
   return map;
 }

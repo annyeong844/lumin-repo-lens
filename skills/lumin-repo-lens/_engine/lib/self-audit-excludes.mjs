@@ -17,11 +17,7 @@ const MAINTAINER_SELF_AUDIT_EXCLUDES = Object.freeze([
 export function detectMaintainerSelfAuditExcludes(root) {
   const pkg = readJsonFile(path.join(root, 'package.json'));
   const isMaintainerCheckout =
-    (
-      pkg?.name === 'lumin-repo-lens-scripts' ||
-      pkg?.name === 'lumin-audit-scripts' ||
-      pkg?.name === 'grounded-audit-scripts'
-    ) &&
+    pkg?.name === 'lumin-repo-lens-scripts' &&
     existsSync(path.join(root, 'audit-repo.mjs')) &&
     existsSync(path.join(root, '_lib'));
   if (!isMaintainerCheckout) return [];
