@@ -7,6 +7,9 @@
 - Align `/lumin-repo-lens:full` command metadata with its `full` routing mode.
 - Bump the plugin version so Claude Code update checks can see the package
   change.
+- Clarify the public version line: this is not a downgrade from `1.11.11`;
+  earlier `1.x` labels were internal package labels, and the Claude Code
+  marketplace beta line starts at `0.9.0-beta.x`.
 
 ## 0.9.0-beta.1
 
