@@ -51,6 +51,23 @@ claude plugin install lumin-repo-lens@annyeong844-marketplace
 
 Then restart or reload Claude Code plugins.
 
+## Runtime Setup
+
+On first use, the generated skill package may install parser dependencies in
+`skills/lumin-repo-lens/node_modules/`. This is needed so the local engine can
+parse TS/JS with `oxc-parser`, TypeScript, and tree-sitter WASM packages.
+
+The setup command is intentionally conservative:
+
+```bash
+npm ci --omit=dev --ignore-scripts --no-audit --fund=false
+```
+
+`--ignore-scripts` prevents dependency lifecycle scripts from running. The
+target repository is not modified except for analysis artifacts under
+`<repo>/.audit/`. Set `LUMIN_REPO_LENS_NO_AUTO_INSTALL=1` to disable automatic
+setup and run the printed command manually.
+
 ## Commands
 
 - `/lumin-repo-lens` — run the default repo structure lens.
@@ -77,6 +94,14 @@ Most users only call the `/lumin-repo-lens:*` slash commands. The sibling names
 exist so Claude Code can load the right instructions without mixing lifecycle
 rules.
 
+## Names and Aliases
+
+The public plugin, slash-command namespace, and current CLI name are
+`lumin-repo-lens`. Older names such as `lumin-audit`, `grounded-audit`, and
+`GROUNDED_AUDIT_*` environment variables remain transitional compatibility
+aliases for existing installs. New users should use `lumin-repo-lens` and
+`LUMIN_REPO_LENS_NO_AUTO_INSTALL`.
+
 ## Artifact Privacy
 
 By default, audit artifacts are written to `<repo>/.audit/`. These files may
@@ -91,11 +116,23 @@ Some internal evidence templates include `[확인 불가]`, Korean for
 UI string. English-facing answers should translate it as `unknown` unless the
 user is writing in Korean.
 
-## Runtime Setup
+Hedging phrases such as `looks like` or `~인 것 같아요` are likewise evidence
+policy examples: they are allowed only when an internal result is degraded or
+unknown, not when a structural claim is grounded.
 
-The generated skill package may install parser dependencies locally on first
-use with script execution disabled. Set `LUMIN_REPO_LENS_NO_AUTO_INSTALL=1` to
-disable that setup.
+## Testing
+
+This public repository is the generated Claude Code marketplace package. It
+ships a package smoke test for installed-plugin confidence:
+
+```bash
+cd skills/lumin-repo-lens
+npm run smoke
+```
+
+Source-level fixture and regression tests live in the maintainer checkout and
+run before publishing this package. The full maintainer harness is not shipped
+with the marketplace package so plugin installs stay focused on runtime files.
 
 ## Included Surfaces
 
