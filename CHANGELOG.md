@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.0-beta.4
+
+- Resolve workspace package exports that point at `dist/` outputs back to
+  package-root source files such as `index.ts` and `api.ts`.
+- Reduce false unresolved/external classification for Cal.com-style workspace
+  package imports when the authored source lives at package root rather than
+  under `src/`, `source/`, or `lib/`.
+- Prevent `@nuxt/opencollective` from activating Nuxt/Nitro route muting in
+  non-Nuxt projects such as NestJS.
+
 ## 0.9.0-beta.3
 
 - Remove legacy `lumin-audit` and `grounded-audit` CLI aliases from the

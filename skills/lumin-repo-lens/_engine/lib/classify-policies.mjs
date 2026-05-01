@@ -77,12 +77,26 @@ export function isCoreSentinel(relPath) {
 // plugins/, middleware/, composables/) overlap with legitimate path
 // names in non-Nuxt codebases. Gate on dependency detection to avoid
 // overmatching.
+const NUXT_NAMESPACE_NON_RUNTIME_PACKAGES = new Set([
+  '@nuxt/opencollective',
+]);
+
+function isNuxtNitroPackageName(name) {
+  if (!name || typeof name !== 'string') return false;
+  if (NUXT_NAMESPACE_NON_RUNTIME_PACKAGES.has(name)) return false;
+  return name === 'nuxt' ||
+    name === 'nitropack' ||
+    name === 'nitro' ||
+    name.startsWith('@nuxt/') ||
+    name.startsWith('@nuxtjs/') ||
+    name.startsWith('@nitro/');
+}
+
 export function detectNuxtNitro(rootPkgJson, workspaceDirs) {
   function matches(pkg) {
     if (!pkg) return false;
     const name = pkg.name || '';
-    if (name === 'nuxt' || name === 'nitropack' || name === 'nitro' ||
-        name.startsWith('@nuxt/') || name.startsWith('@nitro/')) return true;
+    if (isNuxtNitroPackageName(name)) return true;
     const allDeps = {
       ...(pkg.dependencies || {}),
       ...(pkg.devDependencies || {}),
@@ -91,8 +105,9 @@ export function detectNuxtNitro(rootPkgJson, workspaceDirs) {
     for (const k of Object.keys(allDeps)) {
       // `h3` is used outside Nuxt/Nitro. Do not let it activate broad
       // filesystem-route mutes for ordinary middleware/plugins folders.
-      if (k === 'nuxt' || k === 'nitropack' || k === 'nitro' ||
-          k.startsWith('@nuxt/') || k.startsWith('@nitro/')) return true;
+      // `@nuxt/opencollective` is also not a Nuxt runtime signal; it is a
+      // sponsorship helper used by non-Nuxt packages such as NestJS.
+      if (isNuxtNitroPackageName(k)) return true;
     }
     return false;
   }

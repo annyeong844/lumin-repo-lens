@@ -111,6 +111,18 @@ export function mapOutputToSource(pkgDir, target) {
     const restStem = rest.replace(/\.d\.[cm]?ts$/, '').replace(/\.[^.]+$/, '');
     const asDir = src + '/' + restStem + '/index.ts';
     addCandidate(sourceCandidates, asDir);
+    // Some workspace packages compile root-level source directly to
+    // dist/ (`index.ts` → `dist/index.js`, `api.ts` → `dist/api.js`)
+    // rather than through src/. Cal.com's platform packages use this
+    // shape; without root-source candidates their workspace imports are
+    // reported as UNRESOLVED_INTERNAL.
+    addCandidate(sourceCandidates, rest);
+    addCandidate(sourceCandidates, rest.replace(/\.(mjs|cjs|js)$/, '.ts'));
+    addCandidate(sourceCandidates, rest.replace(/\.(mjs|cjs|js)$/, '.tsx'));
+    addCandidate(sourceCandidates, rest.replace(/\.jsx$/, '.tsx'));
+    addCandidate(sourceCandidates, rest.replace(/\.d\.[cm]?ts$/, '.ts'));
+    addCandidate(sourceCandidates, rest.replace(/\.d\.[cm]?ts$/, '.tsx'));
+    addCandidate(sourceCandidates, restStem + '/index.ts');
   }
 
   addCandidate(fallbackCandidates, stripped);
@@ -168,6 +180,12 @@ export function mapOutputPatternToSourceCandidates(pattern) {
     addCandidate(sourceCandidates, src + '/' + rest.replace(/\.jsx$/, '.tsx'));
     addCandidate(sourceCandidates, src + '/' + rest.replace(/\.d\.[cm]?ts$/, '.ts'));
     addCandidate(sourceCandidates, src + '/' + rest.replace(/\.d\.[cm]?ts$/, '.tsx'));
+    addCandidate(sourceCandidates, rest);
+    addCandidate(sourceCandidates, rest.replace(/\.(mjs|cjs|js)$/, '.ts'));
+    addCandidate(sourceCandidates, rest.replace(/\.(mjs|cjs|js)$/, '.tsx'));
+    addCandidate(sourceCandidates, rest.replace(/\.jsx$/, '.tsx'));
+    addCandidate(sourceCandidates, rest.replace(/\.d\.[cm]?ts$/, '.ts'));
+    addCandidate(sourceCandidates, rest.replace(/\.d\.[cm]?ts$/, '.tsx'));
   }
 
   addCandidate(fallbackCandidates, stripped);
