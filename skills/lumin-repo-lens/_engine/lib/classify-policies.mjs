@@ -20,6 +20,26 @@
 import { existsSync } from 'node:fs';
 import { readJsonFile } from './artifacts.mjs';
 import path from 'node:path';
+import { collectFiles } from './collect-files.mjs';
+import { collectHonoRouteRegistrations } from './framework-policy-facts.mjs';
+import {
+  ACTION_MUTE,
+  ACTION_NONE,
+  ACTION_REVIEW_HINT,
+  classifyFrameworkPolicy,
+  createFrameworkPolicyContext,
+  createFrameworkPolicyCounters,
+  recordFrameworkPolicyDecision,
+} from './framework-policy-matrix.mjs';
+
+export {
+  ACTION_MUTE,
+  ACTION_NONE,
+  ACTION_REVIEW_HINT,
+  classifyFrameworkPolicy,
+  createFrameworkPolicyCounters,
+  recordFrameworkPolicyDecision,
+};
 
 // ─── FP-22: bundler/CLI-consumed config files ────────────────
 // Never imported by TS code; consumed by tool name convention.
@@ -180,4 +200,70 @@ export function isDeclarationSidecar(relPath, root) {
     abs.replace(/\.d\.cts$/, '.js'),
   ];
   return runtimeBases.some((candidate) => candidate !== abs && existsSync(candidate));
+}
+
+function relPath(root, full) {
+  return path.relative(root, full).replace(/\\/g, '/');
+}
+
+function collectKnownFiles({ root, symbolsData, deadList, includeTests, exclude }) {
+  const files = new Set();
+  try {
+    for (const file of collectFiles(root, { includeTests, exclude })) {
+      files.add(relPath(root, file));
+    }
+  } catch {
+    // Fall back to artifact-visible files. Framework facts are optional;
+    // ordinary classification still runs with the symbol graph evidence.
+  }
+
+  for (const file of Object.keys(symbolsData?.defIndex ?? {})) files.add(file.replace(/\\/g, '/'));
+  for (const file of Object.keys(symbolsData?.reExportsByFile ?? {})) files.add(file.replace(/\\/g, '/'));
+  for (const d of deadList ?? []) {
+    if (d?.file) files.add(String(d.file).replace(/\\/g, '/'));
+  }
+  return [...files].sort();
+}
+
+function packageRecordsFromRepoMode({ root, repoMode }) {
+  const records = [{
+    root,
+    relRoot: '.',
+    packageJson: repoMode.rootPkgJson ?? readJsonFile(path.join(root, 'package.json')) ?? {},
+  }];
+
+  for (const workspaceRoot of repoMode.workspaceDirs ?? []) {
+    const relRoot = relPath(root, workspaceRoot);
+    const packageJson = readJsonFile(path.join(workspaceRoot, 'package.json'));
+    records.push({
+      root: workspaceRoot,
+      relRoot,
+      packageJson: packageJson ?? {},
+    });
+  }
+  return records;
+}
+
+export function createFrameworkPolicyContextForRepo({
+  root,
+  repoMode,
+  symbolsData,
+  deadList,
+  includeTests,
+  exclude,
+}) {
+  const files = collectKnownFiles({ root, symbolsData, deadList, includeTests, exclude });
+  let honoRouteRegistrations = [];
+  try {
+    honoRouteRegistrations = collectHonoRouteRegistrations({ root, files });
+  } catch {
+    honoRouteRegistrations = [];
+  }
+
+  return createFrameworkPolicyContext({
+    root,
+    packageRecords: packageRecordsFromRepoMode({ root, repoMode }),
+    files,
+    frameworkFacts: { honoRouteRegistrations },
+  });
 }

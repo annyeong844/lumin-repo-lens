@@ -34,13 +34,15 @@ import {
   indexPublicSurfaceEntries,
 } from '../lib/public-surface.mjs';
 import {
+  ACTION_MUTE,
+  classifyFrameworkPolicy,
   isConfigFile,
-  isCoreSentinel,
-  isNuxtNitroSentinel,
-  detectNuxtNitro,
+  createFrameworkPolicyContextForRepo,
+  createFrameworkPolicyCounters,
   detectVitePress,
   isVitePressSentinel,
   isDeclarationSidecar,
+  recordFrameworkPolicyDecision,
 } from '../lib/classify-policies.mjs';
 import {
   countOccurrencesExceptDefLine,
@@ -68,8 +70,17 @@ console.log(`[classify] production dead candidates: ${deadList.length}`);
 const repoMode = detectRepoMode(ROOT);
 const aliasMap = buildAliasMap(ROOT, repoMode);
 const resolve = makeResolver(ROOT, aliasMap);
-const isNuxtNitro = detectNuxtNitro(repoMode.rootPkgJson, repoMode.workspaceDirs);
 const isVitePress = detectVitePress(repoMode.rootPkgJson, repoMode.workspaceDirs);
+const frameworkPolicyContext = createFrameworkPolicyContextForRepo({
+  root: ROOT,
+  repoMode,
+  symbolsData,
+  deadList,
+  includeTests,
+  exclude,
+});
+const frameworkPolicyCounters = createFrameworkPolicyCounters(frameworkPolicyContext);
+const isNuxtNitro = frameworkPolicyContext.packages.some((pkg) => pkg.frameworks?.has?.('nuxt'));
 const testPins = includeTests === false
   ? collectTestPinnedExports({ root: ROOT, resolve, exclude })
   : { symbolPins: new Map(), namespacePins: new Map(), diagnostics: [] };
@@ -265,8 +276,20 @@ for (const d of deadList) {
   if (isPublicApiFile(d.file))                       { excludedPublicApi++; recordExcluded(d, 'publicApi_FP23', { policyEvidence: findPublicApiEvidence(d.file) }); continue; }
   if (isScriptEntrypointFile(d.file))                 { excludedScriptEntrypoint++; recordExcluded(d, 'scriptEntrypoint_FP45', { policyEvidence: findScriptEntrypointEvidence(d.file) }); continue; }
   if (isHtmlEntrypointFile(d.file))                   { excludedHtmlEntrypoint++; recordExcluded(d, 'htmlEntrypoint_FP47', { policyEvidence: findHtmlEntrypointEvidence(d.file) }); continue; }
-  if (isCoreSentinel(d.file))                        { excludedFramework++; recordExcluded(d, 'frameworkSentinel_FP27');  continue; }
-  if (isNuxtNitro && isNuxtNitroSentinel(d.file))    { excludedNuxtNitro++; recordExcluded(d, 'nuxtNitro_FP30');          continue; }
+  const frameworkPolicyDecision = classifyFrameworkPolicy(frameworkPolicyContext, {
+    file: d.file,
+    exportName: d.symbol,
+    kind: d.kind,
+  });
+  recordFrameworkPolicyDecision(frameworkPolicyCounters, frameworkPolicyDecision, d);
+  if (frameworkPolicyDecision.action === ACTION_MUTE) {
+    if (frameworkPolicyDecision.reason === 'nuxtNitro_FP30') excludedNuxtNitro++;
+    else excludedFramework++;
+    recordExcluded(d, frameworkPolicyDecision.reason, {
+      policyEvidence: frameworkPolicyDecision.evidence,
+    });
+    continue;
+  }
   if (isVitePress && isVitePressSentinel(d.file))     { excludedVitePress++; recordExcluded(d, 'vitePress_FP46');          continue; }
   if (isDeclarationSidecar(d.file, ROOT))             { excludedDeclarationSidecar++; recordExcluded(d, 'declarationSidecar_FP48'); continue; }
   const dynamicOpacityEvidence = findDynamicImportOpacityEvidence(d.file);
@@ -498,6 +521,7 @@ const removalProposal = {
       isNuxtNitroDetected: isNuxtNitro,
       testConsumerDiagnostics_FP44: testPins.diagnostics.length,
     },
+    frameworkPolicy: frameworkPolicyCounters,
   },
   proposal_remove_export_specifier: aliasedDead.map((c) => {
     const localAlsoDead = (c.localInternalUses ?? 0) === 0;

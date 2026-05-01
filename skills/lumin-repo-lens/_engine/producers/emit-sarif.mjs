@@ -28,7 +28,7 @@ const { root: ROOT, output } = cli;
 const outPath = cli.raw['out-sarif'] ?? path.join(output, 'lumin-repo-lens.sarif');
 
 // ─── Tool manifest ───────────────────────────────────────
-const TOOL_VERSION = '0.9.0-beta.4';
+const TOOL_VERSION = '0.9.0-beta.5';
 const TOOL_INFO_URI = 'https://github.com/annyeong844/lumin-repo-lens';
 const HELP_URI = TOOL_INFO_URI + '#readme';
 

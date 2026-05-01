@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.9.0-beta.5
+
+- Replace broad framework path muting with package-scoped framework evidence
+  plus specific protected convention matching.
+- Keep weak framework matches review-visible and emit aggregate
+  `summary.frameworkPolicy` counters for muted findings, review hints,
+  rejected signals, and path-shaped candidates kept visible.
+- Add Hono route registration facts so Hono handlers are protected only when
+  passed to route APIs, not by `routes/` path shape.
+- Add framework safety fixtures for Next.js, Hono, SvelteKit, Astro, React
+  Router, Nuxt/Nitro, and NestJS false-mute prevention.
+
 ## 0.9.0-beta.4
 
 - Resolve workspace package exports that point at `dist/` outputs back to
