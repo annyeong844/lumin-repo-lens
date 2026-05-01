@@ -2,7 +2,7 @@
 
 Evidence-backed TS/JS repository structure lens for Claude Code.
 
-Current status: `0.9.0-beta.1` public beta. The plugin is usable, but the
+Current status: `0.9.0-beta.2` public beta. The plugin is usable, but the
 Claude Code marketplace package has not yet declared a stable `1.0.0` line.
 
 Lumin Repo Lens runs local analysis over a target repository and writes

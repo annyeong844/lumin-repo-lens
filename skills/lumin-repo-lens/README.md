@@ -2,7 +2,7 @@
 
 Evidence-backed TS/JS repo structure lens for coding assistants.
 
-Current public plugin status: `0.9.0-beta.1`. The engine and plugin
+Current public plugin status: `0.9.0-beta.2`. The engine and plugin
 surfaces are usable, but the Claude Code marketplace package is still in
 public beta before a stable `1.0.0` line.
 

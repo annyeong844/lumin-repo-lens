@@ -5,7 +5,7 @@ description: "Run a full Lumin Repo Lens review. Usage: /lumin-repo-lens:full [-
 Read `${CLAUDE_PLUGIN_ROOT}/skills/lumin-repo-lens/SKILL.md`,
 then read `${CLAUDE_PLUGIN_ROOT}/skills/lumin-repo-lens/references/command-routing.md`.
 
-Mode: `audit`
+Mode: `full`
 Arguments: {{ARGUMENTS}}
 Required profile: `full`
 
