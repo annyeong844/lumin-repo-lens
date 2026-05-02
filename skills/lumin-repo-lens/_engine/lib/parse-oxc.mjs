@@ -23,12 +23,25 @@
 import { parseSync } from 'oxc-parser';
 import { langForFile } from './lang.mjs';
 
-export function parseOxcOrThrow(filePath, src) {
-  const result = parseSync(filePath, src, {
+function parseWithLang(filePath, src, lang) {
+  return parseSync(filePath, src, {
     sourceType: 'module',
-    lang: langForFile(filePath) ?? 'ts',
+    lang,
   });
-  if (result.errors && result.errors.length > 0) {
+}
+
+function hasParseErrors(result) {
+  return Array.isArray(result.errors) && result.errors.length > 0;
+}
+
+export function parseOxcOrThrow(filePath, src) {
+  const lang = langForFile(filePath) ?? 'ts';
+  const result = parseWithLang(filePath, src, lang);
+  if (hasParseErrors(result) && lang === 'js') {
+    const jsxResult = parseWithLang(filePath, src, 'jsx');
+    if (!hasParseErrors(jsxResult)) return jsxResult;
+  }
+  if (hasParseErrors(result)) {
     const first = result.errors[0];
     const more = result.errors.length - 1;
     throw new Error(

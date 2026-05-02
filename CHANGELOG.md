@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.9.0-beta.6
+
+- Retry OXC parsing in JSX mode when `.js`/`.mjs`/`.cjs` files fail in
+  plain JS mode, covering Next.js and React files that keep JSX syntax in
+  `.js` sources.
+- Align `manifest.confidence.parseErrors` with symbol-graph parse-error
+  warnings so parse blind zones are reported consistently.
+- Add regression coverage for JSX-in-JS parse handling and manifest parse
+  error confidence.
+- Stress-test result: `next.js-canary --production` parser gaps dropped from
+  511 files to 3 remaining non-JSX syntax gaps.
 ## 0.9.0-beta.5
 
 - Replace broad framework path muting with package-scoped framework evidence

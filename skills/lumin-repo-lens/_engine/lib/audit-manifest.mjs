@@ -99,8 +99,8 @@ export function buildManifestEvidence({
 
   const parseErrors = (() => {
     const w = (symbols?.meta?.warnings ?? []).find((x) =>
-      x?.kind === 'parse-errors' || x?.type === 'parse-errors');
-    return w?.count ?? 0;
+      x?.kind === 'parse-errors' || x?.type === 'parse-errors' || x?.code === 'parse-errors');
+    return w?.count ?? symbols?.filesWithParseErrors?.length ?? 0;
   })();
 
   return {
