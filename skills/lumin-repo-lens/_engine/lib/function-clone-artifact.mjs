@@ -12,8 +12,8 @@ import { parseOxcOrThrow } from './parse-oxc.mjs';
 import { computeLineStarts, lineOf } from './line-offset.mjs';
 import { detectGeneratedFileEvidence } from './shape-hash.mjs';
 
-export const FUNCTION_CLONE_SCHEMA_VERSION = 'function-clones.v2';
-export const FUNCTION_CLONE_NORMALIZED_VERSION = 'function-body.normalized.v1';
+const FUNCTION_CLONE_SCHEMA_VERSION = 'function-clones.v2';
+const FUNCTION_CLONE_NORMALIZED_VERSION = 'function-body.normalized.v1';
 
 const SKIP_KEYS = new Set([
   'start',

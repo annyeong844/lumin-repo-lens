@@ -8,7 +8,7 @@ import path from 'node:path';
 import { detectBlindZones } from './blind-zones.mjs';
 import { loadIfExists as loadArtifact } from './artifacts.mjs';
 
-export const LIVING_AUDIT_DOC_CANDIDATES = [
+const LIVING_AUDIT_DOC_CANDIDATES = [
   'docs/current/audit/lumin-structural-audit.md',
   'LUMIN_REPO_LENS.md',
   'LUMIN_AUDIT.md',
@@ -47,7 +47,7 @@ function languagesFromTriage(triage) {
   return languages.length > 0 ? languages : null;
 }
 
-export function detectLivingAuditDocs(root) {
+function detectLivingAuditDocs(root) {
   const docs = [];
   for (const rel of LIVING_AUDIT_DOC_CANDIDATES) {
     const abs = path.join(root, rel);

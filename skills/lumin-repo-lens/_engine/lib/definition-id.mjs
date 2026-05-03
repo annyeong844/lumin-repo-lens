@@ -3,7 +3,7 @@
 // The id intentionally uses byte offsets instead of line numbers so multiple
 // declarations on one line or minified-ish source cannot collide.
 
-export function makeDefinitionId(file, nodeKind, startOffset, endOffset) {
+function makeDefinitionId(file, nodeKind, startOffset, endOffset) {
   const normalizedFile = String(file ?? '').replace(/\\/g, '/');
   return `${normalizedFile}#${nodeKind}:${startOffset}-${endOffset}`;
 }

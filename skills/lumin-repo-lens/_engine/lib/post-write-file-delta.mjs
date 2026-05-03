@@ -15,7 +15,7 @@ function normalizeRelPath(value) {
     .replace(/\/+/g, '/');
 }
 
-export function normalizeRepoRelativePath(root, filePath) {
+function normalizeRepoRelativePath(root, filePath) {
   if (typeof filePath !== 'string' || filePath.trim().length === 0) return null;
   const raw = filePath.trim();
   const rel = path.isAbsolute(raw)
