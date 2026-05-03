@@ -10,6 +10,7 @@ import path from 'node:path';
 
 import { producerMetaBase } from './artifacts.mjs';
 import { countFileReferencesAst } from './classify-facts.mjs';
+import { definitionIdFromOxcNode } from './definition-id.mjs';
 import { parseOxcOrThrow } from './parse-oxc.mjs';
 
 const DECLARATION_NODE_KINDS = new Set([
@@ -24,10 +25,6 @@ const DECLARATION_NODE_KINDS = new Set([
 
 function findingId(p) {
   return `dead-export:${p.file}:${p.symbol}:${p.line}`;
-}
-
-function definitionId(file, node) {
-  return `${file}#${node.type}:${node.start}-${node.end}`;
 }
 
 function readSource(root, relFile) {
@@ -118,7 +115,7 @@ function baseActionFields({ kind, proposal, targetNode, edits, actionGroupId, re
       file: proposal.file,
       symbol: proposal.symbol,
       nodeKind: targetNode?.type ?? proposal.kind ?? null,
-      definitionId: targetNode ? definitionId(proposal.file, targetNode) : null,
+      definitionId: targetNode ? definitionIdFromOxcNode(proposal.file, targetNode) : null,
     },
     edits,
     requiresModuleMarker,
@@ -282,6 +279,35 @@ function declarationMergeBlocker(fileInfo, name) {
   return count > 1;
 }
 
+function collectLocalDeclarationTargets(ast) {
+  const out = new Map();
+  for (const node of ast.body ?? []) {
+    const declaration = node.type === 'ExportNamedDeclaration' && node.declaration
+      ? node.declaration
+      : node;
+    if (!declaration || typeof declaration !== 'object') continue;
+
+    if (declaration.type === 'FunctionDeclaration' || declaration.type === 'ClassDeclaration') {
+      if (declaration.id?.name && !out.has(declaration.id.name)) out.set(declaration.id.name, declaration);
+      continue;
+    }
+
+    if (declaration.type === 'VariableDeclaration') {
+      for (const decl of declaration.declarations ?? []) {
+        for (const name of bindingNames(decl.id)) {
+          if (!out.has(name)) out.set(name, decl);
+        }
+      }
+      continue;
+    }
+
+    if (DECLARATION_NODE_KINDS.has(declaration.type) && declaration.id?.name && !out.has(declaration.id.name)) {
+      out.set(declaration.id.name, declaration);
+    }
+  }
+  return out;
+}
+
 function buildFileInfo(root, relFile) {
   const src = readSource(root, relFile);
   const ast = parseOxcOrThrow(relFile, src).program;
@@ -293,7 +319,7 @@ function buildFileInfo(root, relFile) {
       }
     }
   }
-  return { src, ast, nameCounts };
+  return { src, ast, nameCounts, localDeclarations: collectLocalDeclarationTargets(ast) };
 }
 
 function findMatchingExport(fileInfo, proposal) {
@@ -340,7 +366,13 @@ function findMatchingExport(fileInfo, proposal) {
     const spec = (node.specifiers ?? []).find((s) =>
       exportedNameOfSpecifier(s) === proposal.symbol ||
       localNameOfSpecifier(s) === wanted);
-    if (spec) return { exportNode: node, specifier: spec, targetNode: spec };
+    if (spec) {
+      return {
+        exportNode: node,
+        specifier: spec,
+        targetNode: fileInfo.localDeclarations.get(localNameOfSpecifier(spec)) ?? spec,
+      };
+    }
   }
   return null;
 }

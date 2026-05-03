@@ -17,7 +17,7 @@
 // new framework is a local edit, not a surgical strike across a
 // 500-line decision tree.
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { readJsonFile } from './artifacts.mjs';
 import path from 'node:path';
 import { collectFiles } from './collect-files.mjs';
@@ -206,11 +206,66 @@ function relPath(root, full) {
   return path.relative(root, full).replace(/\\/g, '/');
 }
 
+const FRAMEWORK_CONFIG_FILE_NAMES = new Set([
+  'wrangler.toml',
+  'wrangler.json',
+  'wrangler.jsonc',
+]);
+const FRAMEWORK_CONFIG_PRUNE_NAMES = new Set([
+  'node_modules',
+  '.git',
+  'coverage',
+  '.next',
+  '.svelte-kit',
+  '.astro',
+  '.turbo',
+  '.cache',
+  '.nuxt',
+  '.output',
+]);
+const FRAMEWORK_CONFIG_PRUNE_PREFIXES = ['dist', 'build'];
+
+function shouldPruneFrameworkConfigDir(name) {
+  if (FRAMEWORK_CONFIG_PRUNE_NAMES.has(name)) return true;
+  return FRAMEWORK_CONFIG_PRUNE_PREFIXES.some((prefix) =>
+    name === prefix || name.startsWith(`${prefix}-`));
+}
+
+function collectFrameworkConfigFiles(root) {
+  const out = [];
+  function walk(dir) {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (shouldPruneFrameworkConfigDir(entry.name)) continue;
+        walk(full);
+        continue;
+      }
+      if (entry.isFile() && FRAMEWORK_CONFIG_FILE_NAMES.has(entry.name)) {
+        out.push(relPath(root, full));
+      }
+    }
+  }
+  walk(root);
+  return out;
+}
+
 function collectKnownFiles({ root, symbolsData, deadList, includeTests, exclude }) {
   const files = new Set();
   try {
     for (const file of collectFiles(root, { includeTests, exclude })) {
       files.add(relPath(root, file));
+    }
+    for (const file of collectFrameworkConfigFiles(root)) {
+      files.add(file);
     }
   } catch {
     // Fall back to artifact-visible files. Framework facts are optional;

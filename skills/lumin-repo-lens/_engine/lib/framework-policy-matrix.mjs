@@ -45,6 +45,16 @@ const SVELTE_HTTP_EXPORTS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'O
 const SVELTE_OPTIONS = new Set(['prerender', 'ssr', 'csr', 'trailingSlash', 'config']);
 
 const ASTRO_HTTP_EXPORTS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'ALL']);
+const CLOUDFLARE_WORKER_DEPS = [
+  'wrangler',
+  '@cloudflare/workers-types',
+  '@cloudflare/vite-plugin',
+];
+const CLOUDFLARE_WORKER_CONFIGS = new Set([
+  'wrangler.toml',
+  'wrangler.json',
+  'wrangler.jsonc',
+]);
 
 function normalizeRelPath(value) {
   return String(value ?? '')
@@ -105,6 +115,12 @@ function evidenceForPackage(packageRecord) {
     frameworks.add('astro');
     activation.astro = ['dependency:astro'];
   }
+  if (hasAny(deps, CLOUDFLARE_WORKER_DEPS)) {
+    frameworks.add('cloudflare-workers');
+    activation['cloudflare-workers'] = [...deps]
+      .filter((name) => CLOUDFLARE_WORKER_DEPS.includes(name))
+      .map((name) => `dependency:${name}`);
+  }
   if (hasNuxtActivation(deps)) {
     frameworks.add('nuxt');
     activation.nuxt = [...deps]
@@ -116,6 +132,25 @@ function evidenceForPackage(packageRecord) {
   }
 
   return { deps, frameworks, activation, rejectedSignals };
+}
+
+function dirnameOf(relFile) {
+  const idx = relFile.lastIndexOf('/');
+  return idx === -1 ? '.' : relFile.slice(0, idx);
+}
+
+function collectCloudflareWorkerConfigs(files) {
+  const configs = [];
+  for (const file of files) {
+    const base = file.split('/').pop() ?? '';
+    if (CLOUDFLARE_WORKER_CONFIGS.has(base)) {
+      configs.push({ dir: dirnameOf(file), file });
+    }
+  }
+  return configs.toSorted((a, b) => {
+    const depth = (value) => value === '.' ? 0 : value.split('/').length;
+    return depth(b.dir) - depth(a.dir) || a.file.localeCompare(b.file);
+  });
 }
 
 function packageRelative(file, packageRecord) {
@@ -178,6 +213,13 @@ function conventionEvidence(packageRecord, framework, convention) {
     activation: packageRecord.activation[framework] ?? [],
     convention,
   };
+}
+
+function relInsideDir(relFile, dir) {
+  if (dir === '.') return relFile;
+  if (relFile === dir) return '.';
+  if (!relFile.startsWith(`${dir}/`)) return null;
+  return relFile.slice(dir.length + 1);
 }
 
 function classifyNext(packageRecord, relFile, exportName) {
@@ -335,6 +377,46 @@ function classifyAstro(packageRecord, relFile, exportName) {
   return null;
 }
 
+function cloudflareWorkerEntryScope(packageRecord, relFile) {
+  for (const configDir of packageRecord.cloudflareWorkerConfigDirs ?? []) {
+    const scoped = relInsideDir(relFile, configDir);
+    if (scoped !== null) {
+      return {
+        scopedRelFile: scoped,
+        convention: configDir === '.'
+          ? 'wrangler.* + worker entry'
+          : `${configDir}/wrangler.* + worker entry`,
+      };
+    }
+  }
+
+  if (packageRecord.activation['cloudflare-workers']?.some((item) => item.startsWith('dependency:'))) {
+    return { scopedRelFile: relFile, convention: 'package dependency + worker entry' };
+  }
+  return null;
+}
+
+function classifyCloudflareWorker(packageRecord, relFile, exportName) {
+  if (!packageRecord.frameworks.has('cloudflare-workers')) return null;
+  if (exportName !== 'default') return null;
+  const scope = cloudflareWorkerEntryScope(packageRecord, relFile);
+  if (!scope) return null;
+
+  const protectedEntry = (
+    /^(src\/)?index\.[^.]+$/.test(scope.scopedRelFile)
+    || /^(src\/)?worker\.[^.]+$/.test(scope.scopedRelFile)
+  );
+  if (!protectedEntry || !isKnownSourceFile(relFile)) return null;
+
+  return decision(
+    ACTION_MUTE,
+    'cloudflare-workers',
+    'frameworkSentinel_FP27',
+    'cloudflare-worker-module-default-export',
+    conventionEvidence(packageRecord, 'cloudflare-workers', scope.convention),
+  );
+}
+
 function isNuxtTopLevelComposable(relFile) {
   return /^app\/composables\/[^/]+\.[^.]+$/.test(relFile) || /^composables\/[^/]+\.[^.]+$/.test(relFile);
 }
@@ -373,11 +455,22 @@ function withPackageHelpers(record, allFiles) {
   const files = allFiles
     .filter((file) => relRoot === '.' || file === relRoot || file.startsWith(`${relRoot}/`))
     .map((file) => packageRelative(file, { relRoot }));
+  const cloudflareWorkerConfigs = collectCloudflareWorkerConfigs(files);
+  const cloudflareWorkerConfigDirs = [...new Set(cloudflareWorkerConfigs.map((config) => config.dir))];
+  if (cloudflareWorkerConfigDirs.length > 0) {
+    evidence.frameworks.add('cloudflare-workers');
+    const configEvidence = cloudflareWorkerConfigs.map((config) => `config:${config.file}`);
+    evidence.activation['cloudflare-workers'] = [
+      ...(evidence.activation['cloudflare-workers'] ?? []),
+      ...configEvidence,
+    ];
+  }
 
   return {
     ...record,
     relRoot,
     files,
+    cloudflareWorkerConfigDirs,
     ...evidence,
     qualify(relFile) {
       return relRoot === '.' ? normalizeRelPath(relFile) : `${relRoot}/${normalizeRelPath(relFile)}`;
@@ -415,6 +508,7 @@ export function classifyFrameworkPolicy(context, candidate) {
     ?? classifyHono(pkg, relFile, exportName, context.frameworkFacts)
     ?? classifySvelteKit(pkg, relFile, exportName)
     ?? classifyAstro(pkg, relFile, exportName)
+    ?? classifyCloudflareWorker(pkg, relFile, exportName)
     ?? classifyNuxt(pkg, relFile, exportName)
   );
 
