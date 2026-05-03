@@ -157,6 +157,9 @@ export function tierForFinding(finding, evidence = {}) {
   const hasSafeAction = !!finding.safeAction?.kind &&
                         finding.safeAction.proofComplete === true &&
                         actionBlockers.length === 0;
+  const supportedBy = Array.isArray(finding.supportedBy) ? finding.supportedBy : [];
+  const hasEntryReachSupport = supportedBy.some((s) => s?.kind === 'entry-unreachable');
+  const hasIndependentSupport = supportedBy.some((s) => s?.kind === 'call-graph-no-observed-callers');
 
   if (!hasSafeAction) {
     if (actionBlockers.length > 0) {
@@ -170,12 +173,20 @@ export function tierForFinding(finding, evidence = {}) {
 
   if (!hasSoftTaint && !weakRuntimeStatus) {
     const bits = ['safe-action', 'static-graph-clean', `bucket-${finding.bucket}`];
+    const hasSingleLensEvidence = hasEntryReachSupport || hasIndependentSupport;
+    if (hasEntryReachSupport) bits.push('entry-unreachable');
+    if (hasIndependentSupport) bits.push('no-observed-callers');
     if (strongRuntime) bits.push('runtime-dead-confirmed');
     else if (runtime?.status) bits.push(`runtime-${runtime.status}`);
     else bits.push('no-runtime');
     if (staleness?.tier) bits.push(`staleness-${staleness.tier}`);
     else bits.push('no-staleness');
-    return { tier: 'SAFE_FIX', reason: bits.join(' + ') };
+    return {
+      tier: 'SAFE_FIX',
+      reason: bits.join(' + '),
+      confidence: 'medium',
+      ...(hasSingleLensEvidence ? { confidenceDetail: 'medium_with_evidence' } : {}),
+    };
   }
 
   // ─── REVIEW_FIX: clear action, weaker supporting evidence ─

@@ -280,9 +280,38 @@ const prefixExamples = new Map();
 // file?" rather than relying on the repo-wide unresolvedInternalRatio.
 const unresolvedInternalSpecifiers = new Set();
 const unresolvedInternalSpecifierRecords = [];
+const resolvedInternalEdges = [];
 function prefixOf(spec) {
   const slash = spec.indexOf('/');
   return slash > 0 ? spec.slice(0, slash + 1) : spec;
+}
+
+function edgeKindForUse(use) {
+  const kind = typeof use === 'object' ? use.kind : 'import';
+  if (kind === 'import') return 'import-named';
+  if (kind === 'default') return 'import-default';
+  if (kind === 'namespace' || kind === 'namespace-member') return 'import-namespace';
+  if (kind === 'import-side-effect') return 'import-side-effect';
+  if (kind === 'reExport') return 'reexport-named';
+  if (kind === 'reExportAll') return 'reexport-broad';
+  if (kind === 'dynamic' || kind === 'dynamic-member') return 'dynamic-literal';
+  if (kind === 'cjs-side-effect-only') return 'cjs-side-effect';
+  if (kind === 'cjs-require-exact') return 'cjs-require-exact';
+  if (kind === 'cjs-namespace-member') return 'cjs-namespace-member';
+  if (kind === 'cjs-namespace-escape') return 'cjs-namespace-escape';
+  if (kind === 'cjs-reexport-broad') return 'cjs-reexport-broad';
+  return kind;
+}
+
+function addResolvedInternalEdge(consumerFile, target, use) {
+  const fromSpec = typeof use === 'string' ? use : use.fromSpec;
+  resolvedInternalEdges.push({
+    from: relPath(ROOT, consumerFile),
+    to: relPath(ROOT, target),
+    kind: edgeKindForUse(use),
+    source: fromSpec,
+    typeOnly: typeof use === 'object' ? !!use.typeOnly : false,
+  });
 }
 
 function recordUnresolvedInternalSpecifier(consumerFile, use) {
@@ -361,11 +390,12 @@ for (const [consumerFile, info] of fileData) {
     }
     totalUses++;
     resolvedInternalUses++;
+    addResolvedInternalEdge(consumerFile, target, u);
     // v0.6.6 FP-18: dynamic `import()` treated like namespace — whole-file
     // consumer, since we can't statically know which symbol the caller uses.
     // PCEF P0: CJS side-effect-only imports evaluate the file but do not
     // consume named exports, while CJS namespace escapes/re-exports are broad.
-    if (u.kind === 'cjs-side-effect-only') {
+    if (u.kind === 'cjs-side-effect-only' || u.kind === 'import-side-effect') {
       continue;
     }
     if (u.kind === 'namespace' ||
@@ -411,6 +441,7 @@ for (const u of collectMdxImportConsumers({
   totalUses++;
   resolvedInternalUses++;
   mdxConsumerUses++;
+  addResolvedInternalEdge(u.consumerFile, target, u);
   if (u.kind === 'namespace') {
     if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
     namespaceUsers.get(target).add(u.consumerFile);
@@ -573,6 +604,7 @@ const artifact = buildSymbolsArtifact({
   resolvedInternalUses,
   externalUses,
   dependencyImportConsumers,
+  resolvedInternalEdges,
   unresolvedInternalUses,
   mdxConsumerUses,
   dead,

@@ -399,17 +399,33 @@ if (!RUN_BASE_PIPELINE) {
   // ─── Step 5: symbol graph (always, required for classify) ──
   runStep('build-symbol-graph.mjs', { required: true });
 
-  // ─── Step 6: classify dead exports ──────────────────────
+  // ─── Step 6: PCEF entry surface evidence ────────────────
+  runStep('build-entry-surface.mjs', {
+    required: false,
+    precondition: () => existsSync(path.join(OUT, 'symbols.json')),
+    reason: 'symbols.json missing (symbol graph step failed or was skipped)',
+  });
+
+  // ─── Step 7: PCEF module reachability evidence ──────────
+  runStep('build-module-reachability.mjs', {
+    required: false,
+    precondition: () =>
+      existsSync(path.join(OUT, 'symbols.json')) &&
+      existsSync(path.join(OUT, 'entry-surface.json')),
+    reason: 'symbols.json or entry-surface.json missing',
+  });
+
+  // ─── Step 8: classify dead exports ──────────────────────
   runStep('classify-dead-exports.mjs', { required: false });
 
-  // ─── Step 7: PCEF safe action proof ─────────────────────
+  // ─── Step 9: PCEF safe action proof ─────────────────────
   runStep('export-action-safety.mjs', {
     required: false,
     precondition: () => existsSync(path.join(OUT, 'dead-classify.json')),
     reason: 'dead-classify.json missing (classify step failed or was skipped)',
   });
 
-  // ─── Step 8: runtime evidence (full only, coverage present) ──
+  // ─── Step 10: runtime evidence (full only, coverage present) ──
   const hasCoverage = () => {
     const candidates = [
       path.join(ROOT, 'coverage', 'coverage-final.json'),
@@ -425,7 +441,7 @@ if (!RUN_BASE_PIPELINE) {
     });
   }
 
-  // ─── Step 9: staleness (full only, git repo) ───────────
+  // ─── Step 11: staleness (full only, git repo) ───────────
   function isGitWorkTree() {
     try {
       const out = execFileSync('git', ['rev-parse', '--is-inside-work-tree'], {
@@ -446,20 +462,20 @@ if (!RUN_BASE_PIPELINE) {
     });
   }
 
-  // ─── Step 10: rank-fixes ──────────────────────────────────
+  // ─── Step 11: rank-fixes ──────────────────────────────────
   runStep('rank-fixes.mjs', {
     required: false,
     precondition: () => existsSync(path.join(OUT, 'dead-classify.json')),
     reason: 'dead-classify.json missing (classify step failed or was skipped)',
   });
 
-  // ─── Step 11: checklist-facts (pre-compute for templates/REVIEW_CHECKLIST.md) ──
+  // ─── Step 12: checklist-facts (pre-compute for templates/REVIEW_CHECKLIST.md) ──
   // Always runs — cheap and degrades per-item when inputs are missing.
   // Produces `checklist-facts.json` so a structural-review walker lands
   // with the automatable half pre-labeled `[grounded]`.
   runStep('checklist-facts.mjs', { required: false });
 
-  // ─── Step 12: SARIF emission (ci, or --sarif) ──────────────
+  // ─── Step 13: SARIF emission (ci, or --sarif) ──────────────
   if (EMIT_SARIF) {
     runStep('emit-sarif.mjs', { required: false });
   } else {

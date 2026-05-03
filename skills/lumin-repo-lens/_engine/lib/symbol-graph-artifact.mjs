@@ -77,6 +77,12 @@ function buildPlainDefIndex({ root, defIndex }) {
   return out;
 }
 
+function sortResolvedInternalEdges(edges) {
+  return [...(edges ?? [])].sort((a, b) =>
+    `${a.from ?? ''}|${a.to ?? ''}|${a.kind ?? ''}|${a.source ?? ''}|${a.typeOnly ? '1' : '0'}`
+      .localeCompare(`${b.from ?? ''}|${b.to ?? ''}|${b.kind ?? ''}|${b.source ?? ''}|${b.typeOnly ? '1' : '0'}`));
+}
+
 export function buildSymbolsArtifact({
   root,
   files,
@@ -95,6 +101,7 @@ export function buildSymbolsArtifact({
   resolvedInternalUses,
   externalUses,
   dependencyImportConsumers,
+  resolvedInternalEdges,
   unresolvedInternalUses,
   mdxConsumerUses,
   dead,
@@ -124,6 +131,8 @@ export function buildSymbolsArtifact({
         reExportRecords: 'file-level',
         mdxImportConsumers: true,
         dependencyImportConsumers: true,
+        resolvedInternalEdges: true,
+        definitionIds: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -145,6 +154,7 @@ export function buildSymbolsArtifact({
     dependencyImportConsumers: [...(dependencyImportConsumers ?? [])].sort((a, b) =>
       `${a.depRoot ?? ''}|${a.fromSpec ?? ''}|${a.file ?? ''}|${a.kind ?? ''}`
         .localeCompare(`${b.depRoot ?? ''}|${b.fromSpec ?? ''}|${b.file ?? ''}|${b.kind ?? ''}`)),
+    resolvedInternalEdges: sortResolvedInternalEdges(resolvedInternalEdges),
     topUnresolvedSpecifiers: buildTopUnresolvedSpecifiers({
       unresolvedInternalByPrefix,
       prefixExamples,

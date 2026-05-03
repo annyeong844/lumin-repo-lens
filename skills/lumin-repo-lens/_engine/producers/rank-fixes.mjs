@@ -22,6 +22,12 @@ import path from 'node:path';
 import { parseCliArgs } from '../lib/cli.mjs';
 import { tierForFinding, summarize, TIERS } from '../lib/ranking.mjs';
 import { loadIfExists as loadArtifact } from '../lib/artifacts.mjs';
+import { detectRepoMode } from '../lib/repo-mode.mjs';
+import { buildSubmoduleResolver } from '../lib/paths.mjs';
+import {
+  findNearestPackageInfo,
+  hasPublicDeepImportRisk,
+} from '../lib/package-exports.mjs';
 
 const { root, output } = parseCliArgs();
 const ROOT = path.resolve(root);
@@ -38,6 +44,8 @@ const runtimeEvidence = loadIfExists('runtime-evidence.json');
 const staleness = loadIfExists('staleness.json');
 const symbols = loadIfExists('symbols.json');
 const exportActionSafety = loadIfExists('export-action-safety.json');
+const entrySurface = loadIfExists('entry-surface.json');
+const moduleReachability = loadIfExists('module-reachability.json');
 
 const inputs = {
   'dead-classify.json': true,
@@ -45,6 +53,8 @@ const inputs = {
   'staleness.json': !!staleness,
   'symbols.json': !!symbols,
   'export-action-safety.json': !!exportActionSafety,
+  'entry-surface.json': !!entrySurface,
+  'module-reachability.json': !!moduleReachability,
 };
 
 // ─── Build lookup maps ────────────────────────────────────
@@ -70,6 +80,69 @@ if (exportActionSafety?.byId) {
   for (const rec of exportActionSafety.findings) {
     if (rec?.id) actionById.set(rec.id, rec);
   }
+}
+
+const repoMode = detectRepoMode(ROOT);
+const submoduleOf = buildSubmoduleResolver(ROOT, repoMode);
+const reachability = (() => {
+  if (!moduleReachability || !entrySurface) return null;
+  const entryFiles = new Set([
+    ...(entrySurface.entryFiles ?? []),
+    ...(entrySurface.publicApiFiles ?? []),
+    ...(entrySurface.frameworkEntrypointFiles ?? []),
+    ...(entrySurface.configEntrypointFiles ?? []),
+    ...(entrySurface.scriptEntrypointFiles ?? []),
+    ...(entrySurface.htmlEntrypointFiles ?? []),
+  ]);
+  return {
+    runtimeReachable: new Set(moduleReachability.runtimeReachableFiles ?? []),
+    typeReachable: new Set(moduleReachability.typeReachableFiles ?? []),
+    boundedOut: new Set(moduleReachability.boundedOutFiles ?? []),
+    unreachable: new Set(moduleReachability.unreachableFiles ?? []),
+    entryFiles,
+    completenessBySubmodule: moduleReachability.meta?.completenessBySubmodule ?? {},
+  };
+})();
+
+function opaqueDynamicImportCouldReach(file) {
+  for (const item of symbols?.dynamicImportOpacity ?? []) {
+    const targetDir = item?.targetDir;
+    if (targetDir && file.startsWith(targetDir)) return true;
+  }
+  return false;
+}
+
+function fileHasPublicDeepImportRisk(file) {
+  const packageInfo = findNearestPackageInfo(ROOT, file);
+  if (!packageInfo?.packageJson) return false;
+  return hasPublicDeepImportRisk(packageInfo.packageJson, packageInfo.relFileFromPkgRoot);
+}
+
+function entryUnreachableSupport(finding) {
+  if (!reachability) return null;
+  const file = finding.file;
+  const submodule = submoduleOf(file);
+  if (reachability.completenessBySubmodule[submodule] !== 'high') return null;
+  if (!reachability.unreachable.has(file)) return null;
+  if (reachability.runtimeReachable.has(file)) return null;
+  if (reachability.typeReachable.has(file)) return null;
+  if (reachability.boundedOut.has(file)) return null;
+  if (reachability.entryFiles.has(file)) return null;
+  if (opaqueDynamicImportCouldReach(file)) return null;
+  if (fileHasPublicDeepImportRisk(file)) return null;
+  return {
+    kind: 'entry-unreachable',
+    artifact: 'module-reachability.json',
+    completeness: 'high',
+  };
+}
+
+function withReachabilitySupport(finding) {
+  const support = entryUnreachableSupport(finding);
+  if (!support) return finding;
+  const existing = Array.isArray(finding.supportedBy) ? finding.supportedBy : [];
+  if (existing.some((s) => s?.kind === support.kind)) return finding;
+  return { ...finding, supportedBy: [...existing, support] };
 }
 
 // Resolver blindness surfaces as a global gate. v1.9.7 FP-36: prefer
@@ -172,6 +245,7 @@ const mutedFindings = excludedCandidates.map((e) => ({
 // ─── Score each finding ───────────────────────────────────
 const scored = [];
 for (const f of findings) {
+  const rankedFinding = withReachabilitySupport(f);
   const key = `${f.file}|${f.symbol}|${f.line}`;
   const rt = runtimeBy.get(key);
   const st = stalenessBy.get(key);
@@ -196,8 +270,15 @@ for (const f of findings) {
     policy: { excluded: false },
   };
 
-  const { tier, reason } = tierForFinding(f, evidence);
-  scored.push({ finding: f, evidence, tier, reason });
+  const { tier, reason, confidence, confidenceDetail } = tierForFinding(rankedFinding, evidence);
+  scored.push({
+    finding: rankedFinding,
+    evidence,
+    tier,
+    reason,
+    ...(confidence !== undefined ? { confidence } : {}),
+    ...(confidenceDetail !== undefined ? { confidenceDetail } : {}),
+  });
 }
 
 // v1.9.6: MUTED findings come from classifier exclusions. Pass
@@ -226,6 +307,40 @@ for (const t of TIERS) {
   byTier[t].sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
 }
 
+function safeActionKind(score) {
+  return score.finding.safeAction?.kind ?? 'unknown';
+}
+
+function buildSafeFixGroups(safeFixes) {
+  const groups = new Map();
+  for (const score of safeFixes) {
+    const actionKind = safeActionKind(score);
+    const key = `${score.finding.file}|${actionKind}`;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        file: score.finding.file,
+        actionKind,
+        count: 0,
+        symbols: [],
+        lines: [],
+      };
+      groups.set(key, group);
+    }
+    group.count++;
+    group.symbols.push(score.finding.symbol);
+    group.lines.push(score.finding.line);
+  }
+
+  return [...groups.values()].sort((a, b) =>
+    b.count - a.count
+    || a.file.localeCompare(b.file)
+    || a.actionKind.localeCompare(b.actionKind));
+}
+
+const safeFixGroups = buildSafeFixGroups(byTier.SAFE_FIX);
+summary.safeFixGroups = safeFixGroups.length;
+
 const artifact = {
   meta: {
     generated: new Date().toISOString(),
@@ -248,6 +363,7 @@ const artifact = {
   },
   summary,
   safeFixes: byTier.SAFE_FIX,
+  safeFixGroups,
   reviewFixes: byTier.REVIEW_FIX,
   degraded: byTier.DEGRADED,
   muted: byTier.MUTED,
@@ -280,6 +396,14 @@ if (summary.SAFE_FIX > 0) {
   console.log('\n── SAFE_FIX top entries ──');
   for (const s of byTier.SAFE_FIX.slice(0, 5)) {
     console.log(`  ${s.finding.file}:${s.finding.line}  ${s.finding.symbol}  (${s.reason})`);
+  }
+  if (safeFixGroups.length > 0) {
+    console.log('\n── SAFE_FIX grouped patterns ──');
+    for (const group of safeFixGroups.slice(0, 5)) {
+      const sample = group.symbols.slice(0, 4).join(', ');
+      const suffix = group.symbols.length > 4 ? ', ...' : '';
+      console.log(`  ${group.count}×  ${group.actionKind}  ${group.file}  (${sample}${suffix})`);
+    }
   }
 }
 console.log(`\n[rank-fixes] saved → ${outPath}`);

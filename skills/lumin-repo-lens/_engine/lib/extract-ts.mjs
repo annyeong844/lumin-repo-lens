@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs';
 import { parseOxcOrThrow } from './parse-oxc.mjs';
 import { computeLineStarts, lineOf } from './line-offset.mjs';
 import { extractTypeEscapes } from './extract-ts-escapes.mjs';
+import { definitionIdFromOxcNode } from './definition-id.mjs';
 
 function makeLineGetter(src) {
   const lineStarts = computeLineStarts(src);
@@ -79,14 +80,15 @@ function isCallCallee(parent, key) {
   return parent?.type === 'CallExpression' && key === 'callee';
 }
 
-function collectTopLevelSymbols(program, getNodeLine) {
+function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
   const defs = [];
   const uses = [];
   const reExports = [];
   const namespaceImports = new Map();
+  const localDeclarations = collectTopLevelDeclarationTargets(program);
 
   for (const node of program.body) {
-    collectExportDefinitions(node, defs, getNodeLine);
+    collectExportDefinitions(node, defs, getNodeLine, artifactFilePath, localDeclarations);
     collectReExports(node, reExports, uses, getNodeLine);
     collectImports(node, uses, namespaceImports, getNodeLine);
   }
@@ -94,48 +96,98 @@ function collectTopLevelSymbols(program, getNodeLine) {
   return { defs, uses, reExports, namespaceImports };
 }
 
-function collectExportDefinitions(node, defs, getNodeLine) {
+function collectTopLevelDeclarationTargets(program) {
+  const out = new Map();
+  for (const node of program.body ?? []) {
+    const declaration = node.type === 'ExportNamedDeclaration' && node.declaration
+      ? node.declaration
+      : node;
+    if (!declaration || typeof declaration !== 'object') continue;
+
+    if (declaration.type === 'FunctionDeclaration' || declaration.type === 'ClassDeclaration') {
+      if (declaration.id?.name && !out.has(declaration.id.name)) out.set(declaration.id.name, declaration);
+      continue;
+    }
+
+    if (declaration.type === 'VariableDeclaration') {
+      for (const decl of declaration.declarations ?? []) {
+        if (decl.id?.type === 'Identifier' && !out.has(decl.id.name)) out.set(decl.id.name, decl);
+      }
+      continue;
+    }
+
+    if (isTypeDeclaration(declaration) && declaration.id?.name && !out.has(declaration.id.name)) {
+      out.set(declaration.id.name, declaration);
+    }
+  }
+  return out;
+}
+
+function withDefinitionId(def, artifactFilePath, targetNode) {
+  const definitionId = definitionIdFromOxcNode(artifactFilePath, targetNode);
+  return definitionId ? { ...def, definitionId } : def;
+}
+
+function collectExportDefinitions(node, defs, getNodeLine, artifactFilePath, localDeclarations) {
   if (node.type === 'ExportDefaultDeclaration') {
-    defs.push({ name: 'default', kind: 'default', line: getNodeLine(node) });
+    defs.push(withDefinitionId(
+      { name: 'default', kind: 'default', line: getNodeLine(node) },
+      artifactFilePath,
+      node.declaration ?? node,
+    ));
     return;
   }
 
   if (node.type !== 'ExportNamedDeclaration' || node.source) return;
-  collectDeclarationDefs(node.declaration, defs, getNodeLine);
-  collectExportSpecifierDefs(node, defs, getNodeLine);
+  collectDeclarationDefs(node.declaration, defs, getNodeLine, artifactFilePath);
+  collectExportSpecifierDefs(node, defs, getNodeLine, artifactFilePath, localDeclarations);
 }
 
-function collectDeclarationDefs(declaration, defs, getNodeLine) {
+function collectDeclarationDefs(declaration, defs, getNodeLine, artifactFilePath) {
   if (!declaration) return;
   const line = getNodeLine(declaration);
 
   if (declaration.type === 'FunctionDeclaration' || declaration.type === 'ClassDeclaration') {
-    if (declaration.id?.name) defs.push({ name: declaration.id.name, kind: declaration.type, line });
+    if (declaration.id?.name) {
+      defs.push(withDefinitionId(
+        { name: declaration.id.name, kind: declaration.type, line },
+        artifactFilePath,
+        declaration,
+      ));
+    }
     return;
   }
 
   if (declaration.type === 'VariableDeclaration') {
     for (const decl of declaration.declarations) {
       if (decl.id?.type === 'Identifier') {
-        defs.push({ name: decl.id.name, kind: `${declaration.kind}-var`, line });
+        defs.push(withDefinitionId(
+          { name: decl.id.name, kind: `${declaration.kind}-var`, line },
+          artifactFilePath,
+          decl,
+        ));
       }
     }
     return;
   }
 
   if (isTypeDeclaration(declaration) && declaration.id?.name) {
-    defs.push({ name: declaration.id.name, kind: declaration.type, line });
+    defs.push(withDefinitionId(
+      { name: declaration.id.name, kind: declaration.type, line },
+      artifactFilePath,
+      declaration,
+    ));
   }
 }
 
-function collectExportSpecifierDefs(node, defs, getNodeLine) {
+function collectExportSpecifierDefs(node, defs, getNodeLine, artifactFilePath, localDeclarations) {
   for (const spec of node.specifiers ?? []) {
     if (spec.type !== 'ExportSpecifier' || !spec.exported?.name) continue;
     const exportedName = spec.exported.name;
     const localName = spec.local?.name ?? exportedName;
     const def = { name: exportedName, kind: 'ExportSpecifier', line: getNodeLine(spec) };
     if (localName !== exportedName) def.localName = localName;
-    defs.push(def);
+    defs.push(withDefinitionId(def, artifactFilePath, localDeclarations.get(localName) ?? spec));
   }
 }
 
@@ -182,6 +234,17 @@ function collectNamedReExportUses(node, uses, getNodeLine) {
 
 function collectImports(node, uses, namespaceImports, getNodeLine) {
   if (node.type !== 'ImportDeclaration') return;
+
+  if ((node.specifiers ?? []).length === 0) {
+    uses.push({
+      fromSpec: node.source.value,
+      name: '*',
+      kind: 'import-side-effect',
+      typeOnly: false,
+      line: getNodeLine(node),
+    });
+    return;
+  }
 
   for (const spec of node.specifiers ?? []) {
     if (spec.type === 'ImportSpecifier') {
@@ -720,11 +783,12 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
   const src = readFileSync(filePath, 'utf8');
   const result = parseOxcOrThrow(filePath, src);
   const getNodeLine = makeLineGetter(src);
+  const artifactFilePath = options.artifactFilePath ?? filePath;
   const { defs, uses, reExports, namespaceImports } =
-    collectTopLevelSymbols(result.program, getNodeLine);
+    collectTopLevelSymbols(result.program, getNodeLine, artifactFilePath);
   const memberPrecision = collectMemberPrecisionUses(result.program, namespaceImports, getNodeLine);
   uses.push(...memberPrecision.uses);
-  const typeEscapePath = options.artifactFilePath ?? filePath;
+  const typeEscapePath = artifactFilePath;
   const typeEscapeResult = extractTypeEscapes(src, typeEscapePath);
 
   return {

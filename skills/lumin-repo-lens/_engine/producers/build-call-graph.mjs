@@ -14,6 +14,7 @@ import { buildAliasMap } from '../lib/alias-map.mjs';
 import { makeResolver, isResolvedFile } from '../lib/resolver-core.mjs';
 import { collectFiles as collectFilesShared } from '../lib/collect-files.mjs';
 import { relPath } from '../lib/paths.mjs';
+import { definitionIdFromOxcNode } from '../lib/definition-id.mjs';
 
 const cli = parseCliArgs();
 const { root: ROOT, output } = cli;
@@ -44,10 +45,133 @@ function walk(node, visitor, parent = null) {
   }
 }
 
+function nameOfId(id) {
+  return id?.name ?? id?.value ?? null;
+}
+
+function bindingNames(pattern, out = []) {
+  if (!pattern || typeof pattern !== 'object') return out;
+  if (pattern.type === 'Identifier' || pattern.type === 'BindingIdentifier') {
+    if (pattern.name) out.push(pattern.name);
+    return out;
+  }
+  if (pattern.type === 'ObjectPattern') {
+    for (const prop of pattern.properties ?? []) {
+      if (prop.type === 'RestElement') bindingNames(prop.argument, out);
+      else bindingNames(prop.value ?? prop.argument ?? prop.key, out);
+    }
+    return out;
+  }
+  if (pattern.type === 'ArrayPattern') {
+    for (const el of pattern.elements ?? []) bindingNames(el, out);
+    return out;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    bindingNames(pattern.left, out);
+    return out;
+  }
+  if (pattern.type === 'RestElement') {
+    bindingNames(pattern.argument, out);
+  }
+  return out;
+}
+
+function isTypeDeclaration(node) {
+  return node?.type === 'TSInterfaceDeclaration' ||
+    node?.type === 'TSTypeAliasDeclaration' ||
+    node?.type === 'TSEnumDeclaration' ||
+    node?.type === 'TSModuleDeclaration';
+}
+
+function collectLocalDeclarationTargets(program) {
+  const out = new Map();
+  for (const node of program.body ?? []) {
+    const declaration = node.type === 'ExportNamedDeclaration' && node.declaration
+      ? node.declaration
+      : node;
+    if (!declaration || typeof declaration !== 'object') continue;
+
+    if (declaration.type === 'FunctionDeclaration' || declaration.type === 'ClassDeclaration') {
+      if (declaration.id?.name && !out.has(declaration.id.name)) out.set(declaration.id.name, declaration);
+      continue;
+    }
+
+    if (declaration.type === 'VariableDeclaration') {
+      for (const decl of declaration.declarations ?? []) {
+        if (decl.id?.type === 'Identifier' && !out.has(decl.id.name)) out.set(decl.id.name, decl);
+      }
+      continue;
+    }
+
+    if (isTypeDeclaration(declaration) && declaration.id?.name && !out.has(declaration.id.name)) {
+      out.set(declaration.id.name, declaration);
+    }
+  }
+  return out;
+}
+
+function declarationExportIds(relFile, declaration) {
+  const out = new Map();
+  if (!declaration) return out;
+
+  if (declaration.type === 'FunctionDeclaration' || declaration.type === 'ClassDeclaration') {
+    if (declaration.id?.name) out.set(declaration.id.name, definitionIdFromOxcNode(relFile, declaration));
+    return out;
+  }
+
+  if (declaration.type === 'VariableDeclaration') {
+    for (const decl of declaration.declarations ?? []) {
+      for (const name of bindingNames(decl.id)) {
+        out.set(name, definitionIdFromOxcNode(relFile, decl));
+      }
+    }
+    return out;
+  }
+
+  if (isTypeDeclaration(declaration) && declaration.id?.name) {
+    out.set(declaration.id.name, definitionIdFromOxcNode(relFile, declaration));
+  }
+  return out;
+}
+
+function collectExportAliasMap(program, relFile) {
+  const localDeclarations = collectLocalDeclarationTargets(program);
+  const exportAliases = new Map();
+
+  for (const node of program.body ?? []) {
+    if (node.type === 'ExportDefaultDeclaration') {
+      exportAliases.set('default', definitionIdFromOxcNode(relFile, node.declaration ?? node));
+      continue;
+    }
+
+    if (node.type !== 'ExportNamedDeclaration' || node.source) continue;
+
+    if (node.declaration) {
+      for (const [name, definitionId] of declarationExportIds(relFile, node.declaration)) {
+        if (definitionId) exportAliases.set(name, definitionId);
+      }
+      continue;
+    }
+
+    for (const spec of node.specifiers ?? []) {
+      if (spec.type !== 'ExportSpecifier') continue;
+      const exportedName = nameOfId(spec.exported) ?? nameOfId(spec.local);
+      const localName = nameOfId(spec.local) ?? exportedName;
+      if (!exportedName) continue;
+      const target = localDeclarations.get(localName) ?? spec;
+      const definitionId = definitionIdFromOxcNode(relFile, target);
+      if (definitionId) exportAliases.set(exportedName, definitionId);
+    }
+  }
+
+  return exportAliases;
+}
+
 // ─── 파일별 분석 ─────────────────────────────────────────
 function analyzeFile(filePath) {
   const src = readFileSync(filePath, 'utf8');
   const result = parseOxcOrThrow(filePath, src);
+  const relFile = relPath(ROOT, filePath);
 
   // import map: local name -> { source, imported, typeOnly }
   const importMap = new Map();
@@ -145,6 +269,7 @@ function analyzeFile(filePath) {
   return {
     filePath,
     importMap,
+    exportAliasMap: collectExportAliasMap(result.program, relFile),
     calls,
     namespaceMethodCalls,
     prototypeCalls,
@@ -202,15 +327,40 @@ console.log(`  type-only (skip): ${typeOnlyResolved}`);
 console.log(`[call edges] ${callEdges.length} unique (from, to, callee) triples`);
 
 // ─── Top callees (가장 많이 호출되는 심볼) ───────────────
+const exportAliasMap = Object.create(null); // "relFile::exportedName" -> definitionId
+const callFanInByIdentity = Object.create(null);
+const callFanInByDefinitionId = Object.create(null);
+const callSiteFanInByDefinitionId = Object.create(null);
+
+for (const [absFile, info] of fileInfo) {
+  const relFile = relPath(ROOT, absFile);
+  for (const [exportedName, definitionId] of info.exportAliasMap ?? []) {
+    const identity = `${relFile}::${exportedName}`;
+    exportAliasMap[identity] = definitionId;
+    callFanInByIdentity[identity] = 0;
+    if (definitionId && callFanInByDefinitionId[definitionId] === undefined) {
+      callFanInByDefinitionId[definitionId] = 0;
+      callSiteFanInByDefinitionId[definitionId] = 0;
+    }
+  }
+}
+
 const calleeFreq = new Map(); // "targetFile::name" -> total call count
 for (const e of callEdges) {
-  const k = `${e.to}::${e.callee}`;
+  const relTarget = relPath(ROOT, e.to);
+  const k = `${relTarget}::${e.callee}`;
   calleeFreq.set(k, (calleeFreq.get(k) || 0) + e.count);
+  callFanInByIdentity[k] = (callFanInByIdentity[k] ?? 0) + e.count;
+  const definitionId = exportAliasMap[k];
+  if (definitionId) {
+    callFanInByDefinitionId[definitionId] = (callFanInByDefinitionId[definitionId] ?? 0) + e.count;
+    callSiteFanInByDefinitionId[definitionId] = (callSiteFanInByDefinitionId[definitionId] ?? 0) + e.count;
+  }
 }
 const topCallees = [...calleeFreq.entries()]
   .map(([k, n]) => {
     const [file, name] = k.split('::');
-    return { file: relPath(ROOT, file), name, count: n };
+    return { file, name, count: n };
   })
   .sort((a, b) => b.count - a.count);
 
@@ -361,6 +511,14 @@ writeFileSync(outPath, JSON.stringify({
     generated: new Date().toISOString(),
     root: ROOT,
     tool: 'build-call-graph.mjs',
+    supports: {
+      callFanInByDefinitionId: true,
+      callFanInByIdentity: true,
+      callSiteFanInByDefinitionId: true,
+      exportAliasMap: true,
+      topCalleesDisplaySlice: 100,
+      truncationFix: true,
+    },
   },
   summary: {
     files: files.length,
@@ -374,6 +532,10 @@ writeFileSync(outPath, JSON.stringify({
     totalPrototypeCalls: totalProtoCalls,
   },
   topCallees: topCallees.slice(0, 100),
+  callFanInByDefinitionId,
+  callFanInByIdentity,
+  callSiteFanInByDefinitionId,
+  exportAliasMap,
   moduleCallCount: [...moduleCallCount.entries()].map(([k, v]) => ({ edge: k, count: v })).sort((a, b) => b.count - a.count).slice(0, 50),
   semiDeadList: semiDead,
   prototypeOwners: [...protoByOwner.entries()].map(([owner, m]) => ({
