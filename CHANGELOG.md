@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.0-beta.13 - 2026-05-04
+
+### Self-audit export surface cleanup
+
+- Trim internal helper exports surfaced by the engine's own SAFE_FIX audit
+  candidates while preserving each helper's internal runtime use.
+- Add export-surface regression tests for the classify policy, manifest,
+  function clone, definition id, and post-write file-delta helper modules.
+- Regenerate the shipping skill mirror so Claude Code installs the cleanup
+  under a fresh public beta cache key.
+- Self-audit result after cleanup: `SAFE_FIX = 0`, `safeFixGroups = 0`,
+  `REVIEW_FIX = 0`, `DEGRADED = 0`, with no blind zones.
+
 ## 0.9.0-beta.12 - 2026-05-03
 
 ### Public plugin cache refresh
