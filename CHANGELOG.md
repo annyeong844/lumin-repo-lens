@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.0-beta.12 - 2026-05-03
+
+### Public plugin cache refresh
+
+- Bump the public beta package version so Claude Code installs a fresh plugin
+  cache containing the `0.9.0-beta.11` engine changes.
+- This release carries the merged Cloudflare Worker entry protection and
+  `safeFixGroups` artifact output under a new installable version key.
+
 ## 0.9.0-beta.11 - 2026-05-03
 
 ### Large-repo classify scaling
