@@ -47,20 +47,73 @@ import {
 import {
   countOccurrencesExceptDefLine,
   countExcludingDeclAndExport,
-  countFileReferencesAst,
+  countFileReferencesAstMany,
   hasPredicatePartner,
   isAliasedSpec,
 } from '../lib/classify-facts.mjs';
 import { computeFindingProvenance } from '../lib/finding-provenance.mjs';
 import { EVIDENCE, provenanceFields } from '../lib/vocab.mjs';
 
-const cli = parseCliArgs();
+const cli = parseCliArgs({
+  'classify-candidate-limit': { type: 'string' },
+  'classify-max-file-bytes': { type: 'string' },
+  'classify-progress-ms': { type: 'string' },
+  'classify-time-budget-ms': { type: 'string' },
+});
 const { root: ROOT, output, includeTests, exclude } = cli;
 
 const symbolsPath = path.join(output, 'symbols.json');
 const symbolsData = JSON.parse(readFileSync(symbolsPath, 'utf8'));
-const deadList = symbolsData.deadProdList;
-console.log(`[classify] production dead candidates: ${deadList.length}`);
+const classifyStartedAt = Date.now();
+
+function positiveInt(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function nonNegativeInt(value) {
+  if (value === undefined || value === null || value === '') return null;
+  const n = Number(value);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+
+const configuredCandidateLimit = positiveInt(
+  cli.raw['classify-candidate-limit'] ?? process.env.LUMIN_REPO_LENS_CLASSIFY_CANDIDATE_LIMIT,
+);
+const progressEveryMs = positiveInt(
+  cli.raw['classify-progress-ms'] ?? process.env.LUMIN_REPO_LENS_CLASSIFY_PROGRESS_MS,
+) ?? 30000;
+const timeBudgetMs = nonNegativeInt(
+  cli.raw['classify-time-budget-ms'] ?? process.env.LUMIN_REPO_LENS_CLASSIFY_TIME_BUDGET_MS,
+) ?? 180000;
+const maxClassifyFileBytes = nonNegativeInt(
+  cli.raw['classify-max-file-bytes'] ?? process.env.LUMIN_REPO_LENS_CLASSIFY_MAX_FILE_BYTES,
+) ?? 0;
+
+function isTimeBudgetExceeded() {
+  return timeBudgetMs > 0 && Date.now() - classifyStartedAt >= timeBudgetMs;
+}
+
+const allDeadCandidates = Array.isArray(symbolsData.deadProdList)
+  ? symbolsData.deadProdList
+  : [];
+const candidateLimitApplied =
+  configuredCandidateLimit !== null && allDeadCandidates.length > configuredCandidateLimit;
+const deadList = candidateLimitApplied
+  ? allDeadCandidates.slice(0, configuredCandidateLimit)
+  : allDeadCandidates;
+
+console.log(
+  `[classify] production dead candidates: ${deadList.length}` +
+  (candidateLimitApplied ? ` (limited from ${allDeadCandidates.length})` : ''),
+);
+if (candidateLimitApplied) {
+  console.log(
+    `[classify] warning: candidate limit applied; artifact is incomplete ` +
+    `(limit=${configuredCandidateLimit}).`,
+  );
+}
 
 // ─── FP-23 / FP-25: public API file set ──────────────────────
 // A file reached from any `exports` entry — or transitively from a
@@ -70,6 +123,7 @@ console.log(`[classify] production dead candidates: ${deadList.length}`);
 const repoMode = detectRepoMode(ROOT);
 const aliasMap = buildAliasMap(ROOT, repoMode);
 const resolve = makeResolver(ROOT, aliasMap);
+const submoduleOf = buildSubmoduleResolver(ROOT, repoMode);
 const isVitePress = detectVitePress(repoMode.rootPkgJson, repoMode.workspaceDirs);
 const frameworkPolicyContext = createFrameworkPolicyContextForRepo({
   root: ROOT,
@@ -228,6 +282,9 @@ const filesWithParseErrors = Array.isArray(symbolsData.filesWithParseErrors)
 const unresolvedInternalSpecifiers = Array.isArray(symbolsData.unresolvedInternalSpecifiers)
   ? symbolsData.unresolvedInternalSpecifiers
   : [];
+const unresolvedInternalSpecifierRecords = Array.isArray(symbolsData.unresolvedInternalSpecifierRecords)
+  ? symbolsData.unresolvedInternalSpecifierRecords
+  : unresolvedInternalSpecifiers;
 
 // ─── Main classification loop ────────────────────────────────
 const classified = [];
@@ -248,6 +305,7 @@ let excludedDynamicImportOpacity = 0;
 // Previously only counts were kept; users saw MUTED always = 0 in
 // fix-plan summaries and couldn't audit what the classifier hid.
 const excludedCandidates = [];
+const unprocessedCandidates = [];
 
 function recordExcluded(d, reason, extra = {}) {
   excludedCandidates.push({
@@ -269,7 +327,281 @@ function findDynamicImportOpacityEvidence(relPath) {
   return dynamicImportOpacityTargets.filter((e) => rel.startsWith(e.targetDir));
 }
 
+function countNameForEntry(d) {
+  return isAliasedSpec(d) ? d.localName : d.symbol;
+}
+
+function maybeLogProgress({ phase, processed, total, lastLoggedAtRef }) {
+  if (progressEveryMs <= 0) return lastLoggedAtRef.value;
+  const now = Date.now();
+  if (processed < total && now - lastLoggedAtRef.value < progressEveryMs) {
+    return lastLoggedAtRef.value;
+  }
+  console.log(
+    `[classify] progress ${phase}: ${processed}/${total} ` +
+    `elapsedMs=${now - classifyStartedAt}`,
+  );
+  return now;
+}
+
+function zeroReferenceResult() {
+  return {
+    count: 0,
+    evidence: EVIDENCE.TEXT_ZERO_REF_COUNT,
+    typeRefs: 0,
+    valueRefs: 0,
+    exportedDeclarationRefs: 0,
+    exportedDeclarationRefLines: [],
+  };
+}
+
+function escapeRegexLiteral(value) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+function hasEscapedIdentifierSyntax(src) {
+  return /\\(?:u\{?[0-9a-fA-F]|x[0-9a-fA-F]{2})/.test(src);
+}
+
+function isAsciiIdentifierName(name) {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
+}
+
+function splitTextZeroRequests(src, requests) {
+  const astRequests = [];
+  const zeroResults = new Map();
+  if (requests.length === 0) return { astRequests, zeroResults };
+
+  // Identifier escapes can make a real reference invisible to literal text
+  // matching. In that case we keep the existing AST path for the whole file.
+  if (hasEscapedIdentifierSyntax(src)) {
+    return { astRequests: requests, zeroResults };
+  }
+
+  const eligible = [];
+  const ineligible = new Set();
+  for (const request of requests) {
+    if (isAsciiIdentifierName(request.symbolName)) eligible.push(request);
+    else ineligible.add(request.key);
+  }
+  if (eligible.length === 0) return { astRequests: requests, zeroResults };
+
+  const names = [...new Set(eligible.map((r) => r.symbolName))];
+  const byName = new Map();
+  for (const request of eligible) {
+    if (!byName.has(request.symbolName)) byName.set(request.symbolName, []);
+    byName.get(request.symbolName).push(request);
+  }
+
+  const occurrenceByKey = new Map();
+  for (const request of eligible) {
+    occurrenceByKey.set(request.key, { count: 0, lines: new Set() });
+  }
+
+  const identBoundary = '[A-Za-z0-9_$]';
+  const rx = new RegExp(
+    `(^|[^A-Za-z0-9_$])(${names.map(escapeRegexLiteral).join('|')})(?!${identBoundary})`,
+    'g',
+  );
+  const lines = src.split(/\r?\n/);
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+    const line = lines[lineIndex];
+    rx.lastIndex = 0;
+    let match;
+    while ((match = rx.exec(line)) !== null) {
+      const name = match[2];
+      const matchingRequests = byName.get(name) ?? [];
+      for (const request of matchingRequests) {
+        const record = occurrenceByKey.get(request.key);
+        record.count++;
+        record.lines.add(lineIndex + 1);
+      }
+    }
+  }
+
+  for (const request of requests) {
+    if (ineligible.has(request.key)) {
+      astRequests.push(request);
+      continue;
+    }
+    const record = occurrenceByKey.get(request.key);
+    const onlyDeclarationName =
+      record?.count === 1 &&
+      record.lines.size === 1 &&
+      record.lines.has(request.declLine);
+    if (onlyDeclarationName) zeroResults.set(request.key, zeroReferenceResult());
+    else astRequests.push(request);
+  }
+
+  return { astRequests, zeroResults };
+}
+
+const astBatchStartedAt = Date.now();
+const astResultByEntry = new Map();
+const oversizedAstEntries = new Set();
+const astBatchStats = {
+  filesAttempted: 0,
+  filesRead: 0,
+  filesParsed: 0,
+  filesWithParseErrors: 0,
+  filesWithReadErrors: 0,
+  filesSkippedBySize: 0,
+  candidatesCounted: 0,
+  textZeroCandidates: 0,
+  textZeroFiles: 0,
+  timeBudgetExceeded: false,
+};
+
+const candidatesByFile = new Map();
 for (const d of deadList) {
+  if (!candidatesByFile.has(d.file)) candidatesByFile.set(d.file, []);
+  candidatesByFile.get(d.file).push(d);
+}
+
+const astProgressLog = { value: Date.now() };
+let astCandidateProgress = 0;
+for (const [relFile, entries] of candidatesByFile) {
+  if (isTimeBudgetExceeded()) {
+    astBatchStats.timeBudgetExceeded = true;
+    console.log(
+      `[classify] warning: time budget exceeded during ast-batch ` +
+      `(budgetMs=${timeBudgetMs}, processed=${astCandidateProgress}/${deadList.length}).`,
+    );
+    break;
+  }
+  astBatchStats.filesAttempted++;
+  const abs = path.join(ROOT, relFile);
+  let text;
+  try {
+    text = readFileSync(abs, 'utf8');
+    fileCache.set(abs, text);
+    astBatchStats.filesRead++;
+  } catch {
+    astBatchStats.filesWithReadErrors++;
+    astCandidateProgress += entries.length;
+    astProgressLog.value = maybeLogProgress({
+      phase: 'ast-batch',
+      processed: astCandidateProgress,
+      total: deadList.length,
+      lastLoggedAtRef: astProgressLog,
+    });
+    continue;
+  }
+
+  const fileBytes = Buffer.byteLength(text, 'utf8');
+  if (maxClassifyFileBytes > 0 && fileBytes > maxClassifyFileBytes) {
+    astBatchStats.filesSkippedBySize++;
+    for (const entry of entries) oversizedAstEntries.add(entry);
+    astCandidateProgress += entries.length;
+    astProgressLog.value = maybeLogProgress({
+      phase: 'ast-batch',
+      processed: astCandidateProgress,
+      total: deadList.length,
+      lastLoggedAtRef: astProgressLog,
+    });
+    continue;
+  }
+
+  const requests = entries.map((d, i) => ({
+    key: String(i),
+    symbolName: countNameForEntry(d),
+    declLine: d.line,
+  }));
+  const { astRequests, zeroResults } = splitTextZeroRequests(text, requests);
+  let fileHadTextZero = false;
+  for (let i = 0; i < entries.length; i++) {
+    const result = zeroResults.get(String(i));
+    if (!result) continue;
+    astResultByEntry.set(entries[i], result);
+    astBatchStats.textZeroCandidates++;
+    fileHadTextZero = true;
+  }
+  if (fileHadTextZero) astBatchStats.textZeroFiles++;
+  if (astRequests.length === 0) {
+    astCandidateProgress += entries.length;
+    astProgressLog.value = maybeLogProgress({
+      phase: 'ast-batch',
+      processed: astCandidateProgress,
+      total: deadList.length,
+      lastLoggedAtRef: astProgressLog,
+    });
+    continue;
+  }
+
+  const results = countFileReferencesAstMany(text, abs, astRequests);
+  let fileHadParseError = false;
+  for (const request of astRequests) {
+    const result = results.get(request.key);
+    if (result?.count === null) fileHadParseError = true;
+    astResultByEntry.set(entries[Number(request.key)], result);
+  }
+  if (fileHadParseError) astBatchStats.filesWithParseErrors++;
+  else astBatchStats.filesParsed++;
+  astBatchStats.candidatesCounted += astRequests.length;
+  astCandidateProgress += entries.length;
+  astProgressLog.value = maybeLogProgress({
+    phase: 'ast-batch',
+    processed: astCandidateProgress,
+    total: deadList.length,
+    lastLoggedAtRef: astProgressLog,
+  });
+}
+
+function recordUnprocessed(d, reason, extra = {}) {
+  unprocessedCandidates.push({
+    file: d.file,
+    line: d.line,
+    symbol: d.symbol,
+    kind: d.kind,
+    reason,
+    ...extra,
+  });
+}
+const astBatchMs = Date.now() - astBatchStartedAt;
+
+const provenanceBaseByFile = new Map();
+
+function computeCachedFindingProvenance(d, evidence, count) {
+  const fileKey = String(d.file ?? '').replace(/\\/g, '/');
+  let base = provenanceBaseByFile.get(fileKey);
+  if (!base) {
+    const computed = computeFindingProvenance(d, {
+      filesWithParseErrors,
+      unresolvedInternalSpecifiers: unresolvedInternalSpecifierRecords,
+      aliasMap,
+      submoduleOf,
+      root: ROOT,
+      astEvidence: evidence,
+      astCount: count,
+    });
+    base = {
+      taintedBy: computed.taintedBy,
+      resolverConfidence: computed.resolverConfidence,
+      parseStatus: computed.parseStatus,
+    };
+    provenanceBaseByFile.set(fileKey, base);
+  }
+  return {
+    supportedBy: [{ kind: evidence, count }],
+    taintedBy: base.taintedBy,
+    resolverConfidence: base.resolverConfidence,
+    parseStatus: base.parseStatus,
+  };
+}
+
+const classifyLoopStartedAt = Date.now();
+const classifyProgressLog = { value: Date.now() };
+let classifyProcessed = 0;
+
+for (const d of deadList) {
+  classifyProcessed++;
+  classifyProgressLog.value = maybeLogProgress({
+    phase: 'classify-loop',
+    processed: classifyProcessed,
+    total: deadList.length,
+    lastLoggedAtRef: classifyProgressLog,
+  });
+
   // Policy filters — in order. Each short-circuits the symbol out of
   // classification but still records it in excludedCandidates.
   if (isConfigFile(d.file))                          { excludedConfig++;    recordExcluded(d, 'config_FP22');             continue; }
@@ -328,7 +660,16 @@ for (const d of deadList) {
   // precision produced this finding.
   const aliased = isAliasedSpec(d);
   const nameForCount = aliased ? d.localName : d.symbol;
-  const astResult = countFileReferencesAst(text, abs, nameForCount, d.line);
+  const astResult = astResultByEntry.get(d);
+  if (!astResult) {
+    const reason = oversizedAstEntries.has(d)
+      ? 'classify-max-file-bytes'
+      : astBatchStats.timeBudgetExceeded
+        ? 'classify-time-budget'
+        : 'source-read-error';
+    recordUnprocessed(d, reason);
+    continue;
+  }
 
   let occ, evidence, typeRefs, valueRefs, parseError;
   let exportedDeclarationRefs = 0;
@@ -368,12 +709,7 @@ for (const d of deadList) {
   // v1.10.0 P1: per-finding provenance. Replaces the repo-global
   // unresolvedInternalRatio gate with local taint evidence so findings
   // in unaffected parts of the repo keep their normal tier.
-  const provenance = computeFindingProvenance(d, {
-    filesWithParseErrors,
-    unresolvedInternalSpecifiers,
-    astEvidence: evidence,
-    astCount: occ,
-  });
+  const provenance = computeCachedFindingProvenance(d, evidence, occ);
 
   classified.push({
     ...d,
@@ -401,6 +737,8 @@ for (const d of deadList) {
     parseStatus: provenance.parseStatus,
   });
 }
+
+const classifyLoopMs = Date.now() - classifyLoopStartedAt;
 
 // ─── Reporting ───────────────────────────────────────────────
 const byCategory = {
@@ -440,6 +778,9 @@ console.log(`\n══════ 분류 결과 ══════`);
 console.log(`  C (완전 dead, 내부 사용 0회)    : ${byCategory['C-completely-dead'].length}건`);
 console.log(`  A (export 제거 가능, 1~2회)     : ${byCategory['A-remove-export'].length}건`);
 console.log(`  B (파일 내부 중심, 3회+)        : ${byCategory['B-file-internal-hub'].length}건`);
+if (unprocessedCandidates.length > 0) {
+  console.log(`  DEGRADED (classify 미완료)       : ${unprocessedCandidates.length}건`);
+}
 console.log(`  합계                            : ${classified.length}건`);
 
 const withPredicate = classified.filter((c) => c.predicatePartner);
@@ -456,7 +797,7 @@ for (const [k, v] of [...byKind.entries()].sort((a, b) => b[1] - a[1])) {
 }
 
 // Package breakdown — shared workspace-aware classifier (see _lib/paths.mjs).
-const pkgOf = buildSubmoduleResolver(ROOT, repoMode);
+const pkgOf = submoduleOf;
 
 const pkgCat = {};
 for (const c of classified) {
@@ -493,6 +834,9 @@ const aliasedDead = classified.filter(isAliasedSpec);
 const nonAliasedC = byCategory['C-completely-dead'].filter((c) => !isAliasedSpec(c));
 const nonAliasedA = byCategory['A-remove-export'].filter((c) => !isAliasedSpec(c));
 const nonAliasedB = byCategory['B-file-internal-hub'].filter((c) => !isAliasedSpec(c));
+const classifyIncomplete = candidateLimitApplied ||
+  astBatchStats.timeBudgetExceeded ||
+  unprocessedCandidates.length > 0;
 
 // Provenance forwarder moved to `_lib/vocab.mjs` in v1.10.1 — one
 // definition, every bucket mapper uses it via `...provenanceFields(c)`.
@@ -522,6 +866,31 @@ const removalProposal = {
       testConsumerDiagnostics_FP44: testPins.diagnostics.length,
     },
     frameworkPolicy: frameworkPolicyCounters,
+    incomplete: classifyIncomplete,
+    performance: {
+      deadCandidatesTotal: allDeadCandidates.length,
+      deadCandidatesProcessed: deadList.length,
+      candidateLimit: configuredCandidateLimit,
+      candidateLimitApplied,
+      timeBudgetMs,
+      timeBudgetExceeded: astBatchStats.timeBudgetExceeded,
+      maxFileBytes: maxClassifyFileBytes,
+      unprocessedCandidates: unprocessedCandidates.length,
+      fileCacheEntries: fileCache.size,
+      astFilesAttempted: astBatchStats.filesAttempted,
+      astFilesRead: astBatchStats.filesRead,
+      astFilesParsed: astBatchStats.filesParsed,
+      astParseErrorFiles: astBatchStats.filesWithParseErrors,
+      astReadErrorFiles: astBatchStats.filesWithReadErrors,
+      astFilesSkippedBySize: astBatchStats.filesSkippedBySize,
+      astCandidatesCounted: astBatchStats.candidatesCounted,
+      textZeroCandidates: astBatchStats.textZeroCandidates,
+      textZeroFiles: astBatchStats.textZeroFiles,
+      provenanceCacheEntries: provenanceBaseByFile.size,
+      astBatchMs,
+      classifyLoopMs,
+      totalMs: Date.now() - classifyStartedAt,
+    },
   },
   proposal_remove_export_specifier: aliasedDead.map((c) => {
     const localAlsoDead = (c.localInternalUses ?? 0) === 0;
@@ -569,6 +938,14 @@ const removalProposal = {
         ? `predicate(${c.predicatePartner}) 존재. type + predicate 패턴일 가능성. 유지 권장.`
         : '파일 내 중심 타입. 설계상 public API 의도인지 확인 후 결정.',
     ...provenanceFields(c),
+  })),
+  proposal_DEGRADED_unprocessed: unprocessedCandidates.map((c) => ({
+    file: c.file,
+    line: c.line,
+    symbol: c.symbol,
+    kind: c.kind,
+    reason: c.reason,
+    action: 'classification incomplete; rerun with a larger classify time budget before making removal claims.',
   })),
   // v1.9.6: exposed for rank-fixes → fix-plan.MUTED tier materialization.
   // Each entry has {file, line, symbol, kind, reason}. reason is one of:

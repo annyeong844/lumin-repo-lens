@@ -10,7 +10,7 @@ otherwise force the user to learn maintainer vocabulary.
 | `unknown` | The needed artifact or scan range is missing; say what was inspected. |
 | FP family | A known false-positive pattern, such as `publicApi_FP23`. Use it to explain why a raw finding should be muted or downgraded. |
 | `Tier C` | A raw dead-export bucket: no consumer was found in the constructed graph. It is not a deletion verdict. |
-| `SAFE_FIX` | Dead-export candidate with the strongest automated evidence. Still cite the scan range before acting. |
+| `SAFE_FIX` | Static-graph-clean dead-export candidate under the recorded scan range. It is not an absolute proof; cite scan range/confidence before acting. |
 | `REVIEW_FIX` | Dead-export candidate that needs human or model review before action. |
 | `DEGRADED` | Dead-export candidate with weaker evidence, usually due to freshness, resolver, runtime, or framework limits. |
 | `MUTED` | Finding intentionally suppressed by a policy or false-positive family. |

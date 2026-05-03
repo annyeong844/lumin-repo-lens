@@ -279,9 +279,22 @@ const prefixExamples = new Map();
 // any unresolved import look like it could resolve to THIS dead symbol's
 // file?" rather than relying on the repo-wide unresolvedInternalRatio.
 const unresolvedInternalSpecifiers = new Set();
+const unresolvedInternalSpecifierRecords = [];
 function prefixOf(spec) {
   const slash = spec.indexOf('/');
   return slash > 0 ? spec.slice(0, slash + 1) : spec;
+}
+
+function recordUnresolvedInternalSpecifier(consumerFile, use) {
+  const spec = typeof use === 'string' ? use : use.fromSpec;
+  if (typeof spec !== 'string' || spec.length === 0) return;
+  unresolvedInternalSpecifiers.add(spec);
+  unresolvedInternalSpecifierRecords.push({
+    specifier: spec,
+    consumerFile: relPath(ROOT, consumerFile),
+    fromHint: relPath(ROOT, consumerFile),
+    kind: typeof use === 'object' ? (use.kind ?? 'import') : 'import',
+  });
 }
 
 function packageRootFromSpec(spec) {
@@ -333,7 +346,7 @@ for (const [consumerFile, info] of fileData) {
       const p = prefixOf(spec);
       unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
       if (!prefixExamples.has(p)) prefixExamples.set(p, spec);
-      unresolvedInternalSpecifiers.add(spec);
+      recordUnresolvedInternalSpecifier(consumerFile, u);
       continue;
     }
     if (!target) {
@@ -343,13 +356,23 @@ for (const [consumerFile, info] of fileData) {
       // an external package.
       unresolvedInternalUses++;
       unresolvedUses++;
+      recordUnresolvedInternalSpecifier(consumerFile, u);
       continue;
     }
     totalUses++;
     resolvedInternalUses++;
     // v0.6.6 FP-18: dynamic `import()` treated like namespace — whole-file
     // consumer, since we can't statically know which symbol the caller uses.
-    if (u.kind === 'namespace' || u.kind === 'reExportAll' || u.kind === 'dynamic') {
+    // PCEF P0: CJS side-effect-only imports evaluate the file but do not
+    // consume named exports, while CJS namespace escapes/re-exports are broad.
+    if (u.kind === 'cjs-side-effect-only') {
+      continue;
+    }
+    if (u.kind === 'namespace' ||
+        u.kind === 'reExportAll' ||
+        u.kind === 'dynamic' ||
+        u.kind === 'cjs-namespace-escape' ||
+        u.kind === 'cjs-reexport-broad') {
       if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
       namespaceUsers.get(target).add(consumerFile);
     } else {
@@ -376,12 +399,13 @@ for (const u of collectMdxImportConsumers({
     const p = prefixOf(u.fromSpec);
     unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
     if (!prefixExamples.has(p)) prefixExamples.set(p, u.fromSpec);
-    unresolvedInternalSpecifiers.add(u.fromSpec);
+    recordUnresolvedInternalSpecifier(u.consumerFile, u);
     continue;
   }
   if (!target) {
     unresolvedInternalUses++;
     unresolvedUses++;
+    recordUnresolvedInternalSpecifier(u.consumerFile, u);
     continue;
   }
   totalUses++;
@@ -542,6 +566,7 @@ const artifact = buildSymbolsArtifact({
   unresolvedInternalByPrefix,
   prefixExamples,
   unresolvedInternalSpecifiers,
+  unresolvedInternalSpecifierRecords,
   languageSupport,
   totalUses,
   unresolvedUses,

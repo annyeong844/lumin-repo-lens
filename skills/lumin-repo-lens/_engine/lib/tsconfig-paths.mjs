@@ -72,15 +72,25 @@ function walk(root, acc) {
  */
 function loadTsconfig(configPath) {
   if (!existsSync(configPath)) return null;
-  const readResult = ts.readConfigFile(configPath, ts.sys.readFile);
+  let readResult;
+  try {
+    readResult = ts.readConfigFile(configPath, ts.sys.readFile);
+  } catch {
+    return null;
+  }
   if (readResult.error) return null;
-  const parsed = ts.parseJsonConfigFileContent(
-    readResult.config,
-    ts.sys,
-    path.dirname(configPath),
-    undefined,
-    configPath,
-  );
+  let parsed;
+  try {
+    parsed = ts.parseJsonConfigFileContent(
+      readResult.config,
+      ts.sys,
+      path.dirname(configPath),
+      undefined,
+      configPath,
+    );
+  } catch {
+    return null;
+  }
   return { options: parsed.options, errors: parsed.errors ?? [] };
 }
 

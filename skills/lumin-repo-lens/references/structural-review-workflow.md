@@ -119,8 +119,8 @@ alone.
 
 For marketplace or automation claims, read
 `references/operational-gates.md`. Do not market automatic cleanup from
-raw Tier C. SAFE_FIX requires strong multi-source evidence and measured
-FP budgets.
+raw Tier C. SAFE_FIX is static-graph-clean under the recorded scan range;
+automation claims still require measured FP budgets.
 
 For language precision boundaries, read `references/language-support.md`.
 TypeScript is the primary target, but checker-grade binding, full

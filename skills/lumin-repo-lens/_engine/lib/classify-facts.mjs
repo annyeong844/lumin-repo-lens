@@ -44,7 +44,10 @@
 // `var` hoisting across blocks is approximated (block-scoped binding in
 // v1); rare for modern TS codebases.
 
-export { countFileReferencesAst } from './classify-facts-ast-counter.mjs';
+export {
+  countFileReferencesAst,
+  countFileReferencesAstMany,
+} from './classify-facts-ast-counter.mjs';
 
 const IDENT_ESCAPE = (name) => name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 

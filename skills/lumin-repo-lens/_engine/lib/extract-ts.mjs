@@ -38,6 +38,15 @@ function literalImportSource(node) {
     : null;
 }
 
+function literalRequireSource(node) {
+  if (node?.type !== 'CallExpression') return null;
+  if (node.callee?.type !== 'Identifier' || node.callee.name !== 'require') return null;
+  const first = node.arguments?.[0];
+  return first?.type === 'Literal' && typeof first.value === 'string'
+    ? first.value
+    : null;
+}
+
 function opaqueDynamicImportHint(node) {
   if (node?.type !== 'ImportExpression') return null;
   if (literalImportSource(node)) return null;
@@ -218,7 +227,11 @@ function createMemberPrecisionState() {
     opaqueDynamicImports: [],
     namespaceRecords: [],
     dynamicRecords: [],
+    cjsRecords: [],
+    cjsDirectUses: [],
+    cjsFallbackUses: [],
     handledDynamicImports: new WeakSet(),
+    handledCjsRequires: new WeakSet(),
   };
 }
 
@@ -245,7 +258,8 @@ function makeTracked(state, kind, fields) {
     ...fields,
   };
   if (kind === 'namespace') state.namespaceRecords.push(record);
-  else state.dynamicRecords.push(record);
+  else if (kind === 'dynamic') state.dynamicRecords.push(record);
+  else if (kind === 'cjs') state.cjsRecords.push(record);
   return record;
 }
 
@@ -300,9 +314,12 @@ function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key
   }
 
   if (node.type === 'VariableDeclaration') return walkVariableDeclaration(node, scope, state, getNodeLine);
+  if (handleCjsReexportAssignment(node, state, getNodeLine)) return;
   if (handleThenDynamicImport(node, scope, state, getNodeLine)) return;
+  if (handleDirectRequireMemberExpression(node, state, getNodeLine)) return;
   if (handleTrackedMemberExpression(node, scope, parent, key, getNodeLine)) return;
   if (handleFallbackImportExpression(node, state, getNodeLine)) return;
+  if (handleFallbackRequireExpression(node, state, getNodeLine, parent)) return;
   if (handleTrackedIdentifier(node, scope)) return;
 
   walkChildNodes(node, scope, state, getNodeLine);
@@ -331,6 +348,47 @@ function walkBlockLikeNode(node, scope, state, getNodeLine) {
 
 function walkVariableDeclaration(node, scope, state, getNodeLine) {
   for (const decl of node.declarations ?? []) {
+    const requireSpec = literalRequireSource(decl.init);
+    if (requireSpec) {
+      state.handledCjsRequires.add(decl.init);
+      if (decl.id?.type === 'ObjectPattern') {
+        collectCjsDestructuringUses(decl.id, requireSpec, state, getNodeLine(decl.init));
+        bindPattern(scope, decl.id, { kind: 'local' });
+      } else if (decl.id?.type === 'Identifier') {
+        if (node.kind === 'const') {
+          bind(scope, decl.id.name, makeTracked(state, 'cjs', {
+            fromSpec: requireSpec,
+            typeOnly: false,
+            line: getNodeLine(decl.init),
+            localName: decl.id.name,
+            node: decl.init,
+          }));
+        } else {
+          state.cjsFallbackUses.push({
+            fromSpec: requireSpec,
+            name: '*',
+            kind: 'cjs-namespace-escape',
+            typeOnly: false,
+            line: getNodeLine(decl.init),
+            localName: decl.id.name,
+            degraded: true,
+          });
+          bind(scope, decl.id.name, { kind: 'local' });
+        }
+      } else {
+        state.cjsFallbackUses.push({
+          fromSpec: requireSpec,
+          name: '*',
+          kind: 'cjs-namespace-escape',
+          typeOnly: false,
+          line: getNodeLine(decl.init),
+          degraded: true,
+        });
+        bindPattern(scope, decl.id, { kind: 'local' });
+      }
+      continue;
+    }
+
     const importNode = unwrapAwait(decl.init);
     const fromSpec = literalImportSource(importNode);
     if (decl.id?.type === 'Identifier' && fromSpec) {
@@ -348,6 +406,87 @@ function walkVariableDeclaration(node, scope, state, getNodeLine) {
       walkMemberPrecision(decl.init, scope, state, getNodeLine, decl, 'init');
     }
   }
+}
+
+function collectCjsDestructuringUses(pattern, fromSpec, state, line) {
+  for (const prop of pattern.properties ?? []) {
+    if (prop?.type === 'Property') {
+      const key = prop.key;
+      const name = key?.type === 'Identifier' || key?.type === 'Literal'
+        ? String(key.name ?? key.value)
+        : null;
+      if (name) {
+        state.cjsDirectUses.push({
+          fromSpec,
+          name,
+          kind: 'cjs-require-exact',
+          typeOnly: false,
+          line,
+        });
+      }
+    } else if (prop?.type === 'RestElement') {
+      state.cjsFallbackUses.push({
+        fromSpec,
+        name: '*',
+        kind: 'cjs-namespace-escape',
+        typeOnly: false,
+        line,
+        degraded: true,
+      });
+    }
+  }
+}
+
+function isModuleExportsTarget(node) {
+  if (node?.type !== 'MemberExpression' || node.computed) return false;
+  const prop = memberPropertyName(node);
+  if (node.object?.type === 'Identifier' && node.object.name === 'exports') return !!prop;
+  return node.object?.type === 'Identifier' &&
+    node.object.name === 'module' &&
+    prop === 'exports';
+}
+
+function handleCjsReexportAssignment(node, state, getNodeLine) {
+  if (node.type !== 'AssignmentExpression') return false;
+  const fromSpec = literalRequireSource(node.right);
+  if (!fromSpec || !isModuleExportsTarget(node.left)) return false;
+  state.handledCjsRequires.add(node.right);
+  state.cjsFallbackUses.push({
+    fromSpec,
+    name: '*',
+    kind: 'cjs-reexport-broad',
+    typeOnly: false,
+    line: getNodeLine(node.right),
+    degraded: true,
+  });
+  return true;
+}
+
+function handleDirectRequireMemberExpression(node, state, getNodeLine) {
+  if (node.type !== 'MemberExpression' || node.computed) return false;
+  const fromSpec = literalRequireSource(node.object);
+  if (!fromSpec) return false;
+  state.handledCjsRequires.add(node.object);
+  const name = memberPropertyName(node);
+  if (name) {
+    state.cjsDirectUses.push({
+      fromSpec,
+      name,
+      kind: 'cjs-namespace-member',
+      typeOnly: false,
+      line: getNodeLine(node),
+    });
+  } else {
+    state.cjsFallbackUses.push({
+      fromSpec,
+      name: '*',
+      kind: 'cjs-namespace-escape',
+      typeOnly: false,
+      line: getNodeLine(node),
+      degraded: true,
+    });
+  }
+  return true;
 }
 
 function handleThenDynamicImport(node, scope, state, getNodeLine) {
@@ -382,7 +521,14 @@ function handleThenDynamicImport(node, scope, state, getNodeLine) {
 function handleTrackedMemberExpression(node, scope, parent, key, getNodeLine) {
   if (node.type !== 'MemberExpression' || node.object?.type !== 'Identifier') return false;
   const record = resolveBinding(scope, node.object.name);
-  if (record?.kind !== 'namespace' && record?.kind !== 'dynamic') return false;
+  if (record?.kind !== 'namespace' && record?.kind !== 'dynamic' && record?.kind !== 'cjs') return false;
+
+  if (record.kind === 'cjs') {
+    const name = !node.computed ? memberPropertyName(node) : null;
+    if (name) record.members.push({ name, line: getNodeLine(node) });
+    else record.degraded = true;
+    return true;
+  }
 
   if (!node.computed && isCallCallee(parent, key)) {
     const name = memberPropertyName(node);
@@ -410,10 +556,28 @@ function handleFallbackImportExpression(node, state, getNodeLine) {
   return true;
 }
 
+function handleFallbackRequireExpression(node, state, getNodeLine, parent) {
+  const fromSpec = literalRequireSource(node);
+  if (!fromSpec || state.handledCjsRequires.has(node)) return false;
+  const sideEffectOnly = parent?.type === 'ExpressionStatement';
+  state.cjsFallbackUses.push({
+    fromSpec,
+    name: '*',
+    kind: sideEffectOnly ? 'cjs-side-effect-only' : 'cjs-namespace-escape',
+    typeOnly: false,
+    line: getNodeLine(node),
+    ...(sideEffectOnly ? {} : { degraded: true }),
+  });
+  state.handledCjsRequires.add(node);
+  return true;
+}
+
 function handleTrackedIdentifier(node, scope) {
   if (node.type !== 'Identifier') return false;
   const record = resolveBinding(scope, node.name);
-  if (record?.kind === 'namespace' || record?.kind === 'dynamic') record.degraded = true;
+  if (record?.kind === 'namespace' || record?.kind === 'dynamic' || record?.kind === 'cjs') {
+    record.degraded = true;
+  }
   return true;
 }
 
@@ -441,6 +605,7 @@ function emitMemberPrecisionUses(state) {
     ...emitNamespaceRecordUses(state.namespaceRecords),
     ...emitDynamicRecordUses(state),
     ...emitFallbackDynamicUses(state),
+    ...emitCjsUses(state),
   ];
 }
 
@@ -518,6 +683,35 @@ function emitFallbackDynamicUses(state) {
       dynamic: true,
       degraded: true,
     });
+  }
+  return uses;
+}
+
+function emitCjsUses(state) {
+  const uses = [...state.cjsDirectUses, ...state.cjsFallbackUses];
+  for (const record of state.cjsRecords) {
+    if (record.members.length > 0 && !record.degraded) {
+      for (const member of record.members) {
+        uses.push({
+          fromSpec: record.fromSpec,
+          name: member.name,
+          kind: 'cjs-namespace-member',
+          typeOnly: false,
+          line: member.line,
+          localName: record.localName,
+        });
+      }
+    } else if (record.degraded) {
+      uses.push({
+        fromSpec: record.fromSpec,
+        name: '*',
+        kind: 'cjs-namespace-escape',
+        typeOnly: false,
+        line: record.line,
+        localName: record.localName,
+        degraded: true,
+      });
+    }
   }
   return uses;
 }

@@ -244,6 +244,20 @@ function packageRecordsFromRepoMode({ root, repoMode }) {
   return records;
 }
 
+function packageDependencyNames(packageJson = {}) {
+  return new Set([
+    ...Object.keys(packageJson.dependencies ?? {}),
+    ...Object.keys(packageJson.devDependencies ?? {}),
+    ...Object.keys(packageJson.peerDependencies ?? {}),
+    ...Object.keys(packageJson.optionalDependencies ?? {}),
+  ]);
+}
+
+export function shouldCollectHonoRouteFactsForPackages(packageRecords = []) {
+  return packageRecords.some((record) =>
+    packageDependencyNames(record?.packageJson ?? {}).has('hono'));
+}
+
 export function createFrameworkPolicyContextForRepo({
   root,
   repoMode,
@@ -253,16 +267,19 @@ export function createFrameworkPolicyContextForRepo({
   exclude,
 }) {
   const files = collectKnownFiles({ root, symbolsData, deadList, includeTests, exclude });
+  const packageRecords = packageRecordsFromRepoMode({ root, repoMode });
   let honoRouteRegistrations = [];
-  try {
-    honoRouteRegistrations = collectHonoRouteRegistrations({ root, files });
-  } catch {
-    honoRouteRegistrations = [];
+  if (shouldCollectHonoRouteFactsForPackages(packageRecords)) {
+    try {
+      honoRouteRegistrations = collectHonoRouteRegistrations({ root, files });
+    } catch {
+      honoRouteRegistrations = [];
+    }
   }
 
   return createFrameworkPolicyContext({
     root,
-    packageRecords: packageRecordsFromRepoMode({ root, repoMode }),
+    packageRecords,
     files,
     frameworkFacts: { honoRouteRegistrations },
   });

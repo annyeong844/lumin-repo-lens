@@ -1,5 +1,74 @@
 # Changelog
 
+## 0.9.0-beta.11 - 2026-05-03
+
+### Large-repo classify scaling
+
+- Add a safe text-zero reference shortcut so candidates whose identifier
+  appears exactly once on the declaration line skip AST walking without
+  dropping large files or lowering evidence precision.
+- Cache per-file provenance and importer-scoped tsconfig alias filtering so
+  unresolved-specifier taint no longer scales as candidates x unresolved specs
+  x alias entries.
+- Keep file-size degradation opt-in (`--classify-max-file-bytes`, default `0`)
+  and record classify performance metadata including text-zero candidates,
+  provenance cache entries, unprocessed candidates, and file-size cap status.
+- Stress-test result: `next.js-canary --production --profile quick` completed
+  4,873 files in 221.5s with `classify.incomplete=false`,
+  `unprocessedCandidates=0`, `maxFileBytes=0`, and 92 SAFE_FIX candidates;
+  Hono, Kit, Astro, Nuxt, and Nest stress runs also completed without
+  incomplete classify artifacts.
+
+## 0.9.0-beta.10 - 2026-05-02
+
+### Static SAFE_FIX calibration
+
+- Recalibrate `SAFE_FIX` to mean static-graph-clean mechanical cleanup under
+  the recorded scan range, instead of requiring optional runtime coverage and
+  git staleness evidence.
+- Allow bucket A export-demotion candidates to rank `SAFE_FIX` when local
+  provenance is clean; declaration dependencies, policy exclusions, blocking
+  taint, and runtime-executed contradictions still block SAFE_FIX.
+- Update ranking tests and public wording so cleanup value does not collapse to
+  hundreds of review-only candidates in repos without coverage or git history.
+
+## 0.9.0-beta.9 - 2026-05-02
+
+### Invalid tsconfig fixture tolerance
+
+- Skip unusable `tsconfig*.json` files when TypeScript throws while reading or
+  parsing config fixtures, instead of aborting alias discovery.
+- Add regression coverage for malformed tsconfig fixtures living beside valid
+  sibling configs.
+- Stress-test result: `astro-main --production` now completes the required
+  symbol graph step and reports `parseErrors: 0`, `blindZones: 0`, and
+  `unresolvedInternalRatio: 0.0045`.
+
+## 0.9.0-beta.8 — 2026-05-02
+
+### Production-scope test-path calibration
+
+- Treat `runtime-tests/` and `test-utils/` directories as test-like paths for
+  `--production` scans, so runtime harness and test helper exports do not leak
+  into production dead-export proposals.
+- Add regression coverage in the shared path classifier and file collector.
+- Stress-test results: `hono-main --production` exposed
+  `runtime-tests/workerd/index.ts`, and `kit-main --production` exposed a
+  root `test-utils/` directory. The shared classifier now filters both
+  conventions consistently before downstream dead-export bucketing.
+
+## 0.9.0-beta.7 — 2026-05-02
+
+### Declaration-file parser blind-zone reduction
+
+- Parse `.d.ts`, `.d.mts`, and `.d.cts` files with `oxc-parser`'s
+  declaration-file mode (`lang: "dts"`) instead of ordinary TypeScript mode.
+- Add regression coverage for declaration-only value exports such as
+  `export const runtimeDependencies: string[];`.
+- Stress-test result: `nuxt-main --production --exclude nuxt-main` now reports
+  `parseErrors: 0`, `blindZones: 0`, and records
+  `packages/nuxt/meta.d.ts::runtimeDependencies` as a definition.
+
 ## 0.9.0-beta.6
 
 - Retry OXC parsing in JSX mode when `.js`/`.mjs`/`.cjs` files fail in

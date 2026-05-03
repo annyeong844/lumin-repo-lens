@@ -9,11 +9,12 @@
 //
 // FP-31 additions (absorbed from build-symbol-graph.mjs local `isTestPath`):
 // Nuxt/monorepo fixtures surfaced path conventions that inflated production
-// dead counts — `test-support/`, `playground(s)/`, `__<any>__/` (not only
-// `__tests__/` but also `__mocks__/`, `__snapshots__/`, `__tests_dts__/`),
-// and the `-fixture(s)` suffix on directory segments. Folding the wider
-// classifier in means `collectFiles({ includeTests: false })` and downstream
-// dead-export bucketing agree on "what is a test file".
+// dead counts — `test-support/`, `test-utils/`, `playground(s)/`,
+// `__<any>__/` (not only `__tests__/` but also `__mocks__/`,
+// `__snapshots__/`, `__tests_dts__/`), `runtime-tests/`, and the
+// `-fixture(s)` suffix on directory segments. Folding the wider classifier in
+// means `collectFiles({ includeTests: false })` and downstream dead-export
+// bucketing agree on "what is a test file".
 
 export function isTestLikePath(filePath) {
   const norm = String(filePath ?? '').replace(/\\/g, '/');
@@ -34,6 +35,8 @@ export function isTestLikePath(filePath) {
       seg === 'fixtures' || seg === 'fixture' ||
       seg === 'mocks' || seg === 'mock' ||
       seg === 'test-support' ||
+      seg === 'test-utils' ||
+      seg === 'runtime-tests' ||
       seg === 'playground' || seg === 'playgrounds'
     ) return true;
     // FP-31: __<anything>__ convention — __tests__, __mocks__,

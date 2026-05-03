@@ -37,12 +37,14 @@ if (!deadClassify) {
 const runtimeEvidence = loadIfExists('runtime-evidence.json');
 const staleness = loadIfExists('staleness.json');
 const symbols = loadIfExists('symbols.json');
+const exportActionSafety = loadIfExists('export-action-safety.json');
 
 const inputs = {
   'dead-classify.json': true,
   'runtime-evidence.json': !!runtimeEvidence,
   'staleness.json': !!staleness,
   'symbols.json': !!symbols,
+  'export-action-safety.json': !!exportActionSafety,
 };
 
 // ─── Build lookup maps ────────────────────────────────────
@@ -56,6 +58,17 @@ const stalenessBy = new Map();
 if (staleness?.enriched) {
   for (const s of staleness.enriched) {
     stalenessBy.set(`${s.file}|${s.symbol}|${s.line}`, s);
+  }
+}
+
+const actionById = new Map();
+if (exportActionSafety?.byId) {
+  for (const [id, rec] of Object.entries(exportActionSafety.byId)) {
+    actionById.set(id, rec);
+  }
+} else if (Array.isArray(exportActionSafety?.findings)) {
+  for (const rec of exportActionSafety.findings) {
+    if (rec?.id) actionById.set(rec.id, rec);
   }
 }
 
@@ -90,35 +103,45 @@ if (symbols?.uses && typeof symbols.uses.unresolvedInternalRatio === 'number') {
 // Each proposal bucket in dead-classify maps to a logical "bucket" tag
 // that ranking.mjs consumes.
 function flatten(list, bucket) {
-  return (list ?? []).map((p) => ({
-    id: `dead-export:${p.file}:${p.symbol}:${p.line}`,
-    file: p.file,
-    line: p.line,
-    symbol: p.symbol,
-    kind: p.kind,
-    bucket,
-    action: p.action,
-    localName: p.localName,
-    fileInternalUses: p.fileInternalUses,
-    predicatePartner: p.predicatePartner,
+  return (list ?? []).map((p) => {
+    const id = `dead-export:${p.file}:${p.symbol}:${p.line}`;
+    const actionRecord = actionById.get(id);
+    return {
+      id,
+      file: p.file,
+      line: p.line,
+      symbol: p.symbol,
+      kind: p.kind,
+      bucket,
+      action: p.action,
+      localName: p.localName,
+      fileInternalUses: p.fileInternalUses,
+      predicatePartner: p.predicatePartner,
+      ...(actionRecord && 'safeAction' in actionRecord
+          ? { safeAction: actionRecord.safeAction } : {}),
+      ...(actionRecord?.actionBlockers !== undefined
+          ? { actionBlockers: actionRecord.actionBlockers } : {}),
+      ...(actionRecord?.localUseProof !== undefined
+          ? { localUseProof: actionRecord.localUseProof } : {}),
     // v1.10.0 P1: per-finding provenance flows through to ranking.mjs
     // so the finding-local taint check can run. Older dead-classify
     // artifacts omit these fields and fall back to the global resolver
     // ratio gate.
-    ...(p.fileInternalUsesEvidence !== undefined
-        ? { fileInternalUsesEvidence: p.fileInternalUsesEvidence } : {}),
-    ...(p.fileInternalRefs !== undefined
-        ? { fileInternalRefs: p.fileInternalRefs } : {}),
-    ...(p.supportedBy !== undefined ? { supportedBy: p.supportedBy } : {}),
-    ...(p.taintedBy !== undefined ? { taintedBy: p.taintedBy } : {}),
-    ...(p.resolverConfidence !== undefined
-        ? { resolverConfidence: p.resolverConfidence } : {}),
-    ...(p.parseStatus !== undefined ? { parseStatus: p.parseStatus } : {}),
-    ...(p.declarationExportDependency !== undefined
-        ? { declarationExportDependency: p.declarationExportDependency } : {}),
-    ...(p.declarationExportRefs !== undefined
-        ? { declarationExportRefs: p.declarationExportRefs } : {}),
-  }));
+      ...(p.fileInternalUsesEvidence !== undefined
+          ? { fileInternalUsesEvidence: p.fileInternalUsesEvidence } : {}),
+      ...(p.fileInternalRefs !== undefined
+          ? { fileInternalRefs: p.fileInternalRefs } : {}),
+      ...(p.supportedBy !== undefined ? { supportedBy: p.supportedBy } : {}),
+      ...(p.taintedBy !== undefined ? { taintedBy: p.taintedBy } : {}),
+      ...(p.resolverConfidence !== undefined
+          ? { resolverConfidence: p.resolverConfidence } : {}),
+      ...(p.parseStatus !== undefined ? { parseStatus: p.parseStatus } : {}),
+      ...(p.declarationExportDependency !== undefined
+          ? { declarationExportDependency: p.declarationExportDependency } : {}),
+      ...(p.declarationExportRefs !== undefined
+          ? { declarationExportRefs: p.declarationExportRefs } : {}),
+    };
+  });
 }
 
 const findings = [
@@ -126,6 +149,7 @@ const findings = [
   ...flatten(deadClassify.proposal_A_demote_to_internal, 'A'),
   ...flatten(deadClassify.proposal_B_review, 'B'),
   ...flatten(deadClassify.proposal_remove_export_specifier, 'specifier'),
+  ...flatten(deadClassify.proposal_DEGRADED_unprocessed, 'unprocessed'),
 ];
 
 // v1.9.6: excluded candidates materialize as MUTED. Without this block,

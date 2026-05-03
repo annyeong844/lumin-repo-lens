@@ -44,6 +44,11 @@ export const EVIDENCE = Object.freeze({
   // bindings, and common lexical shadowing cases. This is still not a
   // TypeScript checker-grade symbol binding guarantee.
   AST_REF_COUNT: 'ast-ident-ref-count',
+  // Fast path: before parsing, source text was scanned for candidate
+  // names. A candidate only uses this label when its identifier appears
+  // exactly once, on its declaration line, and the file has no escaped
+  // identifier syntax that could hide a reference from text matching.
+  TEXT_ZERO_REF_COUNT: 'text-zero-ident-ref-count',
   // Fallback path: the file's source didn't parse, so the counter
   // dropped to word-boundary regex counting. The label surfaces
   // the loss of precision so rank-fixes / SARIF / Claude can
@@ -68,6 +73,7 @@ export const EVIDENCE_VALUES = Object.freeze(new Set(Object.values(EVIDENCE)));
 //              withdrawn until the soft signal clears.
 export const TAINT = Object.freeze({
   UNRESOLVED_SPEC_MATCH: 'unresolved-specifier-could-match',
+  UNRESOLVED_SPEC_MATCH_UNKNOWN: 'unresolved-specifier-could-match-unknown',
   DEFINING_FILE_PARSE_ERROR: 'defining-file-parse-error',
   PARSE_ERRORS_ELSEWHERE: 'parse-errors-present',
 });
@@ -78,6 +84,7 @@ export const BLOCKING_TAINTS = Object.freeze(new Set([
 ]));
 
 export const SOFT_TAINTS = Object.freeze(new Set([
+  TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN,
   TAINT.PARSE_ERRORS_ELSEWHERE,
 ]));
 

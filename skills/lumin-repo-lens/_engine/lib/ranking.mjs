@@ -8,16 +8,14 @@ import { BLOCKING_TAINTS, SOFT_TAINTS, TAINT } from './vocab.mjs';
 // one predicate so CI severity matches the fix-plan ranking.
 //
 // Tiers:
-//   SAFE_FIX    — strong evidence for mechanical removal or specifier
-//                 cleanup (bucket C or specifier; A is NEVER SAFE —
-//                 demote-to-internal needs human judgment on internal
-//                 consumers). Candidate for automation
-//                 (`apply-dead-fixes --safe-only`). SARIF warning.
+//   SAFE_FIX    — proof-carrying cleanup under the recorded scan range:
+//                 clean deadness + clean local provenance + a concrete
+//                 safeAction whose selected-action blockers are empty.
+//                 Runtime/staleness can strengthen the reason, but are
+//                 not required. SARIF warning.
 //   REVIEW_FIX  — Classifier proposes concrete action (C/A/B/specifier)
-//                 but SAFE evidence is incomplete. Covers: no runtime
-//                 coverage, no staleness data, recent edits, A-bucket,
-//                 B-bucket (predicate partner / design judgment).
-//                 SARIF note.
+//                 but static-safe gates did not pass. Covers B-bucket
+//                 predicate/design judgment and soft taint. SARIF note.
 //   DEGRADED    — evidence contradicts or is globally insufficient:
 //                 runtime-executed (overrides everything), resolver
 //                 unresolvedRatio ≥ 15%, or an unclassified bucket.
@@ -43,7 +41,8 @@ export const TIER_TO_SARIF_LEVEL = {
  *
  * @param {object} finding    {file, line, symbol, kind, bucket, action,
  *                            fileInternalUses?, predicatePartner?,
- *                            taintedBy?, supportedBy?, resolverConfidence?}
+ *                            taintedBy?, supportedBy?, resolverConfidence?,
+ *                            safeAction?}
  * @param {object} evidence   {runtime?: {status, grounding, confidence,
  *                            hitsInSymbol}, staleness?: {tier,
  *                            grounding, lineLastTouchedDaysAgo}, policy?:
@@ -124,40 +123,69 @@ export function tierForFinding(finding, evidence = {}) {
     };
   }
 
-  // ─── SAFE_FIX: multi-source convergence ───────────────────
-  // All three conditions must hold:
-  //   1. Classifier proposes direct action (C = remove, or aliased
-  //      specifier = specifier removal only — both mechanical)
-  //   2. Runtime confirms dead (not just "file uncovered")
-  //   3. Staleness shows fossil or stale (recent edits signal
-  //      active development; give humans first look)
-  //   4. No soft taint — parse errors elsewhere could hide a consumer
-  //      of this symbol (demote to REVIEW for human-confirm).
-  const strongRuntime = runtime?.status === 'dead-confirmed' &&
-                        runtime?.grounding === 'grounded';
-  const cold = staleness?.tier === 'fossil' || staleness?.tier === 'stale';
-  const mechanicalBucket = finding.bucket === 'C' || finding.bucket === 'specifier';
-
-  if (strongRuntime && cold && mechanicalBucket && !hasSoftTaint) {
-    const bits = ['AST-dead', 'runtime-dead-confirmed', `staleness-${staleness.tier}`, `bucket-${finding.bucket}`];
-    return { tier: 'SAFE_FIX', reason: bits.join(' + ') };
-  }
-
-  // ─── REVIEW_FIX: clear action, weaker supporting evidence ─
-  // Classifier still produced a concrete proposal but we don't have
-  // all three supporting signals, OR soft taint is present. A human
-  // can still decide quickly.
-  if (['C', 'A', 'specifier'].includes(finding.bucket)) {
-    const missing = [];
-    if (!strongRuntime) missing.push(runtime?.status ? `runtime=${runtime.status}` : 'no-runtime');
-    if (!cold) missing.push(staleness?.tier ? `staleness=${staleness.tier}` : 'no-staleness');
-    if (hasSoftTaint) missing.push('parse-errors-elsewhere');
-    return { tier: 'REVIEW_FIX', reason: `bucket-${finding.bucket}; missing: ${missing.join(', ') || 'none'}` };
-  }
+  // ─── REVIEW_FIX: runtime evidence is present but non-proving ─
+  // Missing runtime evidence is normal for a static cleanup tool and
+  // must not by itself block SAFE_FIX. However, when runtime evidence
+  // is present and explicitly says the symbol's range was uncovered or
+  // erased from runtime, that artifact is telling us it cannot support
+  // the cleanup. Keep those candidates visible but review-gated.
+  const weakRuntimeStatus = runtime?.status === 'uncovered' ||
+                            runtime?.status === 'type-only';
 
   // ─── REVIEW_FIX: B bucket (predicate partner / design judgment) ──
   if (finding.bucket === 'B') {
     return { tier: 'REVIEW_FIX', reason: 'bucket-B (design review required)' };
+  }
+
+  if (finding.bucket === 'unprocessed') {
+    return {
+      tier: 'DEGRADED',
+      reason: `classify-incomplete: ${finding.action ?? 'candidate was not fully classified'}`,
+    };
+  }
+
+  // ─── SAFE_FIX gate: proof-carrying safe action ───────────
+  // PCEF P1: deadness proof and edit-action safety are separate.
+  // Bucket C/A/specifier says "no external consumer in the constructed
+  // graph"; it does not prove that deleting or demoting the declaration
+  // is safe. export-action-safety.mjs provides that proof.
+  const strongRuntime = runtime?.status === 'dead-confirmed' &&
+                        runtime?.grounding === 'grounded';
+  const actionBlockers = Array.isArray(finding.safeAction?.actionBlockers)
+    ? finding.safeAction.actionBlockers
+    : (Array.isArray(finding.actionBlockers) ? finding.actionBlockers : []);
+  const hasSafeAction = !!finding.safeAction?.kind &&
+                        finding.safeAction.proofComplete === true &&
+                        actionBlockers.length === 0;
+
+  if (!hasSafeAction) {
+    if (actionBlockers.length > 0) {
+      return {
+        tier: 'REVIEW_FIX',
+        reason: `action-blockers: ${actionBlockers.join(', ')}`,
+      };
+    }
+    return { tier: 'REVIEW_FIX', reason: 'missing-safe-action-proof' };
+  }
+
+  if (!hasSoftTaint && !weakRuntimeStatus) {
+    const bits = ['safe-action', 'static-graph-clean', `bucket-${finding.bucket}`];
+    if (strongRuntime) bits.push('runtime-dead-confirmed');
+    else if (runtime?.status) bits.push(`runtime-${runtime.status}`);
+    else bits.push('no-runtime');
+    if (staleness?.tier) bits.push(`staleness-${staleness.tier}`);
+    else bits.push('no-staleness');
+    return { tier: 'SAFE_FIX', reason: bits.join(' + ') };
+  }
+
+  // ─── REVIEW_FIX: clear action, weaker supporting evidence ─
+  // Classifier still produced a safe action, but soft taint or
+  // design judgment prevents static-safe ranking.
+  if (['C', 'A', 'specifier'].includes(finding.bucket)) {
+    const missing = [];
+    if (hasSoftTaint) missing.push('parse-errors-elsewhere');
+    if (weakRuntimeStatus) missing.push(`runtime=${runtime.status}`);
+    return { tier: 'REVIEW_FIX', reason: `safe-action; missing: ${missing.join(', ') || 'none'}` };
   }
 
   // ─── DEGRADED fallback ────────────────────────────────────

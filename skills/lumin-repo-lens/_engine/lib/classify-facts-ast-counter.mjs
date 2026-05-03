@@ -173,18 +173,6 @@ function scopeForNode(node) {
   return null;
 }
 
-function createCounterState(src) {
-  return {
-    lineStarts: computeLineStarts(src),
-    count: 0,
-    typeRefs: 0,
-    valueRefs: 0,
-    exportedDeclarationRefs: 0,
-    exportedDeclarationRefLines: [],
-    scopeStack: [new Set()],
-  };
-}
-
 function isShadowed(state, name) {
   for (let i = state.scopeStack.length - 1; i > 0; i--) {
     if (state.scopeStack[i].has(name)) return true;
@@ -253,35 +241,6 @@ function shouldSkipNodeKey(key) {
     key === 'parent';
 }
 
-function walkChildren({ node, state, nextDepth, symbolName, declLine }) {
-  for (const key of Object.keys(node)) {
-    if (shouldSkipNodeKey(key)) continue;
-    const child = node[key];
-    const depth = childDepthForKey({ node, key, child, nextDepth });
-    if (Array.isArray(child)) {
-      for (const item of child) {
-        if (item && typeof item === 'object' && typeof item.type === 'string') {
-          walkReferenceTree(item, node, key, nextDepth, state, symbolName, declLine);
-        }
-      }
-    } else if (child && typeof child === 'object' && typeof child.type === 'string') {
-      walkReferenceTree(child, node, key, depth, state, symbolName, declLine);
-    }
-  }
-}
-
-function walkReferenceTree(node, parent, key, depth, state, symbolName, declLine) {
-  if (!node || typeof node !== 'object') return;
-  if (node.type === 'JSXClosingElement') return;
-  if (recordMatchingIdentifier({ state, node, parent, key, symbolName, declLine, depth })) return;
-
-  const nextDepth = depth + (isExportedTypeSurfaceDeclaration(node) ? 1 : 0);
-  const scope = scopeForNode(node);
-  if (scope) state.scopeStack.push(scope);
-  walkChildren({ node, state, nextDepth, symbolName, declLine });
-  if (scope) state.scopeStack.pop();
-}
-
 function buildReferenceResult(state) {
   return {
     count: state.count,
@@ -294,15 +253,113 @@ function buildReferenceResult(state) {
   };
 }
 
-export function countFileReferencesAst(src, filePath, symbolName, declLine) {
+function createBatchState(src, requests) {
+  const lineStarts = computeLineStarts(src);
+  const sharedScopeStack = [new Set()];
+  const states = new Map();
+  const statesByName = new Map();
+
+  for (let i = 0; i < requests.length; i++) {
+    const request = requests[i] ?? {};
+    const symbolName = request.symbolName;
+    if (typeof symbolName !== 'string' || symbolName.length === 0) {
+      throw new Error('countFileReferencesAstMany: request.symbolName is required');
+    }
+    const key = request.key ?? symbolName;
+    const state = {
+      lineStarts,
+      count: 0,
+      typeRefs: 0,
+      valueRefs: 0,
+      exportedDeclarationRefs: 0,
+      exportedDeclarationRefLines: [],
+      scopeStack: sharedScopeStack,
+      symbolName,
+      declLine: Number(request.declLine ?? 0),
+    };
+    states.set(key, state);
+    if (!statesByName.has(symbolName)) statesByName.set(symbolName, []);
+    statesByName.get(symbolName).push(state);
+  }
+
+  return { states, statesByName, sharedScopeStack };
+}
+
+function recordMatchingIdentifierBatch({ statesByName, node, parent, key, depth }) {
+  const isIdent = node.type === 'Identifier';
+  const isJsxIdent = node.type === 'JSXIdentifier';
+  if (!isIdent && !isJsxIdent) return false;
+
+  const states = statesByName.get(node.name);
+  if (!states || states.length === 0) return false;
+
+  for (const state of states) {
+    recordMatchingIdentifier({
+      state,
+      node,
+      parent,
+      key,
+      symbolName: state.symbolName,
+      declLine: state.declLine,
+      depth,
+    });
+  }
+  return true;
+}
+
+function walkReferenceTreeBatch(node, parent, key, depth, statesByName, sharedScopeStack) {
+  if (!node || typeof node !== 'object') return;
+  if (node.type === 'JSXClosingElement') return;
+  if (recordMatchingIdentifierBatch({ statesByName, node, parent, key, depth })) return;
+
+  const nextDepth = depth + (isExportedTypeSurfaceDeclaration(node) ? 1 : 0);
+  const scope = scopeForNode(node);
+  if (scope) sharedScopeStack.push(scope);
+  for (const childKey of Object.keys(node)) {
+    if (shouldSkipNodeKey(childKey)) continue;
+    const child = node[childKey];
+    const childDepth = childDepthForKey({ node, key: childKey, child, nextDepth });
+    if (Array.isArray(child)) {
+      for (const item of child) {
+        if (item && typeof item === 'object' && typeof item.type === 'string') {
+          walkReferenceTreeBatch(item, node, childKey, nextDepth, statesByName, sharedScopeStack);
+        }
+      }
+    } else if (child && typeof child === 'object' && typeof child.type === 'string') {
+      walkReferenceTreeBatch(child, node, childKey, childDepth, statesByName, sharedScopeStack);
+    }
+  }
+  if (scope) sharedScopeStack.pop();
+}
+
+export function countFileReferencesAstMany(src, filePath, requests) {
+  if (!Array.isArray(requests)) {
+    throw new Error('countFileReferencesAstMany: requests must be an array');
+  }
+  const out = new Map();
+  if (requests.length === 0) return out;
+
   let parsed;
   try {
     parsed = parseOxcOrThrow(filePath, src);
   } catch (error) {
-    return parseErrorResult(error);
+    for (let i = 0; i < requests.length; i++) {
+      const request = requests[i] ?? {};
+      const key = request.key ?? request.symbolName;
+      out.set(key, parseErrorResult(error));
+    }
+    return out;
   }
 
-  const state = createCounterState(src);
-  walkReferenceTree(parsed.program, null, null, 0, state, symbolName, declLine);
-  return buildReferenceResult(state);
+  const { states, statesByName, sharedScopeStack } = createBatchState(src, requests);
+  walkReferenceTreeBatch(parsed.program, null, null, 0, statesByName, sharedScopeStack);
+  for (const [key, state] of states) out.set(key, buildReferenceResult(state));
+  return out;
+}
+
+export function countFileReferencesAst(src, filePath, symbolName, declLine) {
+  const result = countFileReferencesAstMany(src, filePath, [
+    { key: symbolName, symbolName, declLine },
+  ]).get(symbolName);
+  return result ?? parseErrorResult(new Error(`missing AST count for ${symbolName}`));
 }

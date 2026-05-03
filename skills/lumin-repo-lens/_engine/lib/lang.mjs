@@ -17,7 +17,7 @@
 //
 // Public exports:
 //   - langForFile(path) → the value oxc-parser accepts in its `lang`
-//     option ('ts' | 'tsx' | 'js' | 'jsx'), or null for non-JS-family
+//     option ('ts' | 'tsx' | 'js' | 'jsx' | 'dts'), or null for non-JS-family
 //     files (Python / Go / Rust / other).
 //   - canContainJsx(path) → true for .tsx / .jsx. Callers that need to
 //     decide whether to look for JSX-specific patterns (e.g. React
@@ -26,6 +26,7 @@
 //     to language-specific extractors (_lib/python.mjs, tree-sitter for
 //     Go, etc.).
 
+const DTS_EXTS = /\.d\.(ts|mts|cts)$/i;
 const TS_EXTS = /\.(mts|cts|ts)$/i;
 const TSX_EXTS = /\.tsx$/i;
 const JS_EXTS  = /\.(mjs|cjs|js)$/i;
@@ -42,6 +43,7 @@ const JSX_EXTS = /\.jsx$/i;
 export const JS_FAMILY_LANGS = ['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs'];
 
 export function langForFile(filePath) {
+  if (DTS_EXTS.test(filePath)) return 'dts';
   if (TSX_EXTS.test(filePath)) return 'tsx';
   if (JSX_EXTS.test(filePath)) return 'jsx';
   if (TS_EXTS.test(filePath))  return 'ts';

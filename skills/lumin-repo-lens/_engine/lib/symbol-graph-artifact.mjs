@@ -88,6 +88,7 @@ export function buildSymbolsArtifact({
   unresolvedInternalByPrefix,
   prefixExamples,
   unresolvedInternalSpecifiers,
+  unresolvedInternalSpecifierRecords,
   languageSupport,
   totalUses,
   unresolvedUses,
@@ -150,6 +151,9 @@ export function buildSymbolsArtifact({
     }),
     dynamicImportOpacity: buildDynamicImportOpacity({ root, fileData }),
     unresolvedInternalSpecifiers: [...unresolvedInternalSpecifiers].sort(),
+    unresolvedInternalSpecifierRecords: [...(unresolvedInternalSpecifierRecords ?? [])].sort((a, b) =>
+      `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`
+        .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`)),
     filesWithParseErrors: buildFilesWithParseErrors({ root, entries: nextCache.entries }),
     deadTotal: dead.length,
     trulyDead: trulyDead.length,

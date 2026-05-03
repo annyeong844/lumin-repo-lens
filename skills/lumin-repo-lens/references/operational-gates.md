@@ -88,16 +88,21 @@ solely for missing SAFE_FIX adjudication. Mark Yellow with
 
 ## SAFE_FIX Bar
 
-Tier C alone never means truly dead. SAFE_FIX needs multi-source
-evidence, such as:
+Tier C alone never means "definitely dead." SAFE_FIX means the
+candidate is static-graph-clean under the recorded scan range and has a
+mechanical action. It does not require runtime coverage or git history;
+those are supporting evidence when present, not prerequisites.
 
-- static no-consumer
-- no resolver blindness blocking the finding
-- no matching FP ledger pattern
-- runtime zero-hit when available
-- staleness evidence when available
+SAFE_FIX requires:
 
-Recent code should generally stay REVIEW_FIX, not SAFE_FIX.
+- static no-consumer or export-demotion evidence for this symbol
+- no resolver blindness or parse taint blocking this finding
+- no matching FP ledger or framework policy exclusion
+- no exported-declaration dependency
+- no runtime evidence contradicting the static graph
+
+Recent code can still be SAFE_FIX when the static graph is clean; report
+freshness as context rather than hiding the candidate.
 
 ## Throughput Notes
 

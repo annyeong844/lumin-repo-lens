@@ -226,7 +226,7 @@ function demoteResolverConfidence(ownerFile, { unresolvedInternalSpecifiers, fil
 
   if (Array.isArray(unresolvedInternalSpecifiers)) {
     for (const spec of unresolvedInternalSpecifiers) {
-      if (specifierCouldMatchFile(spec, ownerFile)) {
+      if (specifierCouldMatchFile(spec, ownerFile) === 'match') {
         taints.push(`unresolved-specifier-could-match: '${spec}' ↔ '${ownerFile}'`);
         if (level === 'high') level = 'medium';
         else if (level === 'medium') level = 'low';
