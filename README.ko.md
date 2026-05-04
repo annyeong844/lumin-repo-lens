@@ -157,7 +157,20 @@ LUMIN_REPO_LENS_NO_AUTO_INSTALL=1 lumin-repo-lens --root .
 `<저장소>/.audit/` 폴더에 JSON 증거 파일, summary markdown, topology Mermaid markdown이 만들어질 수 있어요. 보고 싶지 않으면 `.gitignore`에 `.audit/` 한 줄 추가하세요.
 
 **Q. 너무 큰 저장소예요. 느리지 않아요?**
-파일 200–300개 기준으로 *quick* 프로필은 십몇 초, *full* 프로필은 30초–1분 정도. 처음엔 quick으로 시작해보세요.
+실제 스캔 파일 수와 선택한 evidence profile에 비례합니다. 작은 저장소는 여전히
+빠르지만, 큰 monorepo는 작은 저장소 기준 숫자만 기대하면 멈춘 것처럼 보일 수
+있어요.
+
+| 스캔 크기 | quick profile | full profile |
+| --- | --- | --- |
+| 파일 200-500개 | 약 10-20초 | 약 30초-1분 |
+| 파일 1천-2천개 | 약 30-60초 | 약 1-3분 |
+| 파일 3천-5천개 | 약 1-3분 | 수분대 |
+
+파일 4천개 이상 monorepo에서 quick scan이 1분을 넘는 것은 정상 범위일 수
+있습니다. hang으로 보기 전에 진행 로그와 `manifest.json`을 확인하세요. `:full`은
+첫 점검, branch 단위 리뷰, 큰 리팩토링 evidence에 쓰고, 작은 후속 확인은
+quick/pre-write/post-write를 쓰는 흐름이 맞습니다.
 
 **Q. pre-write가 의미적 중복까지 이해하나요?**
 아니요. pre-write는 빠른 transaction gate라서 이름, 경로, import, shape, topology처럼 기계가 근거로 잡은 신호만 봅니다. 정확한 심볼, 가까운 이름, 기존 파일, `merge-with-*` 같은 같은 디렉터리 prefix/token family는 잡을 수 있어요.

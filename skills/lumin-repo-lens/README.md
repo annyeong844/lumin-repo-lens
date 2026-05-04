@@ -200,7 +200,20 @@ These artifacts may include repository structure, file paths, symbol names, and
 analysis metadata.
 
 **Q. My repo is large — is it slow?**
-For 200–300 files: *quick* profile takes ~10–20 seconds; *full* profile takes 30 seconds to a minute. Start with quick.
+It scales with the files actually scanned and the evidence profile you choose.
+Small repositories are still quick, but large monorepos can take long enough
+that they may look stuck if you only expect the small-repo numbers.
+
+| Scan size | Quick profile | Full profile |
+| --- | --- | --- |
+| 200-500 files | ~10-20 seconds | ~30 seconds-1 minute |
+| 1k-2k files | ~30-60 seconds | ~1-3 minutes |
+| 3k-5k files | ~1-3 minutes | several minutes |
+
+For a 4k+ file monorepo, a quick scan taking more than a minute can be normal.
+Watch the progress lines and check `manifest.json` before assuming the run is
+hung. Use `:full` for first checkups, branch-level reviews, and major refactor
+evidence; use quick/pre-write/post-write for smaller follow-ups.
 
 **Q. What are the main evidence limits?**
 Function-clone cues are review cues, not semantic-equivalence claims. They include exact body, same-structure, same-signature, and near-function evidence when the full profile has `function-clones.json`. Shape index is exact: nullable or widened types such as `email: string` versus `email: string | null` intentionally land in different groups. Start from `audit-summary.latest.md`, `manifest.json`, and `checklist-facts.json`, then open raw JSON artifacts only for the claim being cited.
