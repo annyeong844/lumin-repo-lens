@@ -1,6 +1,6 @@
 {
   "name": "lumin-repo-lens",
-  "version": "0.9.0-beta.14",
+  "version": "0.9.0-beta.15",
   "description": "Lumin Repo Lens: evidence-backed TS/JS repo structure lens for Claude Code.",
   "author": {
     "name": "annyeong844"

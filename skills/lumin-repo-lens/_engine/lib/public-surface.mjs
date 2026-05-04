@@ -115,8 +115,23 @@ function collectFieldTargets(pkg, field) {
   if (!(field in pkg)) return [];
   return collectStringTargets(pkg[field]).map((t) => ({
     ...t,
+    target: normalizePackageFieldTarget(field, t),
     field,
   }));
+}
+
+function normalizePackageFieldTarget(field, targetInfo) {
+  const target = targetInfo?.target;
+  if (typeof target !== 'string') return target;
+  if (target.startsWith('./') || target.startsWith('../')) return target;
+  if (target.startsWith('/') || target.startsWith('#')) return target;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return target;
+
+  // `browser` object values may be package specifier replacements. The
+  // top-level string form is a package-relative file, like `main`.
+  if (field === 'browser' && targetInfo.conditionPath) return target;
+
+  return `./${target}`;
 }
 
 function tokenizeCommand(command) {
