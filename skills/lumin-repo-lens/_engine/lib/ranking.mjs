@@ -111,19 +111,6 @@ export function tierForFinding(finding, evidence = {}) {
     };
   }
 
-  // ─── DEGRADED: exported declaration dependency ───────────
-  // A symbol referenced from an exported TS declaration/namespace can be
-  // needed for declaration emit even when no cross-file import names it
-  // directly. Without checker-grade declaration validation, surfacing a
-  // cleanup action here is too sharp.
-  if (finding.declarationExportDependency) {
-    const count = finding.declarationExportRefs?.count ?? 0;
-    return {
-      tier: 'DEGRADED',
-      reason: `exported-declaration-dependency (${count} ref${count === 1 ? '' : 's'})`,
-    };
-  }
-
   // ─── REVIEW_FIX: runtime evidence is present but non-proving ─
   // Missing runtime evidence is normal for a static cleanup tool and
   // must not by itself block SAFE_FIX. However, when runtime evidence
@@ -132,11 +119,6 @@ export function tierForFinding(finding, evidence = {}) {
   // the cleanup. Keep those candidates visible but review-gated.
   const weakRuntimeStatus = runtime?.status === 'uncovered' ||
                             runtime?.status === 'type-only';
-
-  // ─── REVIEW_FIX: B bucket (predicate partner / design judgment) ──
-  if (finding.bucket === 'B') {
-    return { tier: 'REVIEW_FIX', reason: 'bucket-B (design review required)' };
-  }
 
   if (finding.bucket === 'unprocessed') {
     return {
@@ -150,17 +132,18 @@ export function tierForFinding(finding, evidence = {}) {
   // Bucket C/A/specifier says "no external consumer in the constructed
   // graph"; it does not prove that deleting or demoting the declaration
   // is safe. export-action-safety.mjs provides that proof.
-  const strongRuntime = runtime?.status === 'dead-confirmed' &&
-                        runtime?.grounding === 'grounded';
   const actionBlockers = Array.isArray(finding.safeAction?.actionBlockers)
     ? finding.safeAction.actionBlockers
     : (Array.isArray(finding.actionBlockers) ? finding.actionBlockers : []);
   const hasSafeAction = !!finding.safeAction?.kind &&
                         finding.safeAction.proofComplete === true &&
                         actionBlockers.length === 0;
-  const supportedBy = Array.isArray(finding.supportedBy) ? finding.supportedBy : [];
-  const hasEntryReachSupport = supportedBy.some((s) => s?.kind === 'entry-unreachable');
-  const hasIndependentSupport = supportedBy.some((s) => s?.kind === 'call-graph-no-observed-callers');
+  const safeActionKind = finding.safeAction?.kind;
+  const preservesDeclarationBinding =
+    safeActionKind === 'demote_export_declaration' ||
+    safeActionKind === 'remove_export_specifier';
+  const declarationDependencyBindingPreserved =
+    finding.declarationExportDependency && preservesDeclarationBinding;
 
   if (!hasSafeAction) {
     if (actionBlockers.length > 0) {
@@ -171,6 +154,37 @@ export function tierForFinding(finding, evidence = {}) {
     }
     return { tier: 'REVIEW_FIX', reason: 'missing-safe-action-proof' };
   }
+
+  // ─── REVIEW_FIX: exported declaration dependency ─────────
+  // Declaration dependencies block destructive edits, not weaker
+  // export-edge edits. A demotion preserves the local TS binding used
+  // by exported declarations while removing only the external export
+  // edge. Delete-like actions still need review because declaration
+  // emit/type surface could change.
+  if (finding.declarationExportDependency && !preservesDeclarationBinding) {
+    const count = finding.declarationExportRefs?.count ?? 0;
+    return {
+      tier: 'REVIEW_FIX',
+      reason: `declaration-dependency-not-preserved (${count} ref${count === 1 ? '' : 's'})`,
+    };
+  }
+
+  const isResolvableDeclarationDependencyBucket =
+    finding.bucket === 'B' && declarationDependencyBindingPreserved;
+
+  // ─── REVIEW_FIX: B bucket (predicate partner / design judgment) ──
+  // Most B-bucket findings are design-review evidence. The narrow
+  // exception is a local type declaration dependency with a
+  // binding-preserving safeAction produced by export-action-safety.
+  if (finding.bucket === 'B' && !isResolvableDeclarationDependencyBucket) {
+    return { tier: 'REVIEW_FIX', reason: 'bucket-B (design review required)' };
+  }
+
+  const strongRuntime = runtime?.status === 'dead-confirmed' &&
+                        runtime?.grounding === 'grounded';
+  const supportedBy = Array.isArray(finding.supportedBy) ? finding.supportedBy : [];
+  const hasEntryReachSupport = supportedBy.some((s) => s?.kind === 'entry-unreachable');
+  const hasIndependentSupport = supportedBy.some((s) => s?.kind === 'call-graph-no-observed-callers');
 
   // ─── REVIEW_FIX: externally observable deep-import contract ─
   // PCEF contract proof: in publishable packages without an exports
@@ -203,7 +217,8 @@ export function tierForFinding(finding, evidence = {}) {
   // ─── REVIEW_FIX: clear action, weaker supporting evidence ─
   // Classifier still produced a safe action, but soft taint or
   // design judgment prevents static-safe ranking.
-  if (['C', 'A', 'specifier'].includes(finding.bucket)) {
+  if (['C', 'A', 'specifier'].includes(finding.bucket) ||
+      isResolvableDeclarationDependencyBucket) {
     const missing = [];
     if (hasSoftTaint) missing.push('parse-errors-elsewhere');
     if (weakRuntimeStatus) missing.push(`runtime=${runtime.status}`);

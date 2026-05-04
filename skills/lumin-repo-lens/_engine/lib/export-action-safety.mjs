@@ -545,7 +545,17 @@ function proposalBuckets(deadClassify) {
     ...(deadClassify.proposal_C_remove_symbol ?? []).map((p) => ({ ...p, bucket: 'C' })),
     ...(deadClassify.proposal_A_demote_to_internal ?? []).map((p) => ({ ...p, bucket: 'A' })),
     ...(deadClassify.proposal_remove_export_specifier ?? []).map((p) => ({ ...p, bucket: 'specifier' })),
+    ...(deadClassify.proposal_B_review ?? [])
+      .filter(isResolvableDeclarationDependencyProposal)
+      .map((p) => ({ ...p, bucket: 'B' })),
   ];
+}
+
+function isResolvableDeclarationDependencyProposal(proposal) {
+  if (!proposal?.declarationExportDependency) return false;
+  if (proposal.kind !== 'TSTypeAliasDeclaration' &&
+      proposal.kind !== 'TSInterfaceDeclaration') return false;
+  return (proposal.fileInternalRefs?.valueRefs ?? 0) === 0;
 }
 
 function deadSymbolsByFile(proposals) {
