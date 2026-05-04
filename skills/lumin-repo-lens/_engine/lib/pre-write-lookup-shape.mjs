@@ -12,9 +12,12 @@
 
 import { extractShapeHashFactsFromSource } from './shape-hash.mjs';
 import { SHAPE_HASH_RE, parseShapeIndexArtifact } from './shape-index-schema.mjs';
+import { functionSignatureFromTypeLiteral } from './function-signature-hash.mjs';
 
 const UNAVAILABLE_CITATION =
   '[확인 불가, shape-index.json absent; run build-shape-index.mjs to enable P4 shape-hash lookup]';
+const FUNCTION_SIGNATURE_UNAVAILABLE_CITATION =
+  '[확인 불가, function-clones.json absent; run build-function-clone-index.mjs to enable function signature lookup]';
 
 function unavailable(shape, citation, extra = {}) {
   return {
@@ -57,17 +60,35 @@ function normalizeIntentTypeLiteral(typeLiteral) {
   };
 }
 
+function normalizeIntentFunctionSignature(typeLiteral) {
+  const normalized = functionSignatureFromTypeLiteral(typeLiteral);
+  if (!normalized.ok) return normalized;
+  return {
+    ok: true,
+    hash: normalized.hash,
+    signature: normalized.signature,
+    citation: `[grounded, shape.typeLiteral normalized as function signature via function-signature.normalized.v1]`,
+  };
+}
+
 function resolveShapeHash(shape) {
   const hasHash = shape?.hash !== undefined;
   const hasTypeLiteral = shape?.typeLiteral !== undefined;
 
   let literalHash = null;
   let literalCitation = null;
+  let literalSignature = null;
+  let literalKind = 'shape';
   if (hasTypeLiteral) {
-    const normalized = normalizeIntentTypeLiteral(shape.typeLiteral);
+    const functionSignature = normalizeIntentFunctionSignature(shape.typeLiteral);
+    const normalized = functionSignature.ok
+      ? functionSignature
+      : normalizeIntentTypeLiteral(shape.typeLiteral);
     if (!normalized.ok) return normalized;
     literalHash = normalized.hash;
     literalCitation = normalized.citation;
+    literalSignature = normalized.signature ?? null;
+    literalKind = functionSignature.ok ? 'function-signature' : 'shape';
   }
 
   if (hasHash) {
@@ -90,7 +111,9 @@ function resolveShapeHash(shape) {
       ok: true,
       hash: shape.hash,
       citations: literalCitation ? [literalCitation] : [],
-      source: literalCitation ? 'hash+typeLiteral' : 'hash',
+      source: literalCitation ? `hash+typeLiteral:${literalKind}` : 'hash',
+      kind: literalKind,
+      ...(literalSignature ? { signature: literalSignature } : {}),
     };
   }
 
@@ -99,7 +122,9 @@ function resolveShapeHash(shape) {
       ok: true,
       hash: literalHash,
       citations: [literalCitation],
-      source: 'typeLiteral',
+      source: literalKind === 'function-signature' ? 'functionSignature' : 'typeLiteral',
+      kind: literalKind,
+      ...(literalSignature ? { signature: literalSignature } : {}),
     };
   }
 
@@ -109,11 +134,85 @@ function resolveShapeHash(shape) {
   };
 }
 
+function lookupFunctionSignature(shape, resolved, functionClones) {
+  const signatureHash = resolved.hash;
+  if (!functionClones) {
+    return unavailable(shape, FUNCTION_SIGNATURE_UNAVAILABLE_CITATION, {
+      shapeHash: signatureHash,
+      shapeHashSource: resolved.source,
+      signature: resolved.signature,
+    });
+  }
+
+  const facts = Array.isArray(functionClones.facts) ? functionClones.facts : [];
+  const matchingFacts = facts
+    .filter((fact) => fact.normalizedSignatureHash === signatureHash)
+    .sort((a, b) => a.identity.localeCompare(b.identity));
+  const matches = matchingFacts.map((fact) => ({
+    identity: fact.identity,
+    ownerFile: fact.ownerFile ?? fact.identity.split('::')[0],
+    exportedName: fact.exportedName ?? fact.identity.split('::').pop(),
+    hash: signatureHash,
+    signature: fact.signature ?? resolved.signature,
+    confidence: fact.confidence ?? 'medium',
+  }));
+
+  if (matches.length > 0) {
+    const citations = [
+      ...(resolved.citations ?? []),
+      `[grounded, function-clones.json facts[] matched ${matches.length} identities for function signature ${signatureHash}]`,
+    ];
+    if (functionClones.meta?.complete !== true) {
+      citations.push('[degraded, function-clones.json is incomplete; positive signature match is grounded but absence claims are unavailable]');
+    }
+    return {
+      kind: 'shape',
+      shape,
+      shapeHash: signatureHash,
+      shapeHashSource: resolved.source,
+      signature: resolved.signature,
+      result: 'SIGNATURE_MATCH',
+      matches,
+      citations,
+    };
+  }
+
+  if (functionClones.meta?.complete !== true) {
+    return unavailable(
+      shape,
+      [
+        ...(resolved.citations ?? []),
+        `[확인 불가, function-clones.json is incomplete; function signature ${signatureHash} was not observed but absence is not grounded]`,
+      ],
+      { shapeHash: signatureHash, shapeHashSource: resolved.source, signature: resolved.signature }
+    );
+  }
+
+  return {
+    kind: 'shape',
+    shape,
+    shapeHash: signatureHash,
+    shapeHashSource: resolved.source,
+    signature: resolved.signature,
+    result: 'NOT_OBSERVED',
+    matches: [],
+    citations: [
+      ...(resolved.citations ?? []),
+      `[grounded, complete function-clones.json has no normalizedSignatureHash '${signatureHash}' entry]`,
+    ],
+  };
+}
+
 export function lookupShape(shape, ctx = {}) {
   const shapeIndex = ctx.shapeIndex ?? null;
+  const functionClones = ctx.functionClones ?? null;
   const resolved = resolveShapeHash(shape);
   if (!resolved.ok) {
     return unavailable(shape, resolved.citation);
+  }
+
+  if (resolved.kind === 'function-signature') {
+    return lookupFunctionSignature(shape, resolved, functionClones);
   }
 
   if (!shapeIndex) {

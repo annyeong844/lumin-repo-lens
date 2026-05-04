@@ -26,6 +26,7 @@ import { lookupName } from '../lib/pre-write-lookup-name.mjs';
 import { lookupFile } from '../lib/pre-write-lookup-file.mjs';
 import { lookupDependency } from '../lib/pre-write-lookup-dep.mjs';
 import { lookupShape } from '../lib/pre-write-lookup-shape.mjs';
+import { classifyPreWriteCues } from '../lib/pre-write-cue-tiers.mjs';
 import { parseCanonicalFile } from '../lib/pre-write-canonical-parser.mjs';
 import { computeDrift } from '../lib/pre-write-drift.mjs';
 import { runColdCachePreflight } from '../lib/pre-write-cold-cache.mjs';
@@ -169,6 +170,7 @@ if (existsSync(canonicalPath)) {
 const topology = loadIfExists(OUTPUT, 'topology.json', { tag: 'pre-write' });
 const triage = loadIfExists(OUTPUT, 'triage.json', { tag: 'pre-write' });
 const shapeIndex = loadIfExists(OUTPUT, 'shape-index.json', { tag: 'pre-write' });
+const functionClones = loadIfExists(OUTPUT, 'function-clones.json', { tag: 'pre-write' });
 
 // Read package.json for dependency lookup. Absence is a caller-level
 // problem — we still continue, emitting NEW_PACKAGE for every dep.
@@ -223,7 +225,7 @@ for (const depName of intent.dependencies) {
 }
 
 for (const shape of intent.shapes) {
-  const result = lookupShape(shape, { shapeIndex });
+  const result = lookupShape(shape, { shapeIndex, functionClones });
   lookups.push(result);
 }
 
@@ -235,6 +237,7 @@ const intentHash = hashIntent(intent);
 // Compute canonical drift from P1-1 lookup results (P1-3 §5.4).
 // Read-only projection — no canonical re-parse, no lookup re-run.
 const drift = computeDrift({ canonicalClaims, lookups });
+const cueTierResult = classifyPreWriteCues({ lookups, intent });
 
 // ── P2-0 snapshot hook ───────────────────────────────────────
 //
@@ -342,6 +345,10 @@ const advisory = {
   intent,
   intentWarnings,
   lookups,
+  cueCards: cueTierResult.cueCards,
+  suppressedCues: cueTierResult.suppressedCues,
+  unavailableEvidence: cueTierResult.unavailableEvidence,
+  cuePolicy: cueTierResult.cuePolicy,
   boundaryChecks: [],  // P1-2 keeps empty — NOT_EVALUATED entries are
                        // optional and omitted by default (maintainer history notes §4.5).
   drift,

@@ -11,8 +11,12 @@ import path from 'node:path';
 import { parseOxcOrThrow } from './parse-oxc.mjs';
 import { computeLineStarts, lineOf } from './line-offset.mjs';
 import { detectGeneratedFileEvidence } from './shape-hash.mjs';
+import {
+  FUNCTION_SIGNATURE_NORMALIZED_VERSION,
+  functionSignatureFromFunctionNode,
+} from './function-signature-hash.mjs';
 
-const FUNCTION_CLONE_SCHEMA_VERSION = 'function-clones.v2';
+const FUNCTION_CLONE_SCHEMA_VERSION = 'function-clones.v3';
 const FUNCTION_CLONE_NORMALIZED_VERSION = 'function-body.normalized.v1';
 
 const SKIP_KEYS = new Set([
@@ -293,6 +297,7 @@ function buildFunctionFact({ entry, src, ownerFile, lineStarts, scope }) {
   const normalizedExact = normalizeNode(body, { preserveLiteralValues: true });
   const normalizedStructure = normalizeNode(body, { preserveLiteralValues: false });
   const generatedFile = detectGeneratedFileEvidence(ownerFile, src);
+  const signature = functionSignatureFromFunctionNode(fn, src);
 
   return {
     kind: 'function-body-fingerprint',
@@ -314,6 +319,11 @@ function buildFunctionFact({ entry, src, ownerFile, lineStarts, scope }) {
     exactBodyHash: exactBodyHash(bodySource),
     normalizedExactHash: hash(normalizedExact),
     normalizedStructureHash: hash(normalizedStructure),
+    ...(signature.ok ? {
+      normalizedSignatureHash: signature.hash,
+      signature: signature.signature,
+      signatureParamCount: signature.normalizedSignature.params.length,
+    } : {}),
     callTokens: collectCallTokens(body),
     source: 'fresh-ast-pass',
     scope,
@@ -430,6 +440,43 @@ function groupFacts(facts, key, { minSize = 2, minBodyLoc = 3 } = {}) {
     (b.generatedOnly ? 0 : 1) - (a.generatedOnly ? 0 : 1) ||
     b.size - a.size ||
     b.bodyLocRange[1] - a.bodyLocRange[1] ||
+    a.identities.join('|').localeCompare(b.identities.join('|')));
+  return groups;
+}
+
+function groupSignatureFacts(facts, { minSize = 2 } = {}) {
+  const byHash = new Map();
+  for (const fact of facts) {
+    if (!fact?.normalizedSignatureHash) continue;
+    if (!byHash.has(fact.normalizedSignatureHash)) byHash.set(fact.normalizedSignatureHash, []);
+    byHash.get(fact.normalizedSignatureHash).push(fact);
+  }
+
+  const groups = [];
+  for (const [signatureHash, members] of byHash) {
+    if (members.length < minSize) continue;
+    const sorted = members
+      .slice()
+      .sort((a, b) => a.identity.localeCompare(b.identity));
+    const generatedOnly = sorted.every((m) => !!m.generatedFile);
+    groups.push({
+      kind: 'function-signature-group',
+      hash: signatureHash,
+      size: sorted.length,
+      generatedOnly,
+      risk: 'review-only',
+      signature: sorted[0]?.signature ?? null,
+      identities: sorted.map((m) => m.identity),
+      ownerFiles: [...new Set(sorted.map((m) => m.ownerFile))].sort(),
+      exportedNames: [...new Set(sorted.map((m) => m.exportedName))].sort(),
+      lines: sorted.map((m) => ({ identity: m.identity, file: m.ownerFile, line: m.line })),
+      reason: 'same normalized exported function type signature; review cue only; not proof of semantic equivalence or a merge recommendation',
+    });
+  }
+
+  groups.sort((a, b) =>
+    (b.generatedOnly ? 0 : 1) - (a.generatedOnly ? 0 : 1) ||
+    b.size - a.size ||
     a.identities.join('|').localeCompare(b.identities.join('|')));
   return groups;
 }
@@ -634,6 +681,7 @@ export function assembleFunctionCloneArtifact({
 
   const exactBodyGroups = groupFacts(stampedFacts, 'normalizedExactHash');
   const structureGroups = groupFacts(stampedFacts, 'normalizedStructureHash');
+  const signatureGroups = groupSignatureFacts(stampedFacts);
   const nearFunctionCandidates = buildNearFunctionCandidates(
     stampedFacts,
     exactBodyGroups,
@@ -656,6 +704,7 @@ export function assembleFunctionCloneArtifact({
       generatedFileFactCount,
       exactBodyGroupCount: exactBodyGroups.filter((g) => !g.generatedOnly).length,
       structureGroupCount: structureGroups.filter((g) => !g.generatedOnly).length,
+      signatureGroupCount: signatureGroups.filter((g) => !g.generatedOnly).length,
       nearFunctionCandidateCount: nearFunctionCandidates.filter((g) => !g.generatedOnly).length,
       diagnosticCount: sortedDiagnostics.length,
       filesWithParseErrors,
@@ -669,6 +718,9 @@ export function assembleFunctionCloneArtifact({
         normalizedExactHash: true,
         normalizedStructureHash: true,
         normalizedVersion: FUNCTION_CLONE_NORMALIZED_VERSION,
+        normalizedFunctionSignatureHash: true,
+        functionSignatureGroups: true,
+        functionSignatureNormalizedVersion: FUNCTION_SIGNATURE_NORMALIZED_VERSION,
         nearFunctionCandidates: true,
         generatedFileEvidence: true,
         semanticEquivalence: false,
@@ -678,6 +730,7 @@ export function assembleFunctionCloneArtifact({
     facts: stampedFacts,
     exactBodyGroups,
     structureGroups,
+    signatureGroups,
     nearFunctionCandidates,
     diagnostics: sortedDiagnostics,
   };

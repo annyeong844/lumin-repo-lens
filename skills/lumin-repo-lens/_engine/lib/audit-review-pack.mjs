@@ -92,6 +92,7 @@ function typeLane({ discipline, checklistFacts, shapeIndex, functionClones, symb
   const shapeFacts = n(shapeIndex?.facts?.length, 0);
   const cloneExact = n(checklistFacts?.B1_duplicate_implementation?.exactBodyGroups, n(functionClones?.meta?.exactBodyGroupCount));
   const cloneStructure = n(checklistFacts?.B1_duplicate_implementation?.structureGroupCandidates, n(functionClones?.meta?.structureGroupCount));
+  const cloneSignature = n(checklistFacts?.B1_duplicate_implementation?.signatureGroupCandidates, n(functionClones?.meta?.signatureGroupCount));
   const cloneNear = n(checklistFacts?.B1_duplicate_implementation?.nearFunctionCandidates, n(functionClones?.meta?.nearFunctionCandidateCount));
   return lane('Lane 2 — Types, Shapes, And Contract Review', renderLanePrompt({
     title: 'Type and shape reviewer',
@@ -101,7 +102,7 @@ function typeLane({ discipline, checklistFacts, shapeIndex, functionClones, symb
       `Type escape total to screen: ${escapeCount}. Prioritize clusters over scattered one-offs.`,
       formatAnyContaminationReviewCheck(symbols),
       `Exact exported shape groups: ${exactGroups}; near-shape review cues: ${nearCandidates}; raw shape facts: ${shapeFacts}.`,
-      `Function clone cues: exact body groups ${cloneExact}; same-structure groups ${cloneStructure}; near-function cues ${cloneNear}. Read source before calling them semantic duplicates.`,
+      `Function clone cues: exact body groups ${cloneExact}; same-structure groups ${cloneStructure}; same-signature groups ${cloneSignature}; near-function cues ${cloneNear}. Read source before calling them semantic duplicates.`,
       'For near-shape or semantic duplication, read the cited declarations before recommending a merge.',
     ],
     report: 'One type/shape theme worth smoothing, anything likely intentional, and what evidence is still missing.',

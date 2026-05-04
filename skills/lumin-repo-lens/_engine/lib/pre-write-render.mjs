@@ -244,7 +244,9 @@ function renderLookupDep_NewCode(lookup) {
 function renderLookupShape_WatchFor(lookup) {
   const out = [];
   const fieldStr = (lookup.shape?.fields ?? []).map((f) => `\`${f}\``).join(', ');
-  const shapeLabel = fieldStr.length > 0
+  const shapeLabel = lookup.shapeHashSource === 'functionSignature'
+    ? `function signature hash \`${lookup.shapeHash ?? 'unknown'}\``
+    : fieldStr.length > 0
     ? `\`{ ${fieldStr} }\``
     : `hash \`${lookup.shape?.hash ?? lookup.shapeHash ?? 'unknown'}\``;
   out.push(`- Shape ${shapeLabel} — lookup ${lookup.result}.`);
@@ -321,6 +323,102 @@ function renderCapabilityNotes(lookups) {
     '> [확인 불가, reason: producer did not emit anyContamination capability]',
     '',
   ];
+}
+
+function evidenceSummary(evidence) {
+  const items = Array.isArray(evidence) ? evidence : [];
+  if (items.length === 0) return 'evidence recorded';
+  return items.map((item) => {
+    const parts = [];
+    if (item.artifact) parts.push(item.artifact);
+    if (item.matchedField) parts.push(item.matchedField);
+    if (item.algorithmVersion) parts.push(item.algorithmVersion);
+    return parts.join(' / ');
+  }).filter(Boolean).join('; ');
+}
+
+function renderCueSections(advisory) {
+  const cueCards = advisory.cueCards ?? [];
+  const unavailable = advisory.unavailableEvidence ?? [];
+  const grounded = [];
+  const review = [];
+
+  for (const card of cueCards) {
+    for (const cue of card.cues ?? []) {
+      const row = `- \`${card.candidate?.identity ?? 'unknown'}\` — ${cue.claim}.`;
+      const evidence = `  [${cue.confidence ?? 'grounded'}, ${evidenceSummary(cue.evidence)}; cueTier=${cue.cueTier}]`;
+      if (cue.cueTier === 'SAFE_CUE') {
+        grounded.push(row, evidence, '  Note: grounded fact only; not a semantic-equivalence or auto-reuse claim.');
+      } else if (cue.cueTier === 'AGENT_REVIEW_CUE') {
+        review.push(row, evidence, '  action: inspect the cited file or symbol before creating parallel code.');
+      }
+    }
+  }
+
+  const out = [];
+  if (grounded.length > 0) {
+    out.push('### Grounded facts', '', ...grounded, '');
+  }
+  if (review.length > 0) {
+    out.push('### Agent review cues', '', ...review, '');
+  }
+  if (unavailable.length > 0) {
+    out.push('### Unavailable evidence', '');
+    for (const u of unavailable) {
+      out.push(`- ${u.evidenceLane ?? 'unknown'} — ${u.status ?? 'UNAVAILABLE'} (${u.reason ?? 'unknown'}).`);
+      if (u.artifact) out.push(`  artifact: \`${u.artifact}\``);
+      for (const c of u.citations ?? []) out.push(`  ${c}`);
+    }
+    out.push('');
+  }
+  return out;
+}
+
+function cueCoveredIdentities(advisory) {
+  const covered = new Set();
+  for (const card of advisory.cueCards ?? []) {
+    const identity = card.candidate?.identity;
+    if (!identity) continue;
+    for (const cue of card.cues ?? []) {
+      if (['exact-symbol', 'near-name', 'intent-token', 'function-signature', 'shape-hash', 'exact-file'].includes(cue.evidenceLane)) {
+        covered.add(identity);
+      }
+    }
+  }
+  return covered;
+}
+
+function unavailableEvidenceLanes(advisory) {
+  return new Set((advisory.unavailableEvidence ?? [])
+    .map((u) => u.evidenceLane)
+    .filter(Boolean));
+}
+
+function lookupCandidateIdentities(lookup) {
+  const out = [];
+  for (const identity of lookup.identities ?? []) {
+    if (identity.identity) out.push(identity.identity);
+  }
+  for (const near of lookup.nearNames ?? []) {
+    if (near.ownerFile && near.name) out.push(`${near.ownerFile}::${near.name}`);
+  }
+  for (const hint of lookup.semanticHints ?? []) {
+    if (hint.ownerFile && hint.name) out.push(`${hint.ownerFile}::${hint.name}`);
+  }
+  for (const match of lookup.matches ?? []) {
+    if (match.identity) out.push(match.identity);
+  }
+  if (lookup.kind === 'file' && lookup.intentFile) out.push(`${lookup.intentFile}::__file__`);
+  return out;
+}
+
+function shouldSkipLegacyLookup(lookup, coveredIdentities, coveredUnavailableLanes) {
+  if (lookup.kind === 'shape' && lookup.result === 'UNAVAILABLE') {
+    const lane = lookup.shapeHashSource === 'functionSignature' ? 'function-signature' : 'shape-hash';
+    return coveredUnavailableLanes.has(lane);
+  }
+  const identities = lookupCandidateIdentities(lookup);
+  return identities.length > 0 && identities.every((identity) => coveredIdentities.has(identity));
 }
 
 function renderDriftSection(drift) {
@@ -402,6 +500,12 @@ export function renderMarkdown(advisory) {
 
   const lookups = advisory.lookups ?? [];
   out.push(...renderCapabilityNotes(lookups));
+  out.push(...renderCueSections(advisory));
+  const coveredCueIdentities = cueCoveredIdentities(advisory);
+  const coveredUnavailableLanes = unavailableEvidenceLanes(advisory);
+  const legacyLookups = lookups.filter((lookup) =>
+    !shouldSkipLegacyLookup(lookup, coveredCueIdentities, coveredUnavailableLanes)
+  );
 
   // Route each lookup to its section. P1-1 name lookups AND P1-2
   // file/dep/shape lookups land here.
@@ -411,7 +515,7 @@ export function renderMarkdown(advisory) {
   const newCode = [];
   const watchFor = [];
 
-  for (const l of lookups) {
+  for (const l of legacyLookups) {
     const sec = sectionFor(l);
     if (sec === 'already-exists')     alreadyExists.push(l);
     else if (sec === 'any-contaminated') anyContaminated.push(l);
@@ -500,6 +604,10 @@ export function renderJson(advisory) {
     intent: advisory.intent,
     intentWarnings: advisory.intentWarnings ?? [],
     lookups: advisory.lookups ?? [],
+    cueCards: advisory.cueCards ?? [],
+    suppressedCues: advisory.suppressedCues ?? [],
+    unavailableEvidence: advisory.unavailableEvidence ?? [],
+    cuePolicy: advisory.cuePolicy ?? null,
     boundaryChecks: advisory.boundaryChecks ?? [],
     drift: advisory.drift ?? [],
     capabilities: advisory.capabilities ?? null,

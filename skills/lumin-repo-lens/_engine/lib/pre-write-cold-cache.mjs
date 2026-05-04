@@ -21,6 +21,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { functionSignatureFromTypeLiteral } from './function-signature-hash.mjs';
 
 const DEFAULT_COLD_CACHE_TIMEOUT_MS = 30_000;
 
@@ -63,13 +64,27 @@ const SHAPE_INDEX_PRODUCER = {
   timeoutKind: 'cold-cache-shape-index-timeout',
 };
 
+const FUNCTION_CLONES_PRODUCER = {
+  artifact: 'function-clones.json',
+  script: 'build-function-clone-index.mjs',
+  failKind: 'cold-cache-function-clones-failed',
+  timeoutKind: 'cold-cache-function-clones-timeout',
+};
+
 const PRODUCER_ORDER = [
   ...PRODUCERS,
   SHAPE_INDEX_PRODUCER,
+  FUNCTION_CLONES_PRODUCER,
 ];
 
 function hasEntries(value) {
   return Array.isArray(value) && value.length > 0;
+}
+
+function hasFunctionSignatureShapeIntent(intent) {
+  return (intent?.shapes ?? []).some((shape) =>
+    typeof shape?.typeLiteral === 'string' &&
+    functionSignatureFromTypeLiteral(shape.typeLiteral).ok === true);
 }
 
 function selectProducers({ intent, includeShapeIndex }) {
@@ -104,6 +119,10 @@ function selectProducers({ intent, includeShapeIndex }) {
 
   if (hasEntries(intent.shapes) || includeShapeIndex) {
     needed.add('shape-index.json');
+  }
+
+  if (hasFunctionSignatureShapeIntent(intent)) {
+    needed.add('function-clones.json');
   }
 
   return PRODUCER_ORDER.filter((producer) => needed.has(producer.artifact));

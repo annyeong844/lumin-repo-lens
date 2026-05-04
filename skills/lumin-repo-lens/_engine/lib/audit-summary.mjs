@@ -176,8 +176,9 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     const b1 = checklistFacts?.B1_duplicate_implementation ?? {};
     const exact = n(b1.exactBodyGroups, n(functionClones?.meta?.exactBodyGroupCount));
     const structure = n(b1.structureGroupCandidates, n(functionClones?.meta?.structureGroupCount));
+    const signature = n(b1.signatureGroupCandidates, n(functionClones?.meta?.signatureGroupCount));
     const near = n(b1.nearFunctionCandidates, n(functionClones?.meta?.nearFunctionCandidateCount));
-    lines.push(`- Function clone cues: exact body groups ${exact}, same-structure groups ${structure}, near-function cues ${near}. Read \`function-clones.json\` and source file:line evidence before calling helpers duplicated.`);
+    lines.push(`- Function clone cues: exact body groups ${exact}, same-structure groups ${structure}, same-signature groups ${signature}, near-function cues ${near}. Read \`function-clones.json\` and source file:line evidence before calling helpers duplicated.`);
   }
 
   if (fixPlan?.summary) {

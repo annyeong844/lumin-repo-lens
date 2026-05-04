@@ -18,6 +18,10 @@
 //   - maintainer history notes §4.3 — result shape; §5.3 — algorithm
 
 import { specifierCouldMatchFile } from './finding-provenance.mjs';
+import {
+  isWeakCommonToken,
+  uniquePreWriteTokens,
+} from './pre-write-token-policy.mjs';
 
 // ── Cheap-filter near-name constants ─────────────────────────
 
@@ -34,11 +38,6 @@ const SEMANTIC_STOP_TOKENS = new Set([
   'manager', 'index', 'main', 'src', 'lib', 'utils', 'util', 'ts', 'js', 'mjs',
   'cjs', 'tsx', 'jsx',
 ]);
-const SEMANTIC_WEAK_VERBS = new Set([
-  'add', 'build', 'check', 'create', 'delete', 'get', 'load', 'make', 'parse',
-  'read', 'return', 'save', 'set', 'update', 'write',
-]);
-
 // ── Helpers ──────────────────────────────────────────────────
 
 function sharedPrefix(a, b) {
@@ -49,34 +48,21 @@ function sharedPrefix(a, b) {
 }
 
 function splitSemanticTokens(value) {
-  return String(value ?? '')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/[^A-Za-z0-9]+/g, ' ')
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map(normalizeSemanticToken)
+  return uniquePreWriteTokens(value)
     .filter((token) =>
       token.length >= 2 &&
       !SEMANTIC_STOP_TOKENS.has(token)
     );
 }
 
-function normalizeSemanticToken(token) {
-  const t = String(token ?? '').toLowerCase();
-  if (t === 'rel') return 'relative';
-  if (t === 'ctx') return 'context';
-  if (t === 'cfg') return 'config';
-  if (t === 'config') return 'configuration';
-  if (t === 'exists' || t === 'existing' || t === 'existence') return 'exist';
-  if (t.length > 4 && t.endsWith('ies')) return `${t.slice(0, -3)}y`;
-  if (t.length > 4 && t.endsWith('s')) return t.slice(0, -1);
-  return t;
-}
-
 function uniqueTokens(...parts) {
   return [...new Set(parts.flatMap(splitSemanticTokens))];
+}
+
+function hasOnlyWeakCommonTokens(a, b) {
+  const aSet = new Set(uniqueTokens(a));
+  const common = uniqueTokens(b).filter((token) => aSet.has(token));
+  return common.length > 0 && common.every(isWeakCommonToken);
 }
 
 // Levenshtein with an early-exit cap. If distance exceeds `cap`, returns
@@ -249,6 +235,7 @@ function computeNearNames(intentName, defIndex) {
   for (const [file, namesObj] of Object.entries(defIndex ?? {})) {
     for (const name of Object.keys(namesObj ?? {})) {
       if (name === intentName) continue;
+      if (hasOnlyWeakCommonTokens(intentName, name)) continue;
 
       // Cheap filter A (prefix): shared prefix ≥ 4 qualifies on a
       // relaxed length budget — `formatTimestamp` (15) vs `formatDate`
@@ -280,11 +267,12 @@ function computeNearNames(intentName, defIndex) {
   return candidates.slice(0, NEAR_NAME_MAX_RESULTS);
 }
 
-function computeSemanticHints(intentName, intentDeclaration, defIndex) {
+function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex) {
   const queryTokens = uniqueTokens(intentName, intentDeclaration?.kind, intentDeclaration?.why);
-  if (queryTokens.length === 0) return [];
+  if (queryTokens.length === 0) return { semanticHints: [], suppressedSemanticHints: [] };
   const querySet = new Set(queryTokens);
-  const candidates = [];
+  const semanticHints = [];
+  const suppressedSemanticHints = [];
 
   for (const [file, namesObj] of Object.entries(defIndex ?? {})) {
     for (const name of Object.keys(namesObj ?? {})) {
@@ -298,19 +286,41 @@ function computeSemanticHints(intentName, intentDeclaration, defIndex) {
       if (matchedTokens.length === 0) continue;
 
       const score = matchedTokens.length;
-      if (score < SEMANTIC_HINT_MIN_SCORE) continue;
+      if (score < SEMANTIC_HINT_MIN_SCORE) {
+        if (matchedTokens.length === 1 && matchedTokens.every(isWeakCommonToken)) {
+          suppressedSemanticHints.push({
+            name,
+            ownerFile: file,
+            matchedTokens,
+            score,
+            reason: 'weak-common-token-only',
+          });
+        }
+        continue;
+      }
       const matchedNameTokens = candidateNameTokens.filter((token) => querySet.has(token));
-      const strongNameMatches = matchedNameTokens.filter((token) => !SEMANTIC_WEAK_VERBS.has(token));
+      const strongNameMatches = matchedNameTokens.filter((token) => !isWeakCommonToken(token));
       const strongSupportMatches = candidateSupportTokens
         .filter((token) =>
           querySet.has(token) &&
-          !SEMANTIC_WEAK_VERBS.has(token) &&
+          !isWeakCommonToken(token) &&
           !strongNameMatches.includes(token)
         );
       if (strongNameMatches.length < 2 && !(strongNameMatches.length === 1 && strongSupportMatches.length >= 1)) {
+        suppressedSemanticHints.push({
+          name,
+          ownerFile: file,
+          matchedTokens,
+          matchedNameTokens,
+          matchedSupportTokens: strongSupportMatches,
+          score,
+          reason: matchedTokens.every(isWeakCommonToken)
+            ? 'weak-common-token-only'
+            : 'insufficient-non-weak-support',
+        });
         continue;
       }
-      candidates.push({
+      semanticHints.push({
         name,
         ownerFile: file,
         matchedTokens,
@@ -321,12 +331,18 @@ function computeSemanticHints(intentName, intentDeclaration, defIndex) {
     }
   }
 
-  candidates.sort((a, b) =>
+  const sortHints = (arr) => arr.sort((a, b) =>
     b.score - a.score ||
     a.ownerFile.localeCompare(b.ownerFile) ||
     a.name.localeCompare(b.name)
   );
-  return candidates.slice(0, SEMANTIC_HINT_MAX_RESULTS);
+  const candidateCount = suppressedSemanticHints.length;
+  return {
+    semanticHints: sortHints(semanticHints).slice(0, SEMANTIC_HINT_MAX_RESULTS),
+    suppressedSemanticHints: sortHints(suppressedSemanticHints)
+      .slice(0, SEMANTIC_HINT_MAX_RESULTS)
+      .map((hint) => ({ ...hint, candidateCount })),
+  };
 }
 
 // ── AST identity enumeration ─────────────────────────────────
@@ -442,9 +458,11 @@ export function lookupName(intentName, ctx) {
   const nearNames = identities.length === 0
     ? computeNearNames(intentName, defIndex)
     : [];
-  const semanticHints = identities.length === 0
-    ? computeSemanticHints(intentName, intentDeclaration, defIndex)
-    : [];
+  const semanticCandidateResult = identities.length === 0
+    ? computeSemanticHintCandidates(intentName, intentDeclaration, defIndex)
+    : { semanticHints: [], suppressedSemanticHints: [] };
+  const semanticHints = semanticCandidateResult.semanticHints;
+  const suppressedSemanticHints = semanticCandidateResult.suppressedSemanticHints;
   if (nearNames.length > 0) {
     citations.push(`[degraded, fuzzy-name match; source: symbols.json.defIndex name scan — search hint only, NOT a grounded reuse claim]`);
   }
@@ -463,6 +481,7 @@ export function lookupName(intentName, ctx) {
     canonicalAstStatus,
     nearNames,
     semanticHints,
+    suppressedSemanticHints,
     citations,
   };
 }

@@ -203,12 +203,12 @@ analysis metadata.
 For 200–300 files: *quick* profile takes ~10–20 seconds; *full* profile takes 30 seconds to a minute. Start with quick.
 
 **Q. What are the main evidence limits?**
-Function-clone cues are review cues, not semantic-equivalence claims. Shape index is exact: nullable or widened types such as `email: string` versus `email: string | null` intentionally land in different groups. Start from `audit-summary.latest.md`, `manifest.json`, and `checklist-facts.json`, then open raw JSON artifacts only for the claim being cited.
+Function-clone cues are review cues, not semantic-equivalence claims. They include exact body, same-structure, same-signature, and near-function evidence when the full profile has `function-clones.json`. Shape index is exact: nullable or widened types such as `email: string` versus `email: string | null` intentionally land in different groups. Start from `audit-summary.latest.md`, `manifest.json`, and `checklist-facts.json`, then open raw JSON artifacts only for the claim being cited.
 
 **Q. Does pre-write understand semantic duplicates?**
-No. Pre-write is a fast transaction gate. It uses grounded name, path, import, shape, and topology evidence, so it can catch exact symbols, near names, existing files, and same-directory prefix/token families such as `merge-with-*`.
+No. Pre-write does not claim semantic equivalence from names alone. It surfaces grounded facts such as exact symbol/file matches, exact shape hashes, and exact function signature hashes, then separates weaker agent-review cues from muted token noise.
 
-For broader duplicate hunting, run the full profile. Full adds shape index, function-clone cues, call graph, barrel discipline, and topology evidence. It can surface exact/near structural duplication, but it still does not claim that renamed implementations such as `deepMerge` and `MergeWithValues` are the same concept unless machine evidence already connects them. That kind of semantic equivalence belongs to code reading, embeddings, or human review.
+Exact normalized body-hash cueing is deferred until a body-hash lane exists in the lookup artifacts. When two helpers only share a common verb such as `create`, the default chat surface stays quiet and the muted cue remains in JSON diagnostics.
 
 **Q. Why can post-write feel as expensive as a quick scan?**
 Post-write refreshes the after-snapshot before comparing it to the matching pre-write advisory, so small edits can still pay the repository walk cost. Reusing the same `--output` keeps artifacts together; an incremental post-write cache is planned, but the current default favors a fresh comparison over a stale clean result.
@@ -256,7 +256,7 @@ not the preferred user-facing interface; start from the plugin commands or
 
 ### Conservative evidence boundaries
 
-Function-clone cues are review cues, not semantic-equivalence proofs. Shape-index matching is exact (a `string` and a `string | null` field intentionally land in different groups). For the operational gates that keep dead-code, shape, and barrel claims grounded, see `references/false-positive-index.md` and `references/operational-gates.md`.
+Function-clone cues are review cues, not semantic-equivalence proofs; same-signature groups mean "same exported function type contract", not "same behavior". Shape-index matching is exact (a `string` and a `string | null` field intentionally land in different groups). For the operational gates that keep dead-code, shape, and barrel claims grounded, see `references/false-positive-index.md` and `references/operational-gates.md`.
 
 ### Public beta
 

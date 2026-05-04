@@ -500,38 +500,50 @@ function b1DuplicateImplementation() {
 
   const exactGroups = (functionClones.exactBodyGroups ?? []).filter((g) => !g.generatedOnly);
   const structureGroups = (functionClones.structureGroups ?? []).filter((g) => !g.generatedOnly);
+  const signatureGroups = (functionClones.signatureGroups ?? []).filter((g) => !g.generatedOnly);
   const nearFunctionCandidates =
     (functionClones.nearFunctionCandidates ?? []).filter((g) => !g.generatedOnly);
   const generatedOnlyExactGroups =
     (functionClones.exactBodyGroups ?? []).filter((g) => g.generatedOnly).length;
   const generatedOnlyStructureGroups =
     (functionClones.structureGroups ?? []).filter((g) => g.generatedOnly).length;
+  const generatedOnlySignatureGroups =
+    (functionClones.signatureGroups ?? []).filter((g) => g.generatedOnly).length;
   const generatedOnlyNearFunctionCandidates =
     (functionClones.nearFunctionCandidates ?? []).filter((g) => g.generatedOnly).length;
   const gate =
-    exactGroups.length > 0 || structureGroups.length > 0 || nearFunctionCandidates.length > 0
+    exactGroups.length > 0 || structureGroups.length > 0 ||
+    signatureGroups.length > 0 || nearFunctionCandidates.length > 0
       ? 'watch'
       : 'ok';
+  const candidateIdentities = new Set();
+  for (const group of [
+    ...structureGroups,
+    ...signatureGroups,
+    ...nearFunctionCandidates,
+  ]) {
+    for (const identity of group.identities ?? []) candidateIdentities.add(identity);
+  }
 
   return {
     gate,
     available: true,
     exactBodyGroups: exactGroups.length,
     structureGroupCandidates: structureGroups.length,
+    signatureGroupCandidates: signatureGroups.length,
     nearFunctionCandidates: nearFunctionCandidates.length,
     generatedOnlyExactGroups,
     generatedOnlyStructureGroups,
+    generatedOnlySignatureGroups,
     generatedOnlyNearFunctionCandidates,
-    candidateIdentityCount: structureGroups
-      .reduce((acc, group) => acc + (Array.isArray(group.identities) ? group.identities.length : 0), 0) +
-      nearFunctionCandidates
-        .reduce((acc, group) => acc + (Array.isArray(group.identities) ? group.identities.length : 0), 0),
+    candidateIdentityCount: candidateIdentities.size,
     totalFunctionFacts: Array.isArray(functionClones.facts) ? functionClones.facts.length : 0,
     functionCloneIndexComplete: functionClones.meta?.complete !== false,
     topExactGroups: exactGroups.slice(0, 10),
     topStructureGroups: structureGroups.slice(0, 10),
+    topSignatureGroups: signatureGroups.slice(0, 10),
     topNearFunctionCandidates: nearFunctionCandidates.slice(0, 10),
-    note: 'Exact, same-structure, and near exported function-body cues only. Treat as review cues, not proof of semantic equivalence or an automatic merge.',
+    note: 'Exact body, same-structure, same-signature, and near exported function cues only. Treat as review cues, not proof of semantic equivalence or an automatic merge.',
   };
 }
 
@@ -792,7 +804,7 @@ function citationFor(sectionKey, r) {
     case 'B1B2_shape_drift':
       return `[grounded, checklist-facts.json.B1B2_shape_drift.exactDuplicateGroups = ${r.exactDuplicateGroups ?? 'unknown'}, nearShapeCandidateCount = ${r.nearShapeCandidateCount ?? 'unknown'}, duplicateIdentityCount = ${r.duplicateIdentityCount ?? 'unknown'}]`;
     case 'B1_duplicate_implementation':
-      return `[grounded, checklist-facts.json.B1_duplicate_implementation.exactBodyGroups = ${r.exactBodyGroups ?? 'unknown'}, structureGroupCandidates = ${r.structureGroupCandidates ?? 'unknown'}, nearFunctionCandidates = ${r.nearFunctionCandidates ?? 'unknown'}]`;
+      return `[grounded, checklist-facts.json.B1_duplicate_implementation.exactBodyGroups = ${r.exactBodyGroups ?? 'unknown'}, structureGroupCandidates = ${r.structureGroupCandidates ?? 'unknown'}, signatureGroupCandidates = ${r.signatureGroupCandidates ?? 'unknown'}, nearFunctionCandidates = ${r.nearFunctionCandidates ?? 'unknown'}]`;
     case 'C5_lint_enforcement':
       return `[grounded, checklist-facts.json.C5_lint_enforcement.boundaryRulePresent = ${r.boundaryRulePresent}, rulesDetected = ${r.rulesDetected}]`;
     case 'C7_barrel_amplification':
@@ -840,7 +852,7 @@ const artifact = {
     { item: 'A1', reason: 'summary of A2-A6 — synthesize after reading sub-items' },
     { item: 'A3', reason: 'helper zoo — needs per-file export fan-in map; symbols.json currently emits only topSymbolFanIn (top 50)' },
     { item: 'A4', reason: 'over-split — needs per-file fanIn/fanOut; topology.json currently emits only top lists' },
-    { item: 'B1', reason: 'broader duplicate implementation still requires LLM review; B1_duplicate_implementation covers exported top-level exact, same-structure, and near function-body clone cues only' },
+    { item: 'B1', reason: 'broader duplicate implementation still requires LLM review; B1_duplicate_implementation covers exported top-level exact body, same-structure, same-signature, and near function clone cues only' },
     { item: 'B2', reason: 'broader shared-shape drift still requires domain/vocab judgment; nearShapeCandidates are artifact-backed review cues only' },
     { item: 'B4', reason: 'pipeline duplication — semantic comparison across script entry points' },
     { item: 'C1', reason: 'cohesion / SRP — LLM reads file name vs body alignment' },
