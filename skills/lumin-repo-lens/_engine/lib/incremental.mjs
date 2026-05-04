@@ -1,4 +1,9 @@
-// _lib/incremental.mjs — File-hash based incremental cache for audit scripts.
+// _lib/incremental.mjs — Legacy producer-local cache helper.
+//
+// New strict shared incremental work must use `_lib/incremental-snapshot.mjs`
+// and `_lib/incremental-cache-store.mjs`. This helper intentionally preserves
+// historical stat-first-cut behavior for existing producer-local caches until
+// each producer is migrated through a compatibility adapter.
 //
 // Usage pattern (per script):
 //

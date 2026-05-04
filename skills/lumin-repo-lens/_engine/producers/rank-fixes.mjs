@@ -84,6 +84,7 @@ if (exportActionSafety?.byId) {
 
 const repoMode = detectRepoMode(ROOT);
 const submoduleOf = buildSubmoduleResolver(ROOT, repoMode);
+const publicDeepImportRiskByFile = new Map();
 const reachability = (() => {
   if (!moduleReachability || !entrySurface) return null;
   const entryFiles = new Set([
@@ -113,9 +114,15 @@ function opaqueDynamicImportCouldReach(file) {
 }
 
 function fileHasPublicDeepImportRisk(file) {
+  if (publicDeepImportRiskByFile.has(file)) {
+    return publicDeepImportRiskByFile.get(file);
+  }
   const packageInfo = findNearestPackageInfo(ROOT, file);
-  if (!packageInfo?.packageJson) return false;
-  return hasPublicDeepImportRisk(packageInfo.packageJson, packageInfo.relFileFromPkgRoot);
+  const risk = packageInfo?.packageJson
+    ? hasPublicDeepImportRisk(packageInfo.packageJson, packageInfo.relFileFromPkgRoot)
+    : false;
+  publicDeepImportRiskByFile.set(file, risk);
+  return risk;
 }
 
 function entryUnreachableSupport(finding) {
@@ -267,6 +274,9 @@ for (const f of findings) {
       },
     } : {}),
     ...(resolver ? { resolver } : {}),
+    contract: {
+      publicDeepImportRisk: fileHasPublicDeepImportRisk(f.file),
+    },
     policy: { excluded: false },
   };
 

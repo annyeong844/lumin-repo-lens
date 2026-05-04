@@ -119,7 +119,7 @@ function domainPrefixCandidates(intentFile) {
     const key = normalizeDomainKey(display);
     if (key.length < DOMAIN_CLUSTER_MIN_PREFIX_LEN) continue;
     if (GENERIC_DOMAIN_PREFIXES.has(key)) continue;
-    candidates.push({ display, key });
+    candidates.push({ display, key, tokenCount: count });
   }
 
   const wholeKey = normalizeDomainKey(base);
@@ -128,7 +128,7 @@ function domainPrefixCandidates(intentFile) {
     !GENERIC_DOMAIN_PREFIXES.has(wholeKey) &&
     !candidates.some((c) => c.key === wholeKey)
   ) {
-    candidates.push({ display: base, key: wholeKey });
+    candidates.push({ display: base, key: wholeKey, tokenCount: tokens.length });
   }
 
   return candidates;
@@ -179,15 +179,19 @@ function findDomainCluster(intentFile, topology) {
       })
       .sort((a, b) => a.file.localeCompare(b.file));
 
-    if (matches.length < DOMAIN_CLUSTER_MIN_MATCHES) continue;
+    const prefixMatchCount = matches.filter((entry) =>
+      normalizeDomainKey(stripKnownExtension(path.posix.basename(entry.file))).startsWith(candidate.key)
+    ).length;
+    const requiredMatches =
+      candidate.tokenCount >= 2 && prefixMatchCount >= 1
+        ? 1
+        : DOMAIN_CLUSTER_MIN_MATCHES;
+    if (matches.length < requiredMatches) continue;
 
     const totalLoc = matches.reduce((sum, m) => sum + (typeof m.loc === 'number' ? m.loc : 0), 0);
     const locKnown = matches.some((m) => typeof m.loc === 'number');
     const prefixPath = dir === '.' ? candidate.display : `${dir}/${candidate.display}`;
     const examples = matches.slice(0, DOMAIN_CLUSTER_MAX_EXAMPLES);
-    const prefixMatchCount = matches.filter((entry) =>
-      normalizeDomainKey(stripKnownExtension(path.posix.basename(entry.file))).startsWith(candidate.key)
-    ).length;
 
     return {
       kind: 'DOMAIN_CLUSTER_DETECTED',

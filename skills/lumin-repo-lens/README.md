@@ -28,7 +28,7 @@ Real evidence from your actual repo, not guesses.
 
 ---
 
-## 30-second quick start
+## First useful run
 
 **1. Add the marketplace and install the plugin in Claude Code**
 
@@ -38,15 +38,33 @@ Real evidence from your actual repo, not guesses.
 /reload-plugins
 ```
 
-**2. Ask the buddy to look at your repo**
+**2. Run the full first checkup**
 
 ```
-/lumin-repo-lens
+/lumin-repo-lens:full
 ```
 
-→ That's it. In about 10–20 seconds you'll get *"this is safe, this is worth smoothing, this can stay as-is"* in plain words.
+→ This turns on the parts that make Lumin more than a dead-export sorter:
+shape index, function-clone cues, call graph, barrel discipline, topology,
+public-surface policies, and the grounded review profile.
+
+**3. Use the write gate when you are about to change code**
+
+```
+/lumin-repo-lens:pre-write
+# code the change
+/lumin-repo-lens:post-write
+```
+
+Claude Code infers the compact intent internally. You do not need to write
+the intent JSON by hand.
 
 > 💡 First run installs parser dependencies once (~30 seconds). After that, fast.
+> For tiny follow-up checks after a fresh baseline, `/lumin-repo-lens` uses the quick path.
+
+For very large repos, do not auto-trigger full profile on every edit. Run
+`:full` once per branch, first checkup, or major refactor review, then use
+pre-write/post-write and quick follow-ups during the agent loop.
 
 ---
 
@@ -71,10 +89,10 @@ Real evidence from your actual repo, not guesses.
 
 | Command | When to use |
 |---|---|
-| `/lumin-repo-lens` | One-click baseline-aware repo lens pass — *"how's my code right now?"* |
-| `/lumin-repo-lens:full` | Full profile with shape-index evidence — *"first checkup or post-refactor review"* |
+| `/lumin-repo-lens:full` | Full evidence profile — first checkup, post-refactor review, shape/function-clone/call/topology evidence |
 | `/lumin-repo-lens:pre-write` | Check *before* coding. Ask naturally; the assistant infers the compact intent internally. |
 | `/lumin-repo-lens:post-write` | Verify *after* coding — *"did my change ripple anywhere else?"* |
+| `/lumin-repo-lens` | Quick baseline-aware repo lens pass for small follow-up checks over fresh artifacts |
 | `/lumin-repo-lens:refactor-plan` | Turn evidence into a cautious cleanup plan |
 | `/lumin-repo-lens:welcome` | Get a gentle first-use menu |
 
@@ -186,6 +204,14 @@ For 200–300 files: *quick* profile takes ~10–20 seconds; *full* profile take
 
 **Q. What are the main evidence limits?**
 Function-clone cues are review cues, not semantic-equivalence claims. Shape index is exact: nullable or widened types such as `email: string` versus `email: string | null` intentionally land in different groups. Start from `audit-summary.latest.md`, `manifest.json`, and `checklist-facts.json`, then open raw JSON artifacts only for the claim being cited.
+
+**Q. Does pre-write understand semantic duplicates?**
+No. Pre-write is a fast transaction gate. It uses grounded name, path, import, shape, and topology evidence, so it can catch exact symbols, near names, existing files, and same-directory prefix/token families such as `merge-with-*`.
+
+For broader duplicate hunting, run the full profile. Full adds shape index, function-clone cues, call graph, barrel discipline, and topology evidence. It can surface exact/near structural duplication, but it still does not claim that renamed implementations such as `deepMerge` and `MergeWithValues` are the same concept unless machine evidence already connects them. That kind of semantic equivalence belongs to code reading, embeddings, or human review.
+
+**Q. Why can post-write feel as expensive as a quick scan?**
+Post-write refreshes the after-snapshot before comparing it to the matching pre-write advisory, so small edits can still pay the repository walk cost. Reusing the same `--output` keeps artifacts together; an incremental post-write cache is planned, but the current default favors a fresh comparison over a stale clean result.
 
 **Q. Does it call a model or subagent by itself?**
 No. Full and CI profiles may write `audit-review-pack.latest.md`, but that file does not call any model or API by itself. In Claude Code, the main assistant can turn a lane into a focused codebase-reading assignment. Subagents should inspect repository files directly and report file:line evidence.

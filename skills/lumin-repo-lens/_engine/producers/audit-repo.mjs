@@ -62,6 +62,10 @@ import { detectMaintainerSelfAuditExcludes, mergeExcludes } from '../lib/self-au
 import { runCanonDraftLifecycle } from '../lib/audit-canon-draft.mjs';
 import { runCheckCanonLifecycle } from '../lib/audit-check-canon.mjs';
 import {
+  clearIncrementalCache,
+  openIncrementalCacheStore,
+} from '../lib/incremental-cache-store.mjs';
+import {
   buildManifestEvidence,
   collectProducedArtifacts,
   refreshManifestEvidence,
@@ -104,6 +108,10 @@ Flags:
   --no-tests               exclude test files
   --exclude-tests          exclude test files
   --exclude <pattern>      repeatable dir-segment or file-path exclusion
+  --no-incremental        force cold producer artifacts where incremental is supported
+  --cache-root <path>     stable incremental cache root (default: <root>/.audit/.cache)
+  --clear-incremental-cache
+                           clear this repo's incremental cache before supported producers run
   --no-self-audit-excludes do not auto-exclude maintainer lab/corpus mirrors
   --strict-post-write      exit 2 when post-write orchestration cannot run
   --strict-post-write-confidence
@@ -159,6 +167,9 @@ const CLI_OPTIONS = {
   'no-include-tests': { type: 'boolean', default: false },
   'no-fresh-audit': { type: 'boolean', default: false },
   'no-self-audit-excludes': { type: 'boolean', default: false },
+  'no-incremental': { type: 'boolean', default: false },
+  'cache-root': { type: 'string' },
+  'clear-incremental-cache': { type: 'boolean', default: false },
   exclude: { type: 'string', multiple: true, default: [] },
   // P2-2 follow-up: strict mode converts manifest.postWrite.ran === false
   // into exit code 2. Closes the "silent CI green on unreadable advisory"
@@ -262,8 +273,21 @@ if (!['quick', 'full', 'ci'].includes(PROFILE)) {
   process.exit(1);
 }
 
+if (values['clear-incremental-cache'] === true) {
+  const cacheStore = openIncrementalCacheStore({
+    root: ROOT,
+    cacheRoot: values['cache-root'],
+  });
+  clearIncrementalCache(cacheStore);
+}
+
 const commandsRun = [];
 const skipped = [];
+const INCREMENTAL_PRODUCER_STEPS = new Set([
+  'build-symbol-graph.mjs',
+  'build-shape-index.mjs',
+  'build-function-clone-index.mjs',
+]);
 
 const loadIfExists = (name) => loadArtifact(OUT, name);
 
@@ -271,6 +295,13 @@ function forwardedScanArgs() {
   const args = [];
   if (!INCLUDE_TESTS) args.push('--production');
   for (const exc of EFFECTIVE_EXCLUDES) args.push('--exclude', exc);
+  return args;
+}
+
+function forwardedIncrementalArgs() {
+  const args = [];
+  if (values['no-incremental'] === true) args.push('--no-incremental');
+  if (values['cache-root']) args.push('--cache-root', path.resolve(values['cache-root']));
   return args;
 }
 
@@ -344,6 +375,7 @@ function runStep(scriptRelPath, { required = false, precondition = null, reason 
     '--root', ROOT,
     '--output', OUT,
     ...forwardedScanArgs(),
+    ...(INCREMENTAL_PRODUCER_STEPS.has(name) ? forwardedIncrementalArgs() : []),
   ];
   const t0 = Date.now();
   try {
@@ -601,6 +633,7 @@ if (values['pre-write'] && values['post-write']) {
     if (values['delta-out']) forwardedArgs.push('--delta-out', deltaOutDir);
     if (values['no-fresh-audit']) forwardedArgs.push('--no-fresh-audit');
     forwardedArgs.push(...forwardedScanArgs());
+    forwardedArgs.push(...forwardedIncrementalArgs());
 
     try {
       _exec(process.execPath, forwardedArgs, { stdio: ['ignore', 'inherit', 'inherit'] });

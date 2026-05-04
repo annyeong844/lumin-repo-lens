@@ -111,6 +111,7 @@ export function buildSymbolsArtifact({
   symbolFanIn,
   fanInByIdentity,
   anyContaminationFacts,
+  incremental = null,
 }) {
   const artifactWarnings = [...(warnings ?? [])];
   if (parseErrors > 0) {
@@ -136,6 +137,7 @@ export function buildSymbolsArtifact({
       },
       languageSupport,
       warnings: artifactWarnings,
+      ...(incremental ? { incremental } : {}),
     },
     files: files.length,
     totalDefs: [...defIndex.values()].reduce((a, m) => a + m.size, 0),

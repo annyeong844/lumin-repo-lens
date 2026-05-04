@@ -279,7 +279,7 @@ function collectCallTokens(body) {
   return [...tokens].sort();
 }
 
-function buildFunctionFact({ entry, src, ownerFile, lineStarts, scope, observedAt }) {
+function buildFunctionFact({ entry, src, ownerFile, lineStarts, scope }) {
   const { fn, exportedName, localName, declarationKind } = entry;
   const body = functionBodyNode(fn);
   if (!body) return null;
@@ -318,7 +318,6 @@ function buildFunctionFact({ entry, src, ownerFile, lineStarts, scope, observedA
     source: 'fresh-ast-pass',
     scope,
     confidence: 'high',
-    observedAt,
     ...(generatedFile ? { generatedFile } : {}),
   };
 }
@@ -340,6 +339,49 @@ function parseErrorDiagnostic(file, message) {
     severity: 'error',
     file,
     message,
+  };
+}
+
+export function functionCloneReadErrorPayload(relFile, message) {
+  return {
+    facts: [],
+    diagnostics: [readErrorDiagnostic(relFile, `read failed: ${message}`)],
+    filesWithParseErrors: [],
+    filesWithReadErrors: [{ file: relFile, message }],
+  };
+}
+
+export function extractFunctionCloneFilePayload({ src, relFile, scope }) {
+  let parsed;
+  try {
+    parsed = parseOxcOrThrow(relFile, src);
+  } catch (e) {
+    return {
+      facts: [],
+      diagnostics: [parseErrorDiagnostic(relFile, e.message)],
+      filesWithParseErrors: [{ file: relFile, message: e.message }],
+      filesWithReadErrors: [],
+    };
+  }
+
+  const lineStarts = computeLineStarts(src);
+  const facts = [];
+  for (const entry of topLevelExportedFunctions(parsed.program)) {
+    const fact = buildFunctionFact({
+      entry,
+      src,
+      ownerFile: relFile,
+      lineStarts,
+      scope,
+    });
+    if (fact) facts.push(fact);
+  }
+
+  return {
+    facts,
+    diagnostics: [],
+    filesWithParseErrors: [],
+    filesWithReadErrors: [],
   };
 }
 
@@ -559,72 +601,45 @@ function buildNearFunctionCandidates(facts, exactBodyGroups, structureGroups) {
   return candidates.slice(0, 50);
 }
 
-export function buildFunctionCloneArtifact({
-  root,
-  files,
-  readFile,
+export function assembleFunctionCloneArtifact({
   metaBase,
   includeTests,
   exclude,
   scope,
   observedAt,
+  fileCount,
+  facts,
+  diagnostics,
+  filesWithParseErrors,
+  filesWithReadErrors,
+  incremental = null,
 }) {
-  const facts = [];
-  const diagnostics = [];
-  const filesWithParseErrors = [];
-  const filesWithReadErrors = [];
+  const stampedFacts = (facts ?? []).map((fact) => ({
+    ...fact,
+    observedAt,
+  }));
 
-  for (const abs of files) {
-    const relFile = toRel(root, abs);
-    let src;
-    try {
-      src = readFile(abs, 'utf8');
-    } catch (e) {
-      filesWithReadErrors.push({ file: relFile, message: e.message });
-      diagnostics.push(readErrorDiagnostic(relFile, `read failed: ${e.message}`));
-      continue;
-    }
-
-    let parsed;
-    try {
-      parsed = parseOxcOrThrow(relFile, src);
-    } catch (e) {
-      filesWithParseErrors.push({ file: relFile, message: e.message });
-      diagnostics.push(parseErrorDiagnostic(relFile, e.message));
-      continue;
-    }
-
-    const lineStarts = computeLineStarts(src);
-    for (const entry of topLevelExportedFunctions(parsed.program)) {
-      const fact = buildFunctionFact({
-        entry,
-        src,
-        ownerFile: relFile,
-        lineStarts,
-        scope,
-        observedAt,
-      });
-      if (fact) facts.push(fact);
-    }
-  }
-
-  facts.sort((a, b) => {
+  stampedFacts.sort((a, b) => {
     if (a.ownerFile !== b.ownerFile) return a.ownerFile < b.ownerFile ? -1 : 1;
     if ((a.line ?? 0) !== (b.line ?? 0)) return (a.line ?? 0) - (b.line ?? 0);
-    return a.exportedName.localeCompare(b.exportedName);
+    const aName = a.exportedName ?? a.identity ?? '';
+    const bName = b.exportedName ?? b.identity ?? '';
+    return aName.localeCompare(bName);
   });
-  diagnostics.sort((a, b) =>
+  const sortedDiagnostics = (diagnostics ?? []).slice().sort((a, b) =>
     (a.file ?? '').localeCompare(b.file ?? '') ||
-    (a.code ?? '').localeCompare(b.code ?? ''));
+    (a.code ?? '').localeCompare(b.code ?? '') ||
+    String(a.line ?? '').localeCompare(String(b.line ?? '')) ||
+    (a.message ?? '').localeCompare(b.message ?? ''));
 
-  const exactBodyGroups = groupFacts(facts, 'normalizedExactHash');
-  const structureGroups = groupFacts(facts, 'normalizedStructureHash');
+  const exactBodyGroups = groupFacts(stampedFacts, 'normalizedExactHash');
+  const structureGroups = groupFacts(stampedFacts, 'normalizedStructureHash');
   const nearFunctionCandidates = buildNearFunctionCandidates(
-    facts,
+    stampedFacts,
     exactBodyGroups,
     structureGroups
   );
-  const generatedFileFactCount = facts.filter((fact) => fact.generatedFile).length;
+  const generatedFileFactCount = stampedFacts.filter((fact) => fact.generatedFile).length;
 
   return {
     schemaVersion: FUNCTION_CLONE_SCHEMA_VERSION,
@@ -636,15 +651,16 @@ export function buildFunctionCloneArtifact({
       complete: filesWithReadErrors.length === 0 && filesWithParseErrors.length === 0,
       includeTests: includeTests === true,
       exclude: exclude ?? [],
-      fileCount: files.length,
-      factCount: facts.length,
+      fileCount,
+      factCount: stampedFacts.length,
       generatedFileFactCount,
       exactBodyGroupCount: exactBodyGroups.filter((g) => !g.generatedOnly).length,
       structureGroupCount: structureGroups.filter((g) => !g.generatedOnly).length,
       nearFunctionCandidateCount: nearFunctionCandidates.filter((g) => !g.generatedOnly).length,
-      diagnosticCount: diagnostics.length,
+      diagnosticCount: sortedDiagnostics.length,
       filesWithParseErrors,
       filesWithReadErrors,
+      ...(incremental ? { incremental } : {}),
       supports: {
         exportedTopLevelFunctions: true,
         exportedConstArrowFunctions: true,
@@ -659,10 +675,62 @@ export function buildFunctionCloneArtifact({
       },
       caveat: 'Function clone groups and near candidates are deterministic review cues. They do not prove semantic equivalence or justify automatic merging.',
     },
-    facts,
+    facts: stampedFacts,
     exactBodyGroups,
     structureGroups,
     nearFunctionCandidates,
-    diagnostics,
+    diagnostics: sortedDiagnostics,
   };
+}
+
+export function buildFunctionCloneArtifact({
+  root,
+  files,
+  readFile,
+  metaBase,
+  includeTests,
+  exclude,
+  scope,
+  observedAt,
+}) {
+  const aggregate = {
+    facts: [],
+    diagnostics: [],
+    filesWithParseErrors: [],
+    filesWithReadErrors: [],
+  };
+
+  function appendPayload(payload) {
+    aggregate.facts.push(...(payload.facts ?? []));
+    aggregate.diagnostics.push(...(payload.diagnostics ?? []));
+    aggregate.filesWithParseErrors.push(...(payload.filesWithParseErrors ?? []));
+    aggregate.filesWithReadErrors.push(...(payload.filesWithReadErrors ?? []));
+  }
+
+  for (const abs of files) {
+    const relFile = toRel(root, abs);
+    let src;
+    try {
+      src = readFile(abs, 'utf8');
+    } catch (e) {
+      appendPayload(functionCloneReadErrorPayload(relFile, e.message));
+      continue;
+    }
+
+    appendPayload(extractFunctionCloneFilePayload({
+      src,
+      relFile,
+      scope,
+    }));
+  }
+
+  return assembleFunctionCloneArtifact({
+    metaBase,
+    includeTests,
+    exclude,
+    scope,
+    observedAt,
+    fileCount: files.length,
+    ...aggregate,
+  });
 }

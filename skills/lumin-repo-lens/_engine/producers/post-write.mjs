@@ -7,6 +7,9 @@
 //   --pre-write-advisory <file>  advisory JSON (required)
 //   --delta-out <dir>            where delta artifact lands (defaults to --output)
 //   --no-fresh-audit             skip cold-cache spawn of any-inventory.mjs
+//   --no-incremental             force cold after-inventory generation
+//   --cache-root <dir>           stable incremental cache root for after-inventory
+//   --clear-incremental-cache    clear this repo's incremental cache before after-inventory
 //   --include-tests / --no-include-tests / --production / --exclude
 //                                forwarded to any-inventory.mjs
 //
@@ -42,6 +45,9 @@ const args = parseCliArgs({
   'pre-write-advisory': { type: 'string' },
   'delta-out': { type: 'string' },
   'no-fresh-audit': { type: 'boolean', default: false },
+  'no-incremental': { type: 'boolean', default: false },
+  'cache-root': { type: 'string' },
+  'clear-incremental-cache': { type: 'boolean', default: false },
 });
 
 const advisoryFlag = args.raw?.['pre-write-advisory'];
@@ -73,6 +79,9 @@ if (!noFreshAudit) {
   // Match pre-write hook convention: includeTests===false → --production flag.
   if (args.includeTests === false) hookArgs.push('--production');
   for (const exc of (args.exclude ?? [])) hookArgs.push('--exclude', exc);
+  if (args.raw?.['no-incremental'] === true) hookArgs.push('--no-incremental');
+  if (args.raw?.['cache-root']) hookArgs.push('--cache-root', path.resolve(args.raw['cache-root']));
+  if (args.raw?.['clear-incremental-cache'] === true) hookArgs.push('--clear-incremental-cache');
 
   process.stderr.write(`[post-write] running any-inventory.mjs for after-snapshot\n`);
   try {

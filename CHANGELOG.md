@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Write-gate feedback fixes
+
+- Load absolute `preWrite.anyInventoryPath` values as exact paths during
+  post-write, instead of joining them under the advisory or output directory.
+- Prefer strong two-token basename-prefix siblings such as `merge-with-*`
+  before falling back to broad single-token domain clusters.
+- Clarify README expectations: pre-write is the fast name/path/topology
+  transaction gate, full profile carries broader duplicate evidence, semantic
+  equivalence still requires code reading or embedding, and post-write
+  currently pays for a fresh after-snapshot.
+- Move the first-run README path from the quick profile to `:full`, so shape
+  index, function-clone, public-surface policy, and post-write workflow value
+  are visible before users judge the tool as a dead-export sorter.
+
 ## 0.9.0-beta.13 - 2026-05-04
 
 ### Self-audit export surface cleanup

@@ -45,12 +45,13 @@ export const TIER_TO_SARIF_LEVEL = {
  *                            safeAction?}
  * @param {object} evidence   {runtime?: {status, grounding, confidence,
  *                            hitsInSymbol}, staleness?: {tier,
- *                            grounding, lineLastTouchedDaysAgo}, policy?:
- *                            {excluded, reason}, resolver?: {unresolvedRatio}}
+ *                            grounding, lineLastTouchedDaysAgo}, contract?:
+ *                            {publicDeepImportRisk}, policy?: {excluded,
+ *                            reason}, resolver?: {unresolvedRatio}}
  * @returns {{tier: string, reason: string}}
  */
 export function tierForFinding(finding, evidence = {}) {
-  const { runtime, staleness, policy, resolver } = evidence;
+  const { runtime, staleness, contract, policy, resolver } = evidence;
 
   // ─── MUTED: explicit policy exclusion ────────────────────
   // Classifier already dropped these into the `excluded.*` counters
@@ -169,6 +170,16 @@ export function tierForFinding(finding, evidence = {}) {
       };
     }
     return { tier: 'REVIEW_FIX', reason: 'missing-safe-action-proof' };
+  }
+
+  // ─── REVIEW_FIX: externally observable deep-import contract ─
+  // PCEF contract proof: in publishable packages without an exports
+  // map that closes internals, external consumers can deep-import a
+  // file even when the constructed repo graph has no local consumer.
+  // Demotion preserves local runtime behavior but still removes that
+  // export contract, so keep the action review-visible.
+  if (contract?.publicDeepImportRisk) {
+    return { tier: 'REVIEW_FIX', reason: 'public-deep-import-risk' };
   }
 
   if (!hasSoftTaint && !weakRuntimeStatus) {

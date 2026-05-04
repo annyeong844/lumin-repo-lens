@@ -33,7 +33,7 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { mapOutputToSource } from './alias-map.mjs';
-import { fileExists, dirExists } from './paths.mjs';
+import { fileExists, dirExists, relPath } from './paths.mjs';
 import { fileIsInsideScope, matchSpec } from './tsconfig-paths.mjs';
 
 const RESOLVE_FILE_EXTS = [
@@ -179,6 +179,46 @@ function resolveScopedTsconfig(fromFile, spec, scoped) {
   return undefined;
 }
 
+function unresolvedHintForCandidates(candidates) {
+  return candidates.some((c) =>
+    /(^|\/)(generated|__generated__|gen)(\/|$)/i.test(String(c).replace(/\\/g, '/')))
+    ? 'generated-artifact-missing'
+    : undefined;
+}
+
+function unresolvedRecord(root, reason, details = {}) {
+  const targetCandidates = (details.targetCandidates ?? [])
+    .filter((p) => typeof p === 'string' && p.length > 0)
+    .map((p) => relPath(root, p));
+  return {
+    reason,
+    ...(details.stage ? { resolverStage: details.stage } : {}),
+    ...(details.matchedPattern ? { matchedPattern: details.matchedPattern } : {}),
+    ...(details.source ? { source: details.source } : {}),
+    ...(targetCandidates.length ? { targetCandidates: [...new Set(targetCandidates)].slice(0, 8) } : {}),
+    ...(details.hint ? { hint: details.hint } : {}),
+  };
+}
+
+function explainScopedTsconfig(root, fromFile, spec, scoped) {
+  for (const entry of scoped) {
+    if (!fileIsInsideScope(fromFile, entry.scopeDir)) continue;
+    const star = matchSpec(spec, entry);
+    if (star === null) continue;
+    const candidates = entry.targets.map((target) => {
+      const substituted = entry.wildcard ? target.replace('*', star) : target;
+      return path.resolve(entry.baseUrlDir, substituted);
+    });
+    return unresolvedRecord(root, 'tsconfig-path-target-missing', {
+      stage: 'tsconfig-paths',
+      matchedPattern: entry.key,
+      targetCandidates: candidates,
+      hint: unresolvedHintForCandidates(candidates),
+    });
+  }
+  return null;
+}
+
 // ── Stage 3: scoped tsconfig baseUrl ─────────────────────
 //
 // TypeScript resolves non-relative imports against baseUrl before
@@ -213,6 +253,23 @@ function resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls) {
   return undefined;
 }
 
+function explainScopedBaseUrl(root, fromFile, spec, scopedBaseUrls) {
+  for (const entry of scopedBaseUrls) {
+    if (!fileIsInsideScope(fromFile, entry.scopeDir)) continue;
+
+    const literal = path.resolve(entry.baseUrlDir, spec);
+    const firstSegment = firstSegmentCandidate(entry.baseUrlDir, spec);
+    if (firstSegment && (dirExists(firstSegment) || probeTarget(firstSegment))) {
+      return unresolvedRecord(root, 'baseurl-target-missing', {
+        stage: 'tsconfig-baseurl',
+        matchedPattern: entry.scopeDir,
+        targetCandidates: [literal],
+      });
+    }
+  }
+  return null;
+}
+
 // ── Stage 4: exact alias ─────────────────────────────────
 
 function resolveExactAlias(spec, aliasMap) {
@@ -223,6 +280,19 @@ function resolveExactAlias(spec, aliasMap) {
   // resolve to a concrete file, surface resolver blindness instead of
   // falling through as if nothing matched.
   return probeTarget(entry.path) ?? 'UNRESOLVED_INTERNAL';
+}
+
+function explainExactAlias(root, spec, aliasMap) {
+  if (!aliasMap.has(spec)) return null;
+  const entry = aliasMap.get(spec);
+  if (entry.type !== 'exact') return null;
+  return unresolvedRecord(root, 'exact-alias-target-missing', {
+    stage: 'exact-alias',
+    matchedPattern: spec,
+    source: entry.source,
+    targetCandidates: [entry.path],
+    hint: unresolvedHintForCandidates([entry.path]),
+  });
 }
 
 // ── Stage 5: wildcard alias lookup ───────────────────────
@@ -270,6 +340,40 @@ function resolveWildcard(spec, aliasMap) {
   return 'UNRESOLVED_INTERNAL';
 }
 
+function bestWildcardMatch(spec, aliasMap) {
+  let bestWildcard = null;
+  for (const [, entry] of aliasMap) {
+    if (entry.type !== 'wildcard') continue;
+    if (!spec.startsWith(entry.matchPrefix)) continue;
+    if (entry.matchSuffix && !spec.endsWith(entry.matchSuffix)) continue;
+    const starEnd = entry.matchSuffix ? spec.length - entry.matchSuffix.length : spec.length;
+    const star = spec.slice(entry.matchPrefix.length, starEnd);
+    if (star.length === 0) continue;
+    if (!bestWildcard || entry.matchPrefix.length > bestWildcard.entry.matchPrefix.length) {
+      bestWildcard = { entry, star };
+    }
+  }
+  return bestWildcard;
+}
+
+function explainWildcard(root, spec, aliasMap) {
+  const match = bestWildcardMatch(spec, aliasMap);
+  if (!match) return null;
+  const { entry, star } = match;
+  const substituted = entry.targetPattern.replace('*', star);
+  const literal = path.join(entry.pkgDir, substituted.replace(/^\.\//, ''));
+  const remapped = mapOutputToSource(entry.pkgDir, substituted);
+  return unresolvedRecord(root, entry.legacySubpath
+    ? 'workspace-package-subpath-target-missing'
+    : 'wildcard-alias-target-missing', {
+      stage: 'wildcard-alias',
+      matchedPattern: entry.legacySubpath ? `${entry.pkgName}/*` : `${entry.matchPrefix}*${entry.matchSuffix ?? ''}`,
+      source: entry.source,
+      targetCandidates: [literal, remapped],
+      hint: unresolvedHintForCandidates([literal, remapped]),
+    });
+}
+
 // ── Stage 6: hash-wildcard (Node #imports subpath) ───────
 
 function resolveHashWildcard(spec, aliasMap) {
@@ -299,6 +403,30 @@ function resolveHashWildcard(spec, aliasMap) {
     }
   }
   return matched ? 'UNRESOLVED_INTERNAL' : undefined;
+}
+
+function explainHashWildcard(root, spec, aliasMap) {
+  for (const [, entry] of aliasMap) {
+    if (entry.type !== 'hash-wildcard') continue;
+    if (!spec.startsWith(entry.keyPrefix)) continue;
+    if (entry.keySuffix && !spec.endsWith(entry.keySuffix)) continue;
+    const starEnd = entry.keySuffix ? spec.length - entry.keySuffix.length : spec.length;
+    const tail = spec.slice(entry.keyPrefix.length, starEnd);
+    if (tail.length === 0) continue;
+    const targetPatterns = Array.isArray(entry.targetPatterns) && entry.targetPatterns.length
+      ? entry.targetPatterns
+      : [entry.targetPattern];
+    const candidates = targetPatterns.map((targetPattern) =>
+      path.join(entry.pkgDir, targetPattern.replace('*', tail)));
+    return unresolvedRecord(root, 'hash-import-target-missing', {
+      stage: 'hash-imports',
+      matchedPattern: `${entry.keyPrefix}*${entry.keySuffix ?? ''}`,
+      source: entry.source,
+      targetCandidates: candidates,
+      hint: unresolvedHintForCandidates(candidates),
+    });
+  }
+  return null;
 }
 
 // ── Stage 7: root-prefix (FP-16) ─────────────────────────
@@ -333,6 +461,35 @@ function resolveRootPrefix(spec, root) {
   }
 
   return undefined;
+}
+
+export function explainUnresolvedSpecifier(root, aliasMap, fromFile, spec) {
+  if (!spec || typeof spec !== 'string') return null;
+  if (spec.startsWith('.')) {
+    return unresolvedRecord(root, 'relative-target-missing', {
+      stage: 'relative',
+      targetCandidates: [path.resolve(path.dirname(fromFile), spec)],
+    });
+  }
+
+  const scoped = Array.isArray(aliasMap.scopedTsconfigPaths)
+    ? [...aliasMap.scopedTsconfigPaths].sort((a, b) => {
+        const depthDelta = b.scopeDir.length - a.scopeDir.length;
+        if (depthDelta !== 0) return depthDelta;
+        return b.matchPrefix.length - a.matchPrefix.length;
+      })
+    : [];
+  const scopedBaseUrls = Array.isArray(aliasMap.scopedTsconfigBaseUrls)
+    ? [...aliasMap.scopedTsconfigBaseUrls].sort((a, b) =>
+        b.scopeDir.length - a.scopeDir.length)
+    : [];
+
+  return explainScopedTsconfig(root, fromFile, spec, scoped) ??
+    explainScopedBaseUrl(root, fromFile, spec, scopedBaseUrls) ??
+    explainExactAlias(root, spec, aliasMap) ??
+    explainWildcard(root, spec, aliasMap) ??
+    explainHashWildcard(root, spec, aliasMap) ??
+    unresolvedRecord(root, 'unknown-internal-resolution');
 }
 
 // ── Orchestrator ─────────────────────────────────────────

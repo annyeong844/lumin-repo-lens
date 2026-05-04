@@ -13,7 +13,8 @@ import path from 'node:path';
 // <message>`; omit `tag` to keep parse failures silent (matches the
 // pre-consolidation behavior of audit-repo / emit-sarif).
 export function loadIfExists(dir, name, { tag } = {}) {
-  return readJsonFile(path.join(dir, name), { tag });
+  const filePath = path.isAbsolute(name) ? name : path.join(dir, name);
+  return readJsonFile(filePath, { tag });
 }
 
 // Read and parse a JSON file at `filePath`.

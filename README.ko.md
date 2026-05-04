@@ -28,7 +28,7 @@ AI가 신나게 새 파일 만들어요 → `lib/cardNewsService.js` ✨
 
 ---
 
-## 30초 빠른 시작
+## 첫 번째 제대로 보기
 
 **1. Claude Code에 플러그인 설치**
 
@@ -36,15 +36,33 @@ AI가 신나게 새 파일 만들어요 → `lib/cardNewsService.js` ✨
 /plugin install lumin-repo-lens@annyeong844-marketplace
 ```
 
-**2. 저장소 한 번 봐달라고 하기**
+**2. 첫 점검은 full로 보기**
 
 ```
-/lumin-repo-lens
+/lumin-repo-lens:full
 ```
 
-→ 끝! 십몇 초 후에 *"이건 안전, 이건 깔끔히, 이건 그대로 둬도 됨"* 이렇게 친절히 알려줘요.
+→ 이때 Lumin의 진짜 비싼 증거들이 켜져요. shape index, function-clone cue,
+call graph, barrel discipline, topology, public-surface 정책, grounded review
+profile까지 같이 봅니다.
+
+**3. 코드를 바꾸기 전후엔 write gate 쓰기**
+
+```
+/lumin-repo-lens:pre-write
+# 코드 변경
+/lumin-repo-lens:post-write
+```
+
+Claude Code에서는 compact intent를 assistant가 내부에서 추론해요. intent JSON을
+사용자가 직접 쓸 필요는 없습니다.
 
 > 💡 처음 한 번은 의존성을 자동으로 깔아요 (≈30초). 그다음부터는 빠름.
+> 이미 fresh baseline이 있으면 작은 후속 확인은 `/lumin-repo-lens` quick path로 충분합니다.
+
+아주 큰 저장소에서는 full profile을 매 edit마다 자동으로 돌리지 마세요. `:full`은
+브랜치당 1회, 첫 점검, 또는 큰 리팩토링 리뷰에 쓰고, agent loop 중에는
+pre-write/post-write와 quick 후속 확인을 쓰는 흐름이 맞습니다.
 
 ---
 
@@ -69,10 +87,10 @@ AI가 신나게 새 파일 만들어요 → `lib/cardNewsService.js` ✨
 
 | 명령 | 언제 써요? |
 |---|---|
-| `/lumin-repo-lens:audit` | 저장소 전체 한 번 살피기 — *"내 코드 어떤 상태야?"* |
-| `/lumin-repo-lens:full` | full profile로 깊게 보기 — *"처음 점검/큰 리팩토링 뒤에 제대로 봐줘"* |
+| `/lumin-repo-lens:full` | full evidence profile — 첫 점검, 큰 리팩토링 뒤, shape/function-clone/call/topology 증거 보기 |
 | `/lumin-repo-lens:pre-write` | 코딩 *전에* 짚어주기 — *"이거 만들기 전에 이미 있는지 봐줘"* |
 | `/lumin-repo-lens:post-write` | 코딩 *후에* 검증 — *"방금 바꾼 거 다른 데 영향 안 갔어?"* |
+| `/lumin-repo-lens:audit` | fresh artifact 위에서 작은 후속 확인을 빠르게 보기 |
 | `/lumin-repo-lens:canon-draft` | 저장소 규칙 문서화 — *"우리 코드 패턴 정리해줘"* |
 | `/lumin-repo-lens:check-canon` | 그 규칙 지켜졌는지 확인 — *"누가 규칙 깼나?"* |
 
@@ -140,6 +158,14 @@ LUMIN_REPO_LENS_NO_AUTO_INSTALL=1 lumin-repo-lens --root .
 
 **Q. 너무 큰 저장소예요. 느리지 않아요?**
 파일 200–300개 기준으로 *quick* 프로필은 십몇 초, *full* 프로필은 30초–1분 정도. 처음엔 quick으로 시작해보세요.
+
+**Q. pre-write가 의미적 중복까지 이해하나요?**
+아니요. pre-write는 빠른 transaction gate라서 이름, 경로, import, shape, topology처럼 기계가 근거로 잡은 신호만 봅니다. 정확한 심볼, 가까운 이름, 기존 파일, `merge-with-*` 같은 같은 디렉터리 prefix/token family는 잡을 수 있어요.
+
+더 넓은 중복 탐지는 full profile이 맡습니다. full은 shape index, function-clone cue, call graph, barrel discipline, topology evidence까지 더 봅니다. 그래서 exact/near structural duplication은 훨씬 잘 드러내지만, `deepMerge`와 `MergeWithValues`처럼 이름이 완전히 다른 구현이 같은 개념이라는 주장은 machine evidence 없이 하지 않습니다. 그런 semantic equivalence는 코드 읽기, embedding, 또는 사람 리뷰 영역입니다.
+
+**Q. post-write가 왜 quick scan만큼 무겁게 느껴질 수 있나요?**
+post-write는 같은 pre-write advisory와 비교할 after snapshot을 새로 갱신합니다. 그래서 작은 수정이어도 저장소 walk 비용을 낼 수 있어요. 같은 `--output`을 재사용하면 artifact는 함께 모이고, incremental post-write cache는 다음 최적화 후보입니다. 현재 기본값은 오래된 clean 결과보다 fresh comparison을 우선합니다.
 
 **Q. 영어 README는 따로 있어요?**
 [README.md](./README.md) 가 영어 버전이에요.

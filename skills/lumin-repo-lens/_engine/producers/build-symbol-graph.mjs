@@ -18,8 +18,7 @@ import { pythonExtractShape } from '../lib/extract-py.mjs';
 import { parseCliArgs } from '../lib/cli.mjs';
 import { detectRepoMode } from '../lib/repo-mode.mjs';
 import { buildAliasMap } from '../lib/alias-map.mjs';
-import { makeResolver } from '../lib/resolver-core.mjs';
-import { collectFiles } from '../lib/collect-files.mjs';
+import { explainUnresolvedSpecifier, makeResolver } from '../lib/resolver-core.mjs';
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
 import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
 import { isTestLikePath } from '../lib/test-paths.mjs';
@@ -27,11 +26,19 @@ import { relPath, buildSubmoduleResolver } from '../lib/paths.mjs';
 import { buildSymbolsArtifact } from '../lib/symbol-graph-artifact.mjs';
 import { buildAnyContaminationFacts } from '../lib/any-contamination.mjs';
 import {
-  loadCache,
-  saveCache,
-  pickChangedFiles,
-  cacheBanner,
-} from '../lib/incremental.mjs';
+  buildContextFingerprint,
+  buildRepoSnapshot,
+  STRICT_IDENTITY_MODE,
+} from '../lib/incremental-snapshot.mjs';
+import {
+  clearIncrementalCache,
+  getReusableFact,
+  loadProducerCache,
+  openIncrementalCacheStore,
+  putFact,
+  saveProducerCache,
+  strictCacheKeyForEntry,
+} from '../lib/incremental-cache-store.mjs';
 import {
   isPythonAvailable,
   extractPythonBatch,
@@ -46,9 +53,11 @@ import {
 
 const cli = parseCliArgs({
   incremental: { type: 'boolean', default: false },
+  'no-incremental': { type: 'boolean', default: false },
+  'cache-root': { type: 'string' },
+  'clear-incremental-cache': { type: 'boolean', default: false },
 });
 const { root: ROOT, output, verbose } = cli;
-const isIncremental = !!cli.raw.incremental;
 const pyEnabled = isPythonAvailable();
 const tsEnabled = await isTreeSitterAvailable();
 const goModule = findGoModule(ROOT);
@@ -107,23 +116,108 @@ if (verbose) console.error(`[symbols] root: ${ROOT}, mode: ${repoMode.mode}`);
 const langList = [...JS_FAMILY_LANGS];
 if (pyEnabled) langList.push('py');
 if (tsEnabled) langList.push('go');
-const files = collectFiles(ROOT, {
+
+const PRODUCER_ID = 'symbols';
+const PRODUCER_VERSION = 1;
+const FACT_SCHEMA_VERSION = 1;
+const PARSER_IDENTITY = 'symbol-graph-extractors:v1';
+
+const contextFingerprint = buildContextFingerprint({
   includeTests: cli.includeTests,
   exclude: cli.exclude,
   languages: langList,
+  producerContext: {
+    producer: PRODUCER_ID,
+    producerVersion: PRODUCER_VERSION,
+    factSchemaVersion: FACT_SCHEMA_VERSION,
+    parserIdentity: PARSER_IDENTITY,
+    repoMode: repoMode.mode,
+    pythonEnabled: pyEnabled,
+    treeSitterEnabled: tsEnabled,
+  },
 });
+const snapshot = buildRepoSnapshot({
+  root: ROOT,
+  includeTests: cli.includeTests,
+  exclude: cli.exclude,
+  languages: langList,
+  contextFingerprint,
+});
+const snapshotEntries = Object.values(snapshot.files);
+const files = snapshotEntries.map((entry) => entry.absPath);
 const pyTotal = files.filter((f) => f.endsWith('.py')).length;
 const goTotal = files.filter((f) => f.endsWith('.go')).length;
 console.error(
   `[symbols] scanning ${files.length} files (python=${pyEnabled ? `on, ${pyTotal} .py` : 'off'}, go=${tsEnabled ? `on, ${goTotal} .go` : 'off'})`
 );
 
-const cache = isIncremental ? loadCache(output, 'symbols') : { version: 1, entries: {} };
-const { changed, unchanged, dropped, nextCache } = isIncremental
-  ? pickChangedFiles(files, cache)
-  : { changed: files, unchanged: [], dropped: [], nextCache: { version: 1, entries: {} } };
+const incrementalEnabled = cli.raw?.['no-incremental'] !== true;
+const cacheStore = openIncrementalCacheStore({
+  root: ROOT,
+  cacheRoot: cli.raw?.['cache-root'],
+});
+if (cli.raw?.['clear-incremental-cache'] === true) {
+  clearIncrementalCache(cacheStore);
+}
 
-if (isIncremental) console.error(cacheBanner('symbols', changed, unchanged, dropped));
+const producerCacheMeta = {
+  producerId: PRODUCER_ID,
+  producerVersion: PRODUCER_VERSION,
+  factSchemaVersion: FACT_SCHEMA_VERSION,
+  parserIdentity: PARSER_IDENTITY,
+  scanFingerprint: contextFingerprint,
+  configFingerprint: contextFingerprint,
+};
+const priorCache = incrementalEnabled
+  ? loadProducerCache(cacheStore, PRODUCER_ID)
+  : { entries: {}, meta: { loadStatus: 'disabled' } };
+const nextProducerCache = { entries: {}, meta: { loadStatus: 'new' } };
+const nextCache = { version: 1, entries: {} };
+const currentStrictKeys = new Set();
+const changed = [];
+let changedFiles = 0;
+let reusedFiles = 0;
+let invalidatedFiles = 0;
+
+for (const entry of snapshotEntries) {
+  currentStrictKeys.add(strictCacheKeyForEntry(entry));
+
+  if (!entry.readable) {
+    changedFiles++;
+    nextCache.entries[entry.absPath] = { parseError: true };
+    continue;
+  }
+
+  const reuse = incrementalEnabled
+    ? getReusableFact(priorCache, { snapshotEntry: entry, producerMeta: producerCacheMeta })
+    : { status: 'miss', reason: 'disabled-by-flag' };
+
+  if (reuse.status === 'hit') {
+    reusedFiles++;
+    nextCache.entries[entry.absPath] = reuse.payload;
+    putFact(nextProducerCache, {
+      snapshotEntry: entry,
+      producerMeta: producerCacheMeta,
+      payload: reuse.payload,
+    });
+    continue;
+  }
+
+  if (reuse.reason !== 'missing-entry' && reuse.reason !== 'disabled-by-flag') {
+    invalidatedFiles++;
+  }
+  changedFiles++;
+  changed.push(entry.absPath);
+}
+
+const droppedFiles = Object.keys(priorCache.entries ?? {})
+  .filter((key) => !currentStrictKeys.has(key)).length;
+
+if (incrementalEnabled) {
+  console.error(
+    `[symbols-incremental] changed=${changedFiles} reused=${reusedFiles} dropped=${droppedFiles} invalidated=${invalidatedFiles}`
+  );
+}
 
 // Pre-batch Python files among the changed set.
 const changedPy = changed.filter((f) => f.endsWith('.py'));
@@ -177,6 +271,7 @@ if (changedTs.length > 0 && tsEnabled) {
 
 let parseErrors = 0;
 for (const f of changed) {
+  const entry = snapshot.files[relPath(ROOT, f)];
   try {
     let payload;
     if (f.endsWith('.py')) {
@@ -184,7 +279,14 @@ for (const f of changed) {
       if (!pyRec || pyRec.error) {
         parseErrors++;
         if (pyRec?.error && verbose) console.error(`py fail: ${f}: ${pyRec.error}`);
-        nextCache.entries[f] = { ...(nextCache.entries[f] ?? {}), parseError: true };
+        nextCache.entries[f] = { parseError: true };
+        if (incrementalEnabled && entry) {
+          putFact(nextProducerCache, {
+            snapshotEntry: entry,
+            producerMeta: producerCacheMeta,
+            payload: nextCache.entries[f],
+          });
+        }
         continue;
       }
       payload = pythonExtractShape(f, pyRec);
@@ -193,25 +295,44 @@ for (const f of changed) {
       if (!goRec || goRec.error) {
         parseErrors++;
         if (goRec?.error && verbose) console.error(`go fail: ${f}: ${goRec.error}`);
-        nextCache.entries[f] = { ...(nextCache.entries[f] ?? {}), parseError: true };
+        nextCache.entries[f] = { parseError: true };
+        if (incrementalEnabled && entry) {
+          putFact(nextProducerCache, {
+            snapshotEntry: entry,
+            producerMeta: producerCacheMeta,
+            payload: nextCache.entries[f],
+          });
+        }
         continue;
       }
       payload = goExtractShape(f, goRec);
     } else {
       payload = extractDefinitionsAndUses(f, { artifactFilePath: relPath(ROOT, f) });
     }
-    nextCache.entries[f] = { ...(nextCache.entries[f] ?? {}), ...payload, parseError: false };
+    nextCache.entries[f] = { ...payload, parseError: false };
+    if (incrementalEnabled && entry) {
+      putFact(nextProducerCache, {
+        snapshotEntry: entry,
+        producerMeta: producerCacheMeta,
+        payload: nextCache.entries[f],
+      });
+    }
   } catch (e) {
     parseErrors++;
     console.error(`parse fail: ${f}: ${e.message}`);
-    nextCache.entries[f] = { ...(nextCache.entries[f] ?? {}), parseError: true };
+    nextCache.entries[f] = { parseError: true };
+    if (incrementalEnabled && entry) {
+      putFact(nextProducerCache, {
+        snapshotEntry: entry,
+        producerMeta: producerCacheMeta,
+        payload: nextCache.entries[f],
+      });
+    }
   }
 }
-// Cached parse errors still count in aggregate:
-if (isIncremental) {
-  for (const f of unchanged) {
-    if (nextCache.entries[f]?.parseError) parseErrors++;
-  }
+// Cached parse errors still count in aggregate.
+for (const [f, entry] of Object.entries(nextCache.entries)) {
+  if (!changed.includes(f) && entry?.parseError) parseErrors++;
 }
 
 const fileData = new Map();
@@ -233,7 +354,7 @@ for (const [f, entry] of Object.entries(nextCache.entries)) {
   });
 }
 
-if (isIncremental) saveCache(output, 'symbols', nextCache);
+if (incrementalEnabled) saveProducerCache(cacheStore, PRODUCER_ID, nextProducerCache);
 console.log(`[parse] errors: ${parseErrors}`);
 
 // ─── 심볼 그래프 구축 ─────────────────────────────────────
@@ -317,12 +438,14 @@ function addResolvedInternalEdge(consumerFile, target, use) {
 function recordUnresolvedInternalSpecifier(consumerFile, use) {
   const spec = typeof use === 'string' ? use : use.fromSpec;
   if (typeof spec !== 'string' || spec.length === 0) return;
+  const explanation = explainUnresolvedSpecifier(ROOT, aliasMap, consumerFile, spec) ?? {};
   unresolvedInternalSpecifiers.add(spec);
   unresolvedInternalSpecifierRecords.push({
     specifier: spec,
     consumerFile: relPath(ROOT, consumerFile),
     fromHint: relPath(ROOT, consumerFile),
     kind: typeof use === 'object' ? (use.kind ?? 'import') : 'import',
+    ...explanation,
   });
 }
 
@@ -614,6 +737,17 @@ const artifact = buildSymbolsArtifact({
   symbolFanIn,
   fanInByIdentity,
   anyContaminationFacts,
+  incremental: {
+    enabled: incrementalEnabled,
+    identityMode: incrementalEnabled ? STRICT_IDENTITY_MODE : null,
+    cacheVersion: 1,
+    cacheRoot: incrementalEnabled ? cacheStore.cacheRoot : null,
+    changedFiles,
+    reusedFiles,
+    droppedFiles,
+    invalidatedFiles,
+    reason: incrementalEnabled ? null : 'disabled-by-flag',
+  },
 });
 writeFileSync(outPath, JSON.stringify(artifact, null, 2));
 console.log(`[symbols] ${files.length} files, dead production candidates: ${deadInProd.length}`);

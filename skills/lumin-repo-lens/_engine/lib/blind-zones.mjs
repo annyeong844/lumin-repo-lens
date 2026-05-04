@@ -37,6 +37,12 @@ const SUPPORTED_LANGS = new Set([
   'go', // Go: tree-sitter-based, limited
 ]);
 
+const RESOLVER_RATIO_THRESHOLD = 0.15;
+const RESOLVER_ABSOLUTE_UNRESOLVED_THRESHOLD = 1000;
+const RESOLVER_PREFIX_CONCENTRATION_MIN_UNRESOLVED = 100;
+const RESOLVER_PREFIX_CONCENTRATION_MIN_COUNT = 100;
+const RESOLVER_PREFIX_CONCENTRATION_SHARE = 0.8;
+
 /**
  * @typedef {Object} BlindZone
  * @property {string} area
@@ -159,20 +165,52 @@ function detectByLanguageZones(triage, support, existingZones) {
   return zones;
 }
 
+function topUnresolvedReasons(records) {
+  const counts = new Map();
+  for (const rec of records ?? []) {
+    const reason = rec?.reason;
+    if (typeof reason !== 'string' || reason.length === 0) continue;
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+    .slice(0, 5);
+}
+
 function detectResolverZone(symbols) {
   const r = symbols?.uses?.unresolvedInternalRatio;
-  if (typeof r !== 'number' || r < 0.15) return null;
+  const unresolvedInternal = symbols?.uses?.unresolvedInternal;
   const top = symbols?.topUnresolvedSpecifiers?.slice(0, 3) ?? [];
+  const topCount = top[0]?.count;
+  const ratioTrigger = typeof r === 'number' && r >= RESOLVER_RATIO_THRESHOLD;
+  const absoluteTrigger =
+    typeof unresolvedInternal === 'number' &&
+    unresolvedInternal >= RESOLVER_ABSOLUTE_UNRESOLVED_THRESHOLD;
+  const prefixTrigger =
+    typeof unresolvedInternal === 'number' &&
+    unresolvedInternal >= RESOLVER_PREFIX_CONCENTRATION_MIN_UNRESOLVED &&
+    typeof topCount === 'number' &&
+    topCount >= RESOLVER_PREFIX_CONCENTRATION_MIN_COUNT &&
+    topCount / Math.max(unresolvedInternal, 1) >= RESOLVER_PREFIX_CONCENTRATION_SHARE;
+  if (!ratioTrigger && !absoluteTrigger && !prefixTrigger) return null;
+  const trigger = ratioTrigger
+    ? 'ratio'
+    : absoluteTrigger
+      ? 'absolute-count'
+      : 'prefix-concentration';
   return {
     area: 'resolver',
     severity: 'confidence-gap',
     effect: 'Tier C dead-export claims must be reviewed; ' +
-            'the resolver failed to resolve a significant fraction ' +
+            'the resolver failed to resolve a significant fraction, count, or concentrated prefix ' +
             'of internal imports. See FP-36 in references/false-positive-index.md.',
     details: {
+      trigger,
       unresolvedInternalRatio: r,
-      unresolvedInternal: symbols.uses.unresolvedInternal,
+      unresolvedInternal,
       topUnresolvedSpecifiers: top.map((t) => t.specifierPrefix ?? t),
+      topUnresolvedReasons: topUnresolvedReasons(symbols?.unresolvedInternalSpecifierRecords),
     },
   };
 }

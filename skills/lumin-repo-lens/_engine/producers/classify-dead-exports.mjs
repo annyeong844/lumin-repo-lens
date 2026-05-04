@@ -659,7 +659,6 @@ for (const d of deadList) {
   // downstream consumers (rank-fixes, SARIF, Claude) know which rung of
   // precision produced this finding.
   const aliased = isAliasedSpec(d);
-  const nameForCount = aliased ? d.localName : d.symbol;
   const astResult = astResultByEntry.get(d);
   if (!astResult) {
     const reason = oversizedAstEntries.has(d)
