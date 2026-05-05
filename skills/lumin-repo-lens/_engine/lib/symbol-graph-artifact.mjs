@@ -46,6 +46,69 @@ function buildTopUnresolvedSpecifiers({ unresolvedInternalByPrefix, prefixExampl
     });
 }
 
+function compactUnresolvedExample(record = {}) {
+  return {
+    specifier: record.specifier,
+    consumerFile: record.consumerFile,
+    kind: record.kind,
+    ...(record.resolverStage ? { resolverStage: record.resolverStage } : {}),
+    ...(record.matchedPattern ? { matchedPattern: record.matchedPattern } : {}),
+    ...(record.hint ? { hint: record.hint } : {}),
+    ...(Array.isArray(record.targetCandidates) && record.targetCandidates.length
+      ? { targetCandidates: record.targetCandidates.slice(0, 3) }
+      : {}),
+  };
+}
+
+function sortedCounterObject(counter) {
+  return Object.fromEntries([...counter.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0])));
+}
+
+function buildUnresolvedInternalSummaryByReason(records) {
+  const groups = new Map();
+
+  for (const rawRecord of records ?? []) {
+    const record = rawRecord && typeof rawRecord === 'object' ? rawRecord : {};
+    const reason = record?.reason ?? 'unknown-internal-resolution';
+    if (!groups.has(reason)) {
+      groups.set(reason, {
+        count: 0,
+        resolverStages: new Map(),
+        hints: new Map(),
+        examples: [],
+      });
+    }
+
+    const group = groups.get(reason);
+    group.count++;
+    if (record?.resolverStage) {
+      group.resolverStages.set(
+        record.resolverStage,
+        (group.resolverStages.get(record.resolverStage) ?? 0) + 1,
+      );
+    }
+    if (record?.hint) {
+      group.hints.set(record.hint, (group.hints.get(record.hint) ?? 0) + 1);
+    }
+    group.examples.push(compactUnresolvedExample(record));
+  }
+
+  return Object.fromEntries([...groups.entries()]
+    .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
+    .map(([reason, group]) => [reason, {
+      count: group.count,
+      ...(group.resolverStages.size
+        ? { resolverStages: sortedCounterObject(group.resolverStages) }
+        : {}),
+      ...(group.hints.size ? { hints: sortedCounterObject(group.hints) } : {}),
+      examples: group.examples.sort((a, b) =>
+        `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`
+          .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`))
+        .slice(0, 5),
+    }]));
+}
+
 function buildDynamicImportOpacity({ root, fileData }) {
   const dynamicImportOpacity = [];
   for (const [absFile, info] of fileData) {
@@ -134,6 +197,7 @@ export function buildSymbolsArtifact({
         dependencyImportConsumers: true,
         resolvedInternalEdges: true,
         definitionIds: true,
+        unresolvedInternalSummaryByReason: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -166,6 +230,8 @@ export function buildSymbolsArtifact({
     unresolvedInternalSpecifierRecords: [...(unresolvedInternalSpecifierRecords ?? [])].sort((a, b) =>
       `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`
         .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`)),
+    unresolvedInternalSummaryByReason:
+      buildUnresolvedInternalSummaryByReason(unresolvedInternalSpecifierRecords),
     filesWithParseErrors: buildFilesWithParseErrors({ root, entries: nextCache.entries }),
     deadTotal: dead.length,
     trulyDead: trulyDead.length,
