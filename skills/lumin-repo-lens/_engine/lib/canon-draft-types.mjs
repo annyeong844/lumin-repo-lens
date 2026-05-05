@@ -114,6 +114,20 @@ const TYPE_OWNER_KINDS = new Set([
   'TSModuleDeclaration',
 ]);
 
+function normalizeFanInSpace(record) {
+  if (!record || typeof record !== 'object') return null;
+  return {
+    value: Number.isFinite(record.value) ? record.value : 0,
+    type: Number.isFinite(record.type) ? record.type : 0,
+    broad: Number.isFinite(record.broad) ? record.broad : 0,
+  };
+}
+
+function formatFanInSpace(space) {
+  if (!space) return '—';
+  return `value ${space.value}, type ${space.type}, broad ${space.broad}`;
+}
+
 // Heuristic path match for reExportsByFile → owner-file attribution.
 // Conservative over-approximation — always correct in direction.
 function barrelReExportsFile(reExportSource, ownerFile) {
@@ -153,6 +167,7 @@ export function collectTypeIdentities({ symbols }) {
 
   const defIndex = symbols.defIndex ?? {};
   const fanInByIdentity = symbols.fanInByIdentity ?? {};
+  const fanInByIdentitySpace = symbols.fanInByIdentitySpace ?? {};
   const reExportsByFile = symbols.reExportsByFile ?? {};
 
   for (const [file, defs] of Object.entries(defIndex)) {
@@ -188,6 +203,7 @@ export function collectTypeIdentities({ symbols }) {
 
   for (const [identity, defInfo] of typeDefsByIdentity) {
     defInfo.fanIn = fanInByIdentity[identity] ?? 0;
+    defInfo.fanInSpace = normalizeFanInSpace(fanInByIdentitySpace[identity]);
   }
 
   return { typeDefsByIdentity, identitiesByName, typeUsesByIdentity, diagnostics };
@@ -258,12 +274,12 @@ export function renderTypeOwnership({
     return (a.line ?? 0) - (b.line ?? 0);
   });
 
-  lines.push('| Name | Identity | Owner | Fan-in | Status | Tags |');
-  lines.push('|------|----------|-------|-------:|--------|------|');
+  lines.push('| Name | Identity | Owner | Fan-in | Fan-in space | Status | Tags |');
+  lines.push('|------|----------|-------|-------:|--------------|--------|------|');
   for (const row of entryRows) {
     lines.push(
       `| ${codeCell(row.name)} | ${codeCell(row.identity)} | ${codeCell(row.ownerLine)} ` +
-      `| ${row.fanIn} | ${escapeMdCell(row.status + ' ' + row.marker)} | ${escapeMdCell(row.tags)} |`
+      `| ${row.fanIn} | ${escapeMdCell(row.fanInSpace)} | ${escapeMdCell(row.status + ' ' + row.marker)} | ${escapeMdCell(row.tags)} |`
     );
   }
   lines.push('');
@@ -373,6 +389,7 @@ function buildRow(def, identity, label, marker, uses) {
     ownerLine: `${def.ownerFile}:${def.line}`,
     line: def.line,
     fanIn: def.fanIn,
+    fanInSpace: formatFanInSpace(def.fanInSpace),
     status: label,
     marker,
     tags: tags.join(' '),

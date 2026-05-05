@@ -124,6 +124,40 @@ function resolveFanIn(symbols, identity) {
   };
 }
 
+function normalizeFanInSpace(record) {
+  if (!record || typeof record !== 'object') return null;
+  return {
+    value: Number.isFinite(record.value) ? record.value : 0,
+    type: Number.isFinite(record.type) ? record.type : 0,
+    broad: Number.isFinite(record.broad) ? record.broad : 0,
+  };
+}
+
+function resolveFanInSpace(symbols, identity) {
+  const supportsIdentitySpace = symbols?.meta?.supports?.identityFanInSpace === true;
+  if (!supportsIdentitySpace) {
+    return {
+      fanInSpace: null,
+      fanInSpaceConfidence: 'unavailable',
+      citation: `[확인 불가, reason: symbols.meta.supports.identityFanInSpace is not true; type/value fan-in breakdown not emitted by this producer]`,
+    };
+  }
+  const map = symbols.fanInByIdentitySpace ?? {};
+  if (identity in map) {
+    const fanInSpace = normalizeFanInSpace(map[identity]);
+    return {
+      fanInSpace,
+      fanInSpaceConfidence: 'grounded',
+      citation: `[grounded, symbols.json.fanInByIdentitySpace['${identity}'] = ${JSON.stringify(fanInSpace)}]`,
+    };
+  }
+  return {
+    fanInSpace: null,
+    fanInSpaceConfidence: 'unavailable',
+    citation: `[확인 불가, reason: supports.identityFanInSpace=true but fanInByIdentitySpace['${identity}'] is absent — producer contract violation]`,
+  };
+}
+
 // ── Contamination state classification (6-state matrix) ──────
 
 function classifyContamination(defInfo, supports) {
@@ -404,6 +438,8 @@ export function lookupName(intentName, ctx) {
 
     const fanInInfo = resolveFanIn(symbols, identity);
     citations.push(fanInInfo.citation);
+    const fanInSpaceInfo = resolveFanInSpace(symbols, identity);
+    citations.push(fanInSpaceInfo.citation);
 
     const contam = classifyContamination(defInfo, supports);
     citations.push(contam.citation);
@@ -422,9 +458,16 @@ export function lookupName(intentName, ctx) {
       exportedName: intentName,
       fanIn: fanInInfo.fanIn,
       fanInConfidence: fanInInfo.fanInConfidence,
+      fanInSpace: fanInSpaceInfo.fanInSpace,
+      fanInSpaceConfidence: fanInSpaceInfo.fanInSpaceConfidence,
       anyContamination,
       resolverConfidence: resolver.level,
-      citations: [fanInInfo.citation, contam.citation, ...(resolver.citation ? [resolver.citation] : [])],
+      citations: [
+        fanInInfo.citation,
+        fanInSpaceInfo.citation,
+        contam.citation,
+        ...(resolver.citation ? [resolver.citation] : []),
+      ],
     };
   });
 

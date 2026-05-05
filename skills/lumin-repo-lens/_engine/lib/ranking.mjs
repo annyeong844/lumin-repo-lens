@@ -36,6 +36,18 @@ export const TIER_TO_SARIF_LEVEL = {
   MUTED: null, // not emitted
 };
 
+function softTaintReasonLabels(taints) {
+  const labels = [];
+  for (const t of taints ?? []) {
+    if (t?.kind === TAINT.PARSE_ERRORS_ELSEWHERE) {
+      labels.push('parse-errors-elsewhere');
+    } else if (t?.kind === TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN) {
+      labels.push(TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN);
+    }
+  }
+  return [...new Set(labels)];
+}
+
 /**
  * Classify a single finding given its accumulated evidence.
  *
@@ -220,7 +232,7 @@ export function tierForFinding(finding, evidence = {}) {
   if (['C', 'A', 'specifier'].includes(finding.bucket) ||
       isResolvableDeclarationDependencyBucket) {
     const missing = [];
-    if (hasSoftTaint) missing.push('parse-errors-elsewhere');
+    if (hasSoftTaint) missing.push(...softTaintReasonLabels(perFindingTaint));
     if (weakRuntimeStatus) missing.push(`runtime=${runtime.status}`);
     return { tier: 'REVIEW_FIX', reason: `safe-action; missing: ${missing.join(', ') || 'none'}` };
   }

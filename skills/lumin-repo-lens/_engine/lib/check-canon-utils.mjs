@@ -20,6 +20,8 @@ export { parseNamingCanonText } from './check-canon-naming-parser.mjs';
 
 const TYPE_OWNERSHIP_COLUMNS = ['Name', 'Identity', 'Owner', 'Fan-in', 'Status', 'Tags'];
 const TYPE_OWNERSHIP_COLUMN_SET = new Set(TYPE_OWNERSHIP_COLUMNS);
+const TYPE_OWNERSHIP_COLUMNS_WITH_FAN_IN_SPACE = ['Name', 'Identity', 'Owner', 'Fan-in', 'Fan-in space', 'Status', 'Tags'];
+const TYPE_OWNERSHIP_COLUMN_SET_WITH_FAN_IN_SPACE = new Set(TYPE_OWNERSHIP_COLUMNS_WITH_FAN_IN_SPACE);
 
 // Expected column order for helper-registry per canon-drift.md §5.b.
 const HELPER_REGISTRY_COLUMNS = ['Name', 'Identity', 'Owner', 'Signature', 'Fan-in', 'Status', 'Tags', 'Any / unknown signal'];
@@ -137,6 +139,11 @@ function buildTypeOwnershipRow(cells, lineNumber) {
   };
 }
 
+function buildTypeOwnershipRowWithFanInSpace(cells, lineNumber) {
+  const [nameCell, identityCell, ownerCell, fanInCell, _fanInSpaceCell, statusCell, tagsCell] = cells;
+  return buildTypeOwnershipRow([nameCell, identityCell, ownerCell, fanInCell, statusCell, tagsCell], lineNumber);
+}
+
 function buildHelperRegistryRow(cells, lineNumber) {
   const [nameCell, identityCell, ownerCell, signatureCell, fanInCell, statusCell, tagsCell, anySignalCell] = cells;
   const id = parseIdentityCell(identityCell);
@@ -161,6 +168,11 @@ export function parseTypeOwnershipCanonText({ text, canonLabelSet }) {
     text,
     expectedColumns: TYPE_OWNERSHIP_COLUMNS,
     expectedColumnSet: TYPE_OWNERSHIP_COLUMN_SET,
+    alternateColumnSpecs: [{
+      expectedColumns: TYPE_OWNERSHIP_COLUMNS_WITH_FAN_IN_SPACE,
+      expectedColumnSet: TYPE_OWNERSHIP_COLUMN_SET_WITH_FAN_IN_SPACE,
+      buildRecord: buildTypeOwnershipRowWithFanInSpace,
+    }],
     canonLabelSet,
     buildRecord: buildTypeOwnershipRow,
     schemaTag: 'type-ownership',

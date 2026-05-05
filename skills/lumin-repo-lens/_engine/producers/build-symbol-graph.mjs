@@ -370,11 +370,23 @@ for (const [f, info] of fileData) {
 
 // consumers: Map<filePath, Map<symbolName, Set<consumerFile>>>
 const consumers = new Map();
-function addConsumer(defFile, name, consumerFile) {
+const consumerSpaces = new Map();
+function addConsumer(defFile, name, consumerFile, use = null) {
   if (!consumers.has(defFile)) consumers.set(defFile, new Map());
   const m = consumers.get(defFile);
   if (!m.has(name)) m.set(name, new Set());
   m.get(name).add(consumerFile);
+
+  if (!consumerSpaces.has(defFile)) consumerSpaces.set(defFile, new Map());
+  const bySymbol = consumerSpaces.get(defFile);
+  if (!bySymbol.has(name)) {
+    bySymbol.set(name, {
+      value: new Set(),
+      type: new Set(),
+    });
+  }
+  const space = use && typeof use === 'object' && use.typeOnly === true ? 'type' : 'value';
+  bySymbol.get(name)[space].add(consumerFile);
 }
 
 // namespace import의 정확한 사용을 모르므로 "전체 파일 사용" 으로 기록
@@ -529,7 +541,7 @@ for (const [consumerFile, info] of fileData) {
       if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
       namespaceUsers.get(target).add(consumerFile);
     } else {
-      addConsumer(target, u.name, consumerFile);
+      addConsumer(target, u.name, consumerFile, u);
     }
   }
 }
@@ -569,7 +581,7 @@ for (const u of collectMdxImportConsumers({
     if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
     namespaceUsers.get(target).add(u.consumerFile);
   } else {
-    addConsumer(target, u.name, u.consumerFile);
+    addConsumer(target, u.name, u.consumerFile, u);
   }
 }
 
@@ -639,11 +651,13 @@ const symbolFanIn = []; // { defFile, symbol, consumerCount, kind }
 // consumers" (grounded 0) from "producer didn't emit" ([확인 불가]). The
 // two-pass build below enforces the contract.
 const fanInByIdentity = Object.create(null);
+const fanInByIdentitySpace = Object.create(null);
 // Pass 1: seed every defIndex identity with 0.
 for (const [defFile, m] of defIndex) {
   const relFile = relPath(ROOT, defFile);
   for (const symbol of m.keys()) {
     fanInByIdentity[`${relFile}::${symbol}`] = 0;
+    fanInByIdentitySpace[`${relFile}::${symbol}`] = { value: 0, type: 0, broad: 0 };
   }
 }
 // Pass 2: overlay actual consumer counts.
@@ -657,6 +671,23 @@ for (const [defFile, m] of consumers) {
       kind: defIndex.get(defFile)?.get(symbol)?.kind ?? 'unknown',
     });
     fanInByIdentity[`${relFile}::${symbol}`] = cs.size;
+    const spaceConsumers = consumerSpaces.get(defFile)?.get(symbol);
+    fanInByIdentitySpace[`${relFile}::${symbol}`] = {
+      value: spaceConsumers?.value?.size ?? 0,
+      type: spaceConsumers?.type?.size ?? 0,
+      broad: namespaceUsers.get(defFile)?.size ?? 0,
+    };
+  }
+}
+for (const [defFile, broadConsumers] of namespaceUsers) {
+  const relFile = relPath(ROOT, defFile);
+  for (const symbol of defIndex.get(defFile)?.keys() ?? []) {
+    const identity = `${relFile}::${symbol}`;
+    const existing = fanInByIdentitySpace[identity] ?? { value: 0, type: 0, broad: 0 };
+    fanInByIdentitySpace[identity] = {
+      ...existing,
+      broad: broadConsumers.size,
+    };
   }
 }
 symbolFanIn.sort((a, b) => b.count - a.count);
@@ -736,6 +767,7 @@ const artifact = buildSymbolsArtifact({
   deadInTest,
   symbolFanIn,
   fanInByIdentity,
+  fanInByIdentitySpace,
   anyContaminationFacts,
   incremental: {
     enabled: incrementalEnabled,

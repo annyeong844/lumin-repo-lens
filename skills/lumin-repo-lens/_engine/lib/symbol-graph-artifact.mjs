@@ -173,6 +173,7 @@ export function buildSymbolsArtifact({
   deadInTest,
   symbolFanIn,
   fanInByIdentity,
+  fanInByIdentitySpace,
   anyContaminationFacts,
   incremental = null,
 }) {
@@ -192,6 +193,7 @@ export function buildSymbolsArtifact({
       supports: {
         anyContamination: true,
         identityFanIn: true,
+        identityFanInSpace: true,
         reExportRecords: 'file-level',
         mdxImportConsumers: true,
         dependencyImportConsumers: true,
@@ -239,6 +241,7 @@ export function buildSymbolsArtifact({
     deadInTest: deadInTest.length,
     topSymbolFanIn: symbolFanIn.slice(0, 50),
     fanInByIdentity,
+    fanInByIdentitySpace: fanInByIdentitySpace ?? {},
     helperOwnersByIdentity: anyContaminationFacts?.helperOwnersByIdentity ?? {},
     typeOwnersByIdentity: anyContaminationFacts?.typeOwnersByIdentity ?? {},
     defIndex: buildPlainDefIndex({ root, defIndex }),

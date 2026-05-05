@@ -46,6 +46,7 @@ function exportsMapHasWildcard(exportsValue) {
 
 export function hasPublicDeepImportRisk(pkgJson, relFileFromPkgRoot) {
   if (!pkgJson || pkgJson.private === true) return false;
+  if (typeof pkgJson.name !== 'string' || pkgJson.name.trim() === '') return false;
   if (!pkgJson.exports) return true;
 
   const leaves = flattenStringLeaves(pkgJson.exports);

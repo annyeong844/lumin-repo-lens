@@ -5,6 +5,7 @@
 // facts matter for the current question after reading the raw artifacts.
 
 import { formatAnyContaminationCue } from './any-contamination-summary.mjs';
+import { formatUnresolvedReasonCounts } from './blind-zones.mjs';
 
 function n(value, fallback = 0) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -194,6 +195,11 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
   const blindZones = Array.isArray(manifest?.blindZones) ? manifest.blindZones : [];
   if (blindZones.length > 0) {
     lines.push(`- Blind zones: ${blindZones.length}. Read \`manifest.json.blindZones\` before any absence or removal claim.`);
+    const resolverZone = blindZones.find((z) => z?.area === 'resolver');
+    const resolverReasons = formatUnresolvedReasonCounts(resolverZone?.details?.topUnresolvedReasons);
+    if (resolverReasons) {
+      lines.push(`- Resolver blind-zone reasons: ${resolverReasons}. Read \`symbols.json.unresolvedInternalSummaryByReason\` and \`manifest.json.blindZones[].details.topUnresolvedReasons\` before treating unresolved imports as generic noise.`);
+    }
   }
 
   return lines.length > 0
@@ -207,7 +213,7 @@ function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipl
 
   lines.push('- `manifest.json`: scan range, confidence, blind zones, and command status.');
   if (symbols || produced.has('symbols.json')) {
-    lines.push('- `symbols.json`: export identities, fan-in, dependency import consumers, public owner facts, and identity-level anyContamination owner maps.');
+    lines.push('- `symbols.json`: export identities, total/type/value fan-in, dependency import consumers, public owner facts, unresolved internal reason summaries, and identity-level anyContamination owner maps.');
   }
   if (checklistFacts || produced.has('checklist-facts.json')) {
     lines.push('- `checklist-facts.json`: checklist gates and measured review cues; gates are triggers, not verdicts.');

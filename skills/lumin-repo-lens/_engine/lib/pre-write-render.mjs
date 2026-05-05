@@ -89,11 +89,21 @@ function sectionFor(lookup) {
 
 // ── Per-lookup row renderers ────────────────────────────────
 
+function renderFanInSummary(identity) {
+  if (identity.fanInConfidence !== 'grounded') return 'fan-in unavailable';
+  const base = `fan-in ${identity.fanIn}`;
+  if (identity.fanInSpaceConfidence !== 'grounded' || !identity.fanInSpace) {
+    return base;
+  }
+  const value = identity.fanInSpace.value ?? 0;
+  const type = identity.fanInSpace.type ?? 0;
+  const broad = identity.fanInSpace.broad ?? 0;
+  return `${base} (value ${value}, type ${type}, broad ${broad})`;
+}
+
 function renderIdentityRow(lookup, identity) {
   const out = [];
-  const fanInStr = identity.fanInConfidence === 'grounded'
-    ? `fan-in ${identity.fanIn}`
-    : `fan-in unavailable`;
+  const fanInStr = renderFanInSummary(identity);
   out.push(`- ${lookup.result} at \`${identity.identity}\` — ${fanInStr}.`);
   for (const c of identity.citations ?? []) {
     if (

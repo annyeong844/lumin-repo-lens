@@ -101,17 +101,20 @@ Identity strings are compared byte-for-byte. Whitespace, casing, and Unicode for
 
 ## 5. Parser contract
 
-The check-canon parser operates in strict mode. It recognizes exactly the four per-source table shapes below, defined by their required column header lists. Any deviation (missing column, extra column, renamed column) is a **fatal per-source error**.
+The check-canon parser operates in strict mode. It recognizes exactly the four per-source table shapes below, defined by their required column header lists, plus the explicitly documented legacy compatibility variant for `type-ownership.md` in §5.a. Any undocumented deviation (missing column, extra column, renamed column) is a **fatal per-source error**.
 
 Label-column values are validated against the canonical sets in `canonical/classification-gates.md` — §9 (type + helper labels), §11.4 (topology labels), §12.3 (naming labels). Any Status token outside the canonical set for that source is a `canon-parse-error` diagnostic.
 
 ### 5.a `type-ownership.md` — from `_engine/lib/canon-draft-types.mjs::renderTypeOwnership`
 
-Required columns (ordered): `Name` | `Identity` | `Owner` | `Fan-in` | `Status` | `Tags`.
+Current required columns (ordered): `Name` | `Identity` | `Owner` | `Fan-in` | `Fan-in space` | `Status` | `Tags`.
+
+Legacy read-compatible columns (ordered): `Name` | `Identity` | `Owner` | `Fan-in` | `Status` | `Tags`.
 
 - **Identity cell** — strip backticks; expect `ownerFile::exportedName` (see §4 + `canonical/identity-and-alias.md` §2).
 - **Status cell** — first whitespace-separated token ∈ canonical §9 type label set.
 - **Fan-in cell** — integer count or a canonical placeholder (see P3-1 emit rules); non-strict field for parser purposes.
+- **Fan-in space cell** — display-only breakdown of value/type/broad fan-in evidence. The drift parser accepts and ignores this cell for v1.2 semantics; total `Fan-in`, `Identity`, `Owner`, and `Status` remain the drift inputs.
 
 ### 5.b `helper-registry.md` — from `renderHelperRegistry`
 

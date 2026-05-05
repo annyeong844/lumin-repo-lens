@@ -178,6 +178,38 @@ function topUnresolvedReasons(records) {
     .slice(0, 5);
 }
 
+function topUnresolvedReasonsFromSummary(summary) {
+  if (!summary || typeof summary !== 'object') return null;
+  const reasons = [];
+  for (const [reason, group] of Object.entries(summary)) {
+    if (!reason || !group || typeof group !== 'object') continue;
+    const count = group.count;
+    if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) continue;
+    reasons.push({
+      reason,
+      count,
+      ...(group.resolverStages && typeof group.resolverStages === 'object'
+        ? { resolverStages: group.resolverStages }
+        : {}),
+      ...(group.hints && typeof group.hints === 'object' ? { hints: group.hints } : {}),
+    });
+  }
+  if (reasons.length === 0) return null;
+  return reasons
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+    .slice(0, 5);
+}
+
+export function formatUnresolvedReasonCounts(reasons, limit = 3) {
+  if (!Array.isArray(reasons) || reasons.length === 0) return null;
+  const parts = [];
+  for (const item of reasons.slice(0, limit)) {
+    if (!item?.reason || typeof item.count !== 'number') continue;
+    parts.push(`${item.reason} ${item.count}`);
+  }
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
 function detectResolverZone(symbols) {
   const r = symbols?.uses?.unresolvedInternalRatio;
   const unresolvedInternal = symbols?.uses?.unresolvedInternal;
@@ -210,7 +242,9 @@ function detectResolverZone(symbols) {
       unresolvedInternalRatio: r,
       unresolvedInternal,
       topUnresolvedSpecifiers: top.map((t) => t.specifierPrefix ?? t),
-      topUnresolvedReasons: topUnresolvedReasons(symbols?.unresolvedInternalSpecifierRecords),
+      topUnresolvedReasons:
+        topUnresolvedReasonsFromSummary(symbols?.unresolvedInternalSummaryByReason) ??
+        topUnresolvedReasons(symbols?.unresolvedInternalSpecifierRecords),
     },
   };
 }
@@ -268,5 +302,7 @@ export function formatBlindZonesSummary(zones) {
   if (bySeverity['scan-gap']) parts.push(`${bySeverity['scan-gap']} scan-gap`);
   if (bySeverity['precision-gap']) parts.push(`${bySeverity['precision-gap']} precision-gap`);
   if (bySeverity['confidence-gap']) parts.push(`${bySeverity['confidence-gap']} confidence-gap`);
-  return `blindZones: ${parts.join(', ')}`;
+  const resolverZone = zones.find((z) => z?.area === 'resolver');
+  const resolverReasons = formatUnresolvedReasonCounts(resolverZone?.details?.topUnresolvedReasons);
+  return `blindZones: ${parts.join(', ')}${resolverReasons ? `; resolver reasons: ${resolverReasons}` : ''}`;
 }

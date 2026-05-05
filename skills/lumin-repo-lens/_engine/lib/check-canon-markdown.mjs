@@ -99,11 +99,36 @@ function diagnoseHeader(cells, expectedColumns, expectedColumnSet) {
 
 // Shared Canon-MD parser. Accepts a target column spec + a row builder.
 // Implements the 3-tier strictness policy from canon-drift.md §5.e uniformly.
-export function parseCanonMarkdown({ text, expectedColumns, expectedColumnSet, canonLabelSet, buildRecord, schemaTag }) {
+export function parseCanonMarkdown({
+  text,
+  expectedColumns,
+  expectedColumnSet,
+  alternateColumnSpecs = [],
+  canonLabelSet,
+  buildRecord,
+  schemaTag,
+}) {
   const diagnostics = [];
   if (typeof text !== 'string' || text.length === 0) {
     return { records: new Map(), diagnostics: [{ reason: 'empty-file' }], status: 'skipped-unrecognized-schema', lineCount: 0 };
   }
+
+  const columnSpecs = [
+    {
+      expectedColumns,
+      expectedColumnSet,
+      buildRecord,
+      schemaTag,
+      priority: 0,
+    },
+    ...alternateColumnSpecs.map((spec, index) => ({
+      expectedColumns: spec.expectedColumns,
+      expectedColumnSet: spec.expectedColumnSet ?? new Set(spec.expectedColumns),
+      buildRecord: spec.buildRecord ?? buildRecord,
+      schemaTag: spec.schemaTag ?? schemaTag,
+      priority: index + 1,
+    })),
+  ];
 
   const lines = text.split(/\r?\n/);
   const candidates = [];
@@ -113,8 +138,12 @@ export function parseCanonMarkdown({ text, expectedColumns, expectedColumnSet, c
     if (isSeparatorRow(line)) continue;
     const cells = splitRow(line);
     if (!cells || cells.length < 2) continue;
-    const matchCount = cells.filter((c) => expectedColumnSet.has(c)).length;
-    candidates.push({ idx: i, cells, matchCount });
+    const matches = columnSpecs.map((spec) => ({
+      spec,
+      count: cells.filter((c) => spec.expectedColumnSet.has(c)).length,
+    }));
+    matches.sort((a, b) => (b.count - a.count) || (a.spec.priority - b.spec.priority));
+    candidates.push({ idx: i, cells, matchCount: matches[0].count, bestSpec: matches[0].spec });
   }
 
   if (candidates.length === 0) {
@@ -122,9 +151,19 @@ export function parseCanonMarkdown({ text, expectedColumns, expectedColumnSet, c
   }
 
   // Pass A: exact-match header.
-  const exact = candidates.find((c) =>
-    c.cells.length === expectedColumns.length &&
-    expectedColumns.every((exp, j) => c.cells[j] === exp));
+  let exact = null;
+  for (const candidate of candidates) {
+    for (const spec of columnSpecs) {
+      if (
+        candidate.cells.length === spec.expectedColumns.length &&
+        spec.expectedColumns.every((exp, j) => candidate.cells[j] === exp)
+      ) {
+        exact = { ...candidate, spec };
+        break;
+      }
+    }
+    if (exact) break;
+  }
 
   // Pass B: strong-malformed — threshold is column-count-aware.
   //   3-col tables (topology §2 cross-edges, §4 oversize): 2-of-3 matching
@@ -133,11 +172,11 @@ export function parseCanonMarkdown({ text, expectedColumns, expectedColumnSet, c
   //     at this size. Reviewer Finding #2 (2026-04-22).
   //   Larger tables: require >= 3 matching OR >= 50%, whichever is larger,
   //     to stay defensive against 2-col prefix memos.
-  const strongThreshold = expectedColumns.length <= 3
+  const strongThresholdFor = (spec) => spec.expectedColumns.length <= 3
     ? 2
-    : Math.max(3, Math.ceil(expectedColumns.length / 2));
+    : Math.max(3, Math.ceil(spec.expectedColumns.length / 2));
   const malformedCandidate = exact ? null
-    : candidates.find((c) => c.matchCount >= strongThreshold);
+    : candidates.find((c) => c.matchCount >= strongThresholdFor(c.bestSpec));
 
   if (!exact && !malformedCandidate) {
     return {
@@ -149,11 +188,12 @@ export function parseCanonMarkdown({ text, expectedColumns, expectedColumnSet, c
   }
 
   if (malformedCandidate) {
-    const headerDiagnostics = diagnoseHeader(malformedCandidate.cells, expectedColumns, expectedColumnSet);
+    const spec = malformedCandidate.bestSpec;
+    const headerDiagnostics = diagnoseHeader(malformedCandidate.cells, spec.expectedColumns, spec.expectedColumnSet);
     return {
       records: new Map(),
       diagnostics: headerDiagnostics.length > 0 ? headerDiagnostics
-        : [{ reason: `malformed-${schemaTag}-header`, observed: malformedCandidate.cells.join(' | ') }],
+        : [{ reason: `malformed-${spec.schemaTag}-header`, observed: malformedCandidate.cells.join(' | ') }],
       status: 'parse-error',
       lineCount: lines.length,
     };
@@ -161,6 +201,7 @@ export function parseCanonMarkdown({ text, expectedColumns, expectedColumnSet, c
 
   // Exact-match path — parse body rows below the header.
   const headerIdx = exact.idx;
+  const activeSpec = exact.spec;
   const records = new Map();
   let rowStatus = 'clean';
   for (let i = headerIdx + 1; i < lines.length; i += 1) {
@@ -168,12 +209,12 @@ export function parseCanonMarkdown({ text, expectedColumns, expectedColumnSet, c
     if (!line.trimStart().startsWith('|')) continue;
     if (isSeparatorRow(line)) continue;
     const cells = splitRow(line);
-    if (!cells || cells.length !== expectedColumns.length) {
+    if (!cells || cells.length !== activeSpec.expectedColumns.length) {
       diagnostics.push({ reason: 'canon-parse-error', sub: 'row-cell-count', line: i + 1, got: cells?.length ?? 0 });
       rowStatus = 'parse-error';
       continue;
     }
-    const row = buildRecord(cells, i + 1);
+    const row = activeSpec.buildRecord(cells, i + 1);
     if (!row) {
       diagnostics.push({ reason: 'canon-parse-error', sub: 'row-build-failed', line: i + 1 });
       rowStatus = 'parse-error';

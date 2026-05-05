@@ -33,9 +33,18 @@ import { readFileSync, existsSync } from 'node:fs';
 // comment containing one of these phrases doesn't accidentally qualify.
 const HEADER_STATUS_RE = /^>\s*\*\*Status:\*\*\s+draft(,|\s)/m;
 const HEADER_SOURCE_RE = /^>\s*\*\*Source:\*\*\s+`?_lib\/extract-ts\.mjs`?\s+pass/m;
+const CURRENT_TYPE_OWNERSHIP_DRAFT_RE = /^#\s+Type ownership draft\s*$/m;
+const CURRENT_GENERATED_RE = /^Generated:\s+\S+/m;
+const CURRENT_SOURCE_RE = /^Source:\s+\S+/m;
 
 function hasGeneratedCanonHeader(text) {
-  return HEADER_STATUS_RE.test(text) || HEADER_SOURCE_RE.test(text);
+  return HEADER_STATUS_RE.test(text) ||
+         HEADER_SOURCE_RE.test(text) ||
+         (
+           CURRENT_TYPE_OWNERSHIP_DRAFT_RE.test(text) &&
+           CURRENT_GENERATED_RE.test(text) &&
+           CURRENT_SOURCE_RE.test(text)
+         );
 }
 
 // Section header pattern — `### 2.1 Single owner (strong)` and siblings.
@@ -53,6 +62,13 @@ const SECTION_HEADER_RE = /^###\s+\d+(?:\.\d+)*\s+(.+?)\s*$/;
 //
 // Capture groups: (typeName)(ownerFile)
 const OWNER_ROW_RE = /^\|\s*`([^`|]+)`\s*\|\s*`([^`|]+)`\s*\|/;
+const FLAT_OWNER_STATUSES = new Set([
+  'single-owner-strong',
+  'single-owner-weak',
+  'zero-internal-fan-in',
+  'low-signal-type-name',
+  'severely-any-contaminated',
+]);
 
 // The generator's Single-owner tables all start inside sections whose
 // heading contains "Single owner" or "severely-any-contaminated". We
@@ -61,6 +77,45 @@ const OWNER_ROW_RE = /^\|\s*`([^`|]+)`\s*\|\s*`([^`|]+)`\s*\|/;
 function isOwnerSectionTitle(title) {
   return /\bSingle owner\b/i.test(title) ||
          /severely-any-contaminated/i.test(title);
+}
+
+function splitTableRow(line) {
+  if (!line.trimStart().startsWith('|')) return null;
+  const cells = line.split('|').slice(1, -1).map((cell) => cell.trim());
+  return cells.length > 0 ? cells : null;
+}
+
+function isSeparatorRow(line) {
+  return /^\s*\|[\s:|\-]+\|\s*$/.test(line);
+}
+
+function stripBackticks(cell) {
+  return String(cell ?? '').replace(/^`+|`+$/g, '').trim();
+}
+
+function flatTypeOwnershipColumns(cells) {
+  if (!Array.isArray(cells)) return null;
+  const index = Object.fromEntries(cells.map((cell, i) => [cell, i]));
+  const required = ['Name', 'Identity', 'Owner', 'Fan-in', 'Status', 'Tags'];
+  if (!required.every((column) => Object.hasOwn(index, column))) return null;
+  return index;
+}
+
+function ownerFileFromIdentity(identity) {
+  const parts = String(identity ?? '').split('::');
+  if (parts.length < 2) return null;
+  parts.pop();
+  return parts.join('::') || null;
+}
+
+function buildFlatOwnerClaim(cells, columns, lineNumber) {
+  const name = stripBackticks(cells[columns.Name]);
+  const identity = stripBackticks(cells[columns.Identity]);
+  const status = stripBackticks(cells[columns.Status]).split(/\s+/)[0] ?? '';
+  if (!FLAT_OWNER_STATUSES.has(status)) return null;
+  const ownerFile = ownerFileFromIdentity(identity);
+  if (!name || !ownerFile) return null;
+  return { name, ownerFile, line: lineNumber };
 }
 
 /**
@@ -109,9 +164,29 @@ export function parseCanonicalFile(filePath) {
   const ownerTables = [];
   let currentSection = null;
   let currentRows = null;
+  let flatTable = null;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+
+    if (flatTable) {
+      if (isSeparatorRow(line)) continue;
+      const cells = splitTableRow(line);
+      if (!cells) {
+        if (flatTable.rows.length > 0) {
+          ownerTables.push({
+            file: flatTable.file,
+            section: flatTable.section,
+            rows: flatTable.rows,
+          });
+        }
+        flatTable = null;
+      } else {
+        const row = buildFlatOwnerClaim(cells, flatTable.columns, i + 1);
+        if (row) flatTable.rows.push(row);
+      }
+      continue;
+    }
 
     const sectionMatch = line.match(SECTION_HEADER_RE);
     if (sectionMatch) {
@@ -130,6 +205,26 @@ export function parseCanonicalFile(filePath) {
         currentSection = null;
         currentRows = null;
       }
+      continue;
+    }
+
+    const flatColumns = flatTypeOwnershipColumns(splitTableRow(line));
+    if (flatColumns) {
+      if (currentRows && currentRows.length > 0) {
+        ownerTables.push({
+          file: filePath,
+          section: currentSection,
+          rows: currentRows,
+        });
+      }
+      currentSection = null;
+      currentRows = null;
+      flatTable = {
+        file: filePath,
+        section: 'Type ownership table',
+        columns: flatColumns,
+        rows: [],
+      };
       continue;
     }
 
@@ -154,6 +249,13 @@ export function parseCanonicalFile(filePath) {
       file: filePath,
       section: currentSection,
       rows: currentRows,
+    });
+  }
+  if (flatTable && flatTable.rows.length > 0) {
+    ownerTables.push({
+      file: flatTable.file,
+      section: flatTable.section,
+      rows: flatTable.rows,
     });
   }
 
