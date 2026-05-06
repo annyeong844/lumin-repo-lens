@@ -132,6 +132,41 @@ function buildDynamicImportOpacity({ root, fileData }) {
       .localeCompare(`${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.prefix ?? ''}`));
 }
 
+function sortCjsSurfaceList(entries = []) {
+  return [...entries].sort((a, b) =>
+    `${a.name ?? ''}|${a.kind ?? ''}|${String(a.line ?? '').padStart(6, '0')}`
+      .localeCompare(`${b.name ?? ''}|${b.kind ?? ''}|${String(b.line ?? '').padStart(6, '0')}`));
+}
+
+function buildCjsExportSurfaceByFile({ root, fileData }) {
+  const out = {};
+  for (const [absFile, info] of fileData) {
+    const surface = info.cjsExportSurface;
+    if (!surface || (!surface.exact?.length && !surface.opaque?.length)) continue;
+    out[relPath(root, absFile)] = {
+      exact: sortCjsSurfaceList(surface.exact),
+      opaque: sortCjsSurfaceList(surface.opaque),
+    };
+  }
+  return out;
+}
+
+function buildCjsRequireOpacity({ root, fileData }) {
+  const cjsRequireOpacity = [];
+  for (const [absFile, info] of fileData) {
+    for (const item of info.cjsRequireOpacity ?? []) {
+      cjsRequireOpacity.push({
+        consumerFile: relPath(root, absFile),
+        line: item.line,
+        kind: item.kind,
+      });
+    }
+  }
+  return cjsRequireOpacity.sort((a, b) =>
+    `${a.consumerFile}|${String(a.line).padStart(6, '0')}|${a.kind ?? ''}`
+      .localeCompare(`${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.kind ?? ''}`));
+}
+
 function buildPlainDefIndex({ root, defIndex }) {
   const out = {};
   for (const [defFile, m] of defIndex) {
@@ -200,6 +235,8 @@ export function buildSymbolsArtifact({
         resolvedInternalEdges: true,
         definitionIds: true,
         unresolvedInternalSummaryByReason: true,
+        cjsExportSurface: true,
+        cjsRequireOpacity: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -228,6 +265,8 @@ export function buildSymbolsArtifact({
       prefixExamples,
     }),
     dynamicImportOpacity: buildDynamicImportOpacity({ root, fileData }),
+    cjsExportSurfaceByFile: buildCjsExportSurfaceByFile({ root, fileData }),
+    cjsRequireOpacity: buildCjsRequireOpacity({ root, fileData }),
     unresolvedInternalSpecifiers: [...unresolvedInternalSpecifiers].sort(),
     unresolvedInternalSpecifierRecords: [...(unresolvedInternalSpecifierRecords ?? [])].sort((a, b) =>
       `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`

@@ -267,6 +267,62 @@ function detectParserZone(symbols) {
   };
 }
 
+function detectCjsExportSurfaceZone(symbols) {
+  const byFile = symbols?.cjsExportSurfaceByFile;
+  if (!byFile || typeof byFile !== 'object') return null;
+
+  const opaqueForms = [];
+  for (const [file, surface] of Object.entries(byFile)) {
+    const opaque = Array.isArray(surface?.opaque) ? surface.opaque : [];
+    if (opaque.length === 0) continue;
+    opaqueForms.push({
+      file,
+      kinds: [...new Set(opaque.map((entry) => entry?.kind).filter(Boolean))].sort(),
+    });
+  }
+
+  if (opaqueForms.length === 0) return null;
+  opaqueForms.sort((a, b) => a.file.localeCompare(b.file));
+  return {
+    area: 'commonjs-export-surface',
+    severity: 'precision-gap',
+    effect: 'Some CommonJS files use opaque export forms; named CJS export claims are limited to exact surface facts.',
+    details: {
+      files: opaqueForms.length,
+      opaqueForms: opaqueForms.slice(0, 10),
+    },
+  };
+}
+
+function detectCjsRequireOpacityZone(symbols) {
+  const calls = symbols?.cjsRequireOpacity ?? [];
+  if (!Array.isArray(calls) || calls.length === 0) return null;
+  const files = new Set(calls
+    .map((entry) => entry?.consumerFile)
+    .filter((file) => typeof file === 'string' && file.length > 0));
+  return {
+    area: 'commonjs-dynamic-require',
+    severity: 'precision-gap',
+    effect: 'CommonJS dynamic require calls can hide internal consumers; ' +
+            'dead-export absence claims near these files are degraded.',
+    details: {
+      files: files.size,
+      calls: calls.length,
+      examples: calls
+        .slice()
+        .sort((a, b) =>
+          `${a?.consumerFile ?? ''}|${String(a?.line ?? '').padStart(6, '0')}|${a?.kind ?? ''}`
+            .localeCompare(`${b?.consumerFile ?? ''}|${String(b?.line ?? '').padStart(6, '0')}|${b?.kind ?? ''}`))
+        .slice(0, 5)
+        .map((entry) => ({
+          consumerFile: entry.consumerFile,
+          line: entry.line,
+          kind: entry.kind,
+        })),
+    },
+  };
+}
+
 /**
  * Detect blind zones from available artifacts. Any artifact may be
  * null (the orchestrator passes what's on disk); missing inputs
@@ -287,6 +343,10 @@ export function detectBlindZones({ triage, symbols, deadClassify: _deadClassify 
   if (resolverZone) zones.push(resolverZone);
   const parserZone = detectParserZone(symbols);
   if (parserZone) zones.push(parserZone);
+  const cjsExportSurfaceZone = detectCjsExportSurfaceZone(symbols);
+  if (cjsExportSurfaceZone) zones.push(cjsExportSurfaceZone);
+  const cjsRequireZone = detectCjsRequireOpacityZone(symbols);
+  if (cjsRequireZone) zones.push(cjsRequireZone);
   return zones;
 }
 

@@ -48,6 +48,12 @@ function literalRequireSource(node) {
     : null;
 }
 
+function isRequireCall(node) {
+  return node?.type === 'CallExpression' &&
+    node.callee?.type === 'Identifier' &&
+    node.callee.name === 'require';
+}
+
 function opaqueDynamicImportHint(node) {
   if (node?.type !== 'ImportExpression') return null;
   if (literalImportSource(node)) return null;
@@ -64,6 +70,45 @@ function opaqueDynamicImportHint(node) {
   return { kind: 'nonliteral' };
 }
 
+function opaqueCjsRequireHint(node) {
+  if (!isRequireCall(node) || literalRequireSource(node)) return null;
+  if (isStaticJsonRequireArgument(node.arguments?.[0])) return null;
+  return { kind: 'dynamic-require' };
+}
+
+function literalStringValue(node) {
+  if (!node) return null;
+  if ((node.type === 'Literal' || node.type === 'StringLiteral') &&
+      typeof node.value === 'string') {
+    return node.value;
+  }
+  return null;
+}
+
+function isJsonPathFragment(value) {
+  return typeof value === 'string' && value.replace(/\\/g, '/').toLowerCase().endsWith('.json');
+}
+
+function isPathJoinOrResolveCall(node) {
+  if (node?.type !== 'CallExpression') return false;
+  const callee = node.callee;
+  if (callee?.type !== 'MemberExpression' || callee.computed) return false;
+  const prop = memberPropertyName(callee);
+  return (prop === 'join' || prop === 'resolve') &&
+    callee.object?.type === 'Identifier' &&
+    callee.object.name === 'path';
+}
+
+function isStaticJsonRequireArgument(node) {
+  const direct = literalStringValue(node);
+  if (isJsonPathFragment(direct)) return true;
+
+  if (!isPathJoinOrResolveCall(node)) return false;
+  const args = node.arguments ?? [];
+  const last = args[args.length - 1];
+  return isJsonPathFragment(literalStringValue(last));
+}
+
 function unwrapAwait(node) {
   return node?.type === 'AwaitExpression' ? node.argument : node;
 }
@@ -76,6 +121,12 @@ function memberPropertyName(node) {
   return null;
 }
 
+function staticMemberPropertyName(node) {
+  if (!node?.computed) return memberPropertyName(node);
+  const p = node.property;
+  return p?.type === 'Literal' && typeof p.value === 'string' ? p.value : null;
+}
+
 function isCallCallee(parent, key) {
   return parent?.type === 'CallExpression' && key === 'callee';
 }
@@ -85,6 +136,7 @@ function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
   const uses = [];
   const reExports = [];
   const namespaceImports = new Map();
+  const cjsExportSurface = collectCjsExportSurface(program, getNodeLine);
   const localDeclarations = collectTopLevelDeclarationTargets(program);
 
   for (const node of program.body) {
@@ -93,7 +145,7 @@ function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
     collectImports(node, uses, namespaceImports, getNodeLine);
   }
 
-  return { defs, uses, reExports, namespaceImports };
+  return { defs, uses, reExports, namespaceImports, cjsExportSurface };
 }
 
 function collectTopLevelDeclarationTargets(program) {
@@ -273,6 +325,111 @@ function collectImports(node, uses, namespaceImports, getNodeLine) {
   }
 }
 
+function collectCjsExportSurface(program, getNodeLine) {
+  const surface = { exact: [], opaque: [] };
+  for (const node of program.body ?? []) {
+    if (node.type !== 'ExpressionStatement') continue;
+    const expr = node.expression;
+    if (expr?.type !== 'AssignmentExpression' || expr.operator !== '=') continue;
+    collectCjsExportAssignment(expr, surface, getNodeLine);
+  }
+
+  surface.exact.sort((a, b) =>
+    `${a.name}|${a.kind}|${String(a.line).padStart(6, '0')}`
+      .localeCompare(`${b.name}|${b.kind}|${String(b.line).padStart(6, '0')}`));
+  surface.opaque.sort((a, b) =>
+    `${a.kind}|${String(a.line).padStart(6, '0')}`
+      .localeCompare(`${b.kind}|${String(b.line).padStart(6, '0')}`));
+
+  return surface.exact.length || surface.opaque.length ? surface : null;
+}
+
+function collectCjsExportAssignment(node, surface, getNodeLine) {
+  const member = cjsExportMemberAssignment(node.left);
+  if (member) {
+    if (member.name) {
+      surface.exact.push({
+        name: member.name,
+        kind: member.kind,
+        line: getNodeLine(node.left),
+      });
+    } else {
+      surface.opaque.push({
+        kind: 'computed-export-name',
+        line: getNodeLine(node.left),
+      });
+    }
+    return;
+  }
+
+  if (!isModuleExportsObject(node.left)) return;
+  if (node.right?.type !== 'ObjectExpression') {
+    surface.opaque.push({
+      kind: 'module-exports-assignment',
+      line: getNodeLine(node.left),
+    });
+    return;
+  }
+
+  collectModuleExportsObjectProperties(node.right, surface, getNodeLine);
+}
+
+function cjsExportMemberAssignment(node) {
+  if (node?.type !== 'MemberExpression') return null;
+
+  if (node.object?.type === 'Identifier' && node.object.name === 'exports') {
+    return {
+      name: staticMemberPropertyName(node),
+      kind: 'exports-member',
+    };
+  }
+
+  if (isModuleExportsObject(node.object)) {
+    return {
+      name: staticMemberPropertyName(node),
+      kind: 'module-exports-member',
+    };
+  }
+
+  return null;
+}
+
+function isModuleExportsObject(node) {
+  return node?.type === 'MemberExpression' &&
+    !node.computed &&
+    node.object?.type === 'Identifier' &&
+    node.object.name === 'module' &&
+    memberPropertyName(node) === 'exports';
+}
+
+function collectModuleExportsObjectProperties(node, surface, getNodeLine) {
+  for (const prop of node.properties ?? []) {
+    if (prop?.type !== 'Property') {
+      surface.opaque.push({
+        kind: 'module-exports-object-opaque',
+        line: getNodeLine(prop ?? node),
+      });
+      continue;
+    }
+
+    const name = prop.computed
+      ? (prop.key?.type === 'Literal' && typeof prop.key.value === 'string' ? prop.key.value : null)
+      : (prop.key?.name ?? (typeof prop.key?.value === 'string' ? prop.key.value : null));
+    if (name) {
+      surface.exact.push({
+        name,
+        kind: 'module-exports-object',
+        line: getNodeLine(prop),
+      });
+    } else {
+      surface.opaque.push({
+        kind: 'computed-export-name',
+        line: getNodeLine(prop),
+      });
+    }
+  }
+}
+
 function collectMemberPrecisionUses(program, namespaceImports, getNodeLine) {
   const state = createMemberPrecisionState();
   const rootScope = makeScope();
@@ -281,6 +438,7 @@ function collectMemberPrecisionUses(program, namespaceImports, getNodeLine) {
   return {
     uses: emitMemberPrecisionUses(state),
     opaqueDynamicImports: state.opaqueDynamicImports,
+    cjsRequireOpacity: state.cjsRequireOpacity,
   };
 }
 
@@ -288,6 +446,7 @@ function createMemberPrecisionState() {
   return {
     fallbackDynamicImports: [],
     opaqueDynamicImports: [],
+    cjsRequireOpacity: [],
     namespaceRecords: [],
     dynamicRecords: [],
     cjsRecords: [],
@@ -383,6 +542,7 @@ function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key
   if (handleTrackedMemberExpression(node, scope, parent, key, getNodeLine)) return;
   if (handleFallbackImportExpression(node, state, getNodeLine)) return;
   if (handleFallbackRequireExpression(node, state, getNodeLine, parent)) return;
+  if (handleOpaqueRequireExpression(node, state, getNodeLine)) return;
   if (handleTrackedIdentifier(node, scope)) return;
 
   walkChildNodes(node, scope, state, getNodeLine);
@@ -464,9 +624,33 @@ function walkVariableDeclaration(node, scope, state, getNodeLine) {
       });
       bind(scope, decl.id.name, record);
       state.handledDynamicImports.add(importNode);
+    } else if (decl.id?.type === 'ObjectPattern' && decl.init?.type === 'Identifier') {
+      const record = resolveBinding(scope, decl.init.name);
+      if (record?.kind === 'cjs') {
+        collectCjsAliasDestructuringUses(decl.id, record, getNodeLine);
+        bindPattern(scope, decl.id, { kind: 'local' });
+      } else {
+        bindPattern(scope, decl.id, { kind: 'local' });
+        walkMemberPrecision(decl.init, scope, state, getNodeLine, decl, 'init');
+      }
     } else {
       bindPattern(scope, decl.id, { kind: 'local' });
       walkMemberPrecision(decl.init, scope, state, getNodeLine, decl, 'init');
+    }
+  }
+}
+
+function collectCjsAliasDestructuringUses(pattern, record, getNodeLine) {
+  for (const prop of pattern.properties ?? []) {
+    if (prop?.type === 'Property') {
+      const key = prop.key;
+      const name = key?.type === 'Identifier' || key?.type === 'Literal'
+        ? String(key.name ?? key.value)
+        : null;
+      if (name) record.members.push({ name, line: getNodeLine(prop) });
+      else record.degraded = true;
+    } else if (prop?.type === 'RestElement') {
+      record.degraded = true;
     }
   }
 }
@@ -635,6 +819,18 @@ function handleFallbackRequireExpression(node, state, getNodeLine, parent) {
   return true;
 }
 
+function handleOpaqueRequireExpression(node, state, getNodeLine) {
+  if (state.handledCjsRequires.has(node)) return false;
+  const hint = opaqueCjsRequireHint(node);
+  if (!hint) return false;
+  state.cjsRequireOpacity.push({
+    line: getNodeLine(node),
+    ...hint,
+  });
+  state.handledCjsRequires.add(node);
+  return true;
+}
+
 function handleTrackedIdentifier(node, scope) {
   if (node.type !== 'Identifier') return false;
   const record = resolveBinding(scope, node.name);
@@ -784,7 +980,7 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
   const result = parseOxcOrThrow(filePath, src);
   const getNodeLine = makeLineGetter(src);
   const artifactFilePath = options.artifactFilePath ?? filePath;
-  const { defs, uses, reExports, namespaceImports } =
+  const { defs, uses, reExports, namespaceImports, cjsExportSurface } =
     collectTopLevelSymbols(result.program, getNodeLine, artifactFilePath);
   const memberPrecision = collectMemberPrecisionUses(result.program, namespaceImports, getNodeLine);
   uses.push(...memberPrecision.uses);
@@ -798,8 +994,12 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
     reExports,
     typeEscapes: typeEscapeResult.typeEscapes ?? [],
     loc: src.split('\n').length,
+    ...(cjsExportSurface ? { cjsExportSurface } : {}),
     ...(memberPrecision.opaqueDynamicImports.length > 0
       ? { dynamicImportOpacity: memberPrecision.opaqueDynamicImports }
+      : {}),
+    ...(memberPrecision.cjsRequireOpacity.length > 0
+      ? { cjsRequireOpacity: memberPrecision.cjsRequireOpacity }
       : {}),
   };
 }

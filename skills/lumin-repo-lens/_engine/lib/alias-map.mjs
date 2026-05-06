@@ -113,7 +113,7 @@ export function mapOutputToSource(pkgDir, target) {
     addCandidate(sourceCandidates, asDir);
     // Some workspace packages compile root-level source directly to
     // dist/ (`index.ts` → `dist/index.js`, `api.ts` → `dist/api.js`)
-    // rather than through src/. Cal.com's platform packages use this
+    // rather than through src/. Several private/workspace packages use this
     // shape; without root-source candidates their workspace imports are
     // reported as UNRESOLVED_INTERNAL.
     addCandidate(sourceCandidates, rest);

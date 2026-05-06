@@ -319,18 +319,13 @@ function resolveWildcard(spec, aliasMap) {
   const { entry, star } = bestWildcard;
   const substituted = entry.targetPattern.replace('*', star);
   const literal = path.join(entry.pkgDir, substituted.replace(/^\.\//, ''));
-  if (fileExists(literal)) return literal;
-  for (const alt of ['.ts', '.tsx']) {
-    const swap = literal.replace(/\.(mjs|cjs|js)$/, alt);
-    if (swap !== literal && fileExists(swap)) return swap;
-  }
-  // v1.9.11 FP-38: extensionless literal (legacy-subpath `./*` targets)
-  // → probe each source extension.
-  if (!/\.[a-zA-Z]+$/.test(literal)) {
-    for (const ext of ['.ts', '.tsx', '.mts', '.cts', '.mjs', '.cjs', '.js', '.jsx']) {
-      if (fileExists(literal + ext)) return literal + ext;
-    }
-  }
+  // v1.9.11 FP-38 follow-up: legacy workspace subpaths can have dotted
+  // extensionless stems (`location.input`, `features.repository`). Treat the
+  // full subpath as the stem and run the same TS/JS probe chain used by
+  // relative and baseUrl resolution instead of assuming the last dot is a
+  // real file extension.
+  const literalHit = probeTarget(literal);
+  if (literalHit) return literalHit;
   const remapped = mapOutputToSource(entry.pkgDir, substituted);
   if (fileExists(remapped)) return remapped;
   const strippedLit = literal.replace(/\.(ts|tsx|mjs|cjs|js|jsx|mts|cts)$/, '');

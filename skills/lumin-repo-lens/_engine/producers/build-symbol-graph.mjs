@@ -119,7 +119,7 @@ if (tsEnabled) langList.push('go');
 
 const PRODUCER_ID = 'symbols';
 const PRODUCER_VERSION = 1;
-const FACT_SCHEMA_VERSION = 1;
+const FACT_SCHEMA_VERSION = 4;
 const PARSER_IDENTITY = 'symbol-graph-extractors:v1';
 
 const contextFingerprint = buildContextFingerprint({
@@ -346,6 +346,8 @@ for (const [f, entry] of Object.entries(nextCache.entries)) {
     typeEscapes: entry.typeEscapes ?? [],
     loc: entry.loc ?? 0,
     dynamicImportOpacity: entry.dynamicImportOpacity ?? [],
+    cjsExportSurface: entry.cjsExportSurface ?? null,
+    cjsRequireOpacity: entry.cjsRequireOpacity ?? [],
     // v1.7.2: Python-specific `__all__` declaration. Present only for .py
     // files where the module declared `__all__ = [...]`. When present,
     // only the listed names are considered exported; other top-level
