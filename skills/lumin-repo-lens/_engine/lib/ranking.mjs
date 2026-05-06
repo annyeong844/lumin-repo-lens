@@ -205,7 +205,13 @@ export function tierForFinding(finding, evidence = {}) {
   // Demotion preserves local runtime behavior but still removes that
   // export contract, so keep the action review-visible.
   if (contract?.publicDeepImportRisk) {
-    return { tier: 'REVIEW_FIX', reason: 'public-deep-import-risk' };
+    const detailReason = contract.publicDeepImportRiskDetail?.reason;
+    return {
+      tier: 'REVIEW_FIX',
+      reason: detailReason
+        ? `public-deep-import-risk: ${detailReason}`
+        : 'public-deep-import-risk',
+    };
   }
 
   if (!hasSoftTaint && !weakRuntimeStatus) {
@@ -248,9 +254,22 @@ export function tierForFinding(finding, evidence = {}) {
 export function summarize(scored) {
   const summary = { SAFE_FIX: 0, REVIEW_FIX: 0, DEGRADED: 0, MUTED: 0, total: scored.length };
   const byTier = { SAFE_FIX: [], REVIEW_FIX: [], DEGRADED: [], MUTED: [] };
+  const publicDeepImportRiskReasons = new Map();
   for (const s of scored) {
     summary[s.tier]++;
     byTier[s.tier].push(s);
+    if (s.tier === 'REVIEW_FIX' && s.evidence?.contract?.publicDeepImportRisk) {
+      const reason = s.evidence.contract.publicDeepImportRiskDetail?.reason ?? 'unknown';
+      publicDeepImportRiskReasons.set(reason, (publicDeepImportRiskReasons.get(reason) ?? 0) + 1);
+    }
+  }
+  if (publicDeepImportRiskReasons.size > 0) {
+    summary.reviewReasons = {
+      publicDeepImportRisk: Object.fromEntries(
+        Array.from(publicDeepImportRiskReasons.entries())
+          .sort(([a], [b]) => a.localeCompare(b)),
+      ),
+    };
   }
   return { summary, byTier };
 }

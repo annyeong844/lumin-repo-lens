@@ -25,8 +25,8 @@ import { loadIfExists as loadArtifact } from '../lib/artifacts.mjs';
 import { detectRepoMode } from '../lib/repo-mode.mjs';
 import { buildSubmoduleResolver } from '../lib/paths.mjs';
 import {
+  getPublicDeepImportRisk,
   findNearestPackageInfo,
-  hasPublicDeepImportRisk,
 } from '../lib/package-exports.mjs';
 
 const { root, output } = parseCliArgs();
@@ -114,15 +114,19 @@ function opaqueDynamicImportCouldReach(file) {
 }
 
 function fileHasPublicDeepImportRisk(file) {
+  return publicDeepImportRiskForFile(file).risk;
+}
+
+function publicDeepImportRiskForFile(file) {
   if (publicDeepImportRiskByFile.has(file)) {
     return publicDeepImportRiskByFile.get(file);
   }
   const packageInfo = findNearestPackageInfo(ROOT, file);
-  const risk = packageInfo?.packageJson
-    ? hasPublicDeepImportRisk(packageInfo.packageJson, packageInfo.relFileFromPkgRoot)
-    : false;
-  publicDeepImportRiskByFile.set(file, risk);
-  return risk;
+  const detail = packageInfo?.packageJson
+    ? getPublicDeepImportRisk(packageInfo.packageJson, packageInfo.relFileFromPkgRoot)
+    : { risk: false, reason: 'package-json-absent', relFileFromPkgRoot: file };
+  publicDeepImportRiskByFile.set(file, detail);
+  return detail;
 }
 
 function entryUnreachableSupport(finding) {
@@ -274,9 +278,13 @@ for (const f of findings) {
       },
     } : {}),
     ...(resolver ? { resolver } : {}),
-    contract: {
-      publicDeepImportRisk: fileHasPublicDeepImportRisk(f.file),
-    },
+    contract: (() => {
+      const publicDeepImportRiskDetail = publicDeepImportRiskForFile(f.file);
+      return {
+        publicDeepImportRisk: publicDeepImportRiskDetail.risk,
+        publicDeepImportRiskDetail,
+      };
+    })(),
     policy: { excluded: false },
   };
 

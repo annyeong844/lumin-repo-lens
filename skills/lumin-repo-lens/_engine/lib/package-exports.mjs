@@ -14,13 +14,18 @@ function normalizeRel(file) {
     .replace(/^\/+/, '');
 }
 
-function flattenStringLeaves(value, out = []) {
+function flattenExportLeaves(value, out = [], keyPath = []) {
   if (typeof value === 'string') {
-    out.push(value);
+    out.push({
+      value,
+      wildcard: value.includes('*') || keyPath.some((key) => key.includes('*')),
+    });
   } else if (Array.isArray(value)) {
-    for (const item of value) flattenStringLeaves(item, out);
+    for (const item of value) flattenExportLeaves(item, out, keyPath);
   } else if (value && typeof value === 'object') {
-    for (const item of Object.values(value)) flattenStringLeaves(item, out);
+    for (const [key, item] of Object.entries(value)) {
+      flattenExportLeaves(item, out, [...keyPath, key]);
+    }
   }
   return out;
 }
@@ -44,18 +49,54 @@ function exportsMapHasWildcard(exportsValue) {
   return false;
 }
 
-export function hasPublicDeepImportRisk(pkgJson, relFileFromPkgRoot) {
-  if (!pkgJson || pkgJson.private === true) return false;
-  if (typeof pkgJson.name !== 'string' || pkgJson.name.trim() === '') return false;
-  if (!pkgJson.exports) return true;
+export function getPublicDeepImportRisk(pkgJson, relFileFromPkgRoot) {
+  const rel = normalizeRel(relFileFromPkgRoot);
+  const base = { risk: false, relFileFromPkgRoot: rel };
 
-  const leaves = flattenStringLeaves(pkgJson.exports);
-  if (leaves.some((leaf) => patternMatchesRel(leaf, relFileFromPkgRoot))) {
-    return true;
+  if (!pkgJson) {
+    return { ...base, reason: 'package-json-absent' };
+  }
+  if (pkgJson.private === true) {
+    return { ...base, reason: 'private-package' };
   }
 
-  return exportsMapHasWildcard(pkgJson.exports) &&
-    leaves.some((leaf) => leaf.includes('*') && patternMatchesRel(leaf, relFileFromPkgRoot));
+  const packageName = typeof pkgJson.name === 'string' ? pkgJson.name.trim() : '';
+  if (!packageName) {
+    return { ...base, reason: 'package-name-absent' };
+  }
+
+  if (!pkgJson.exports) {
+    return {
+      ...base,
+      risk: true,
+      reason: 'exports-absent-publishable-package',
+      packageName,
+    };
+  }
+
+  const leaves = flattenExportLeaves(pkgJson.exports);
+  const match = leaves.find((leaf) => patternMatchesRel(leaf.value, rel));
+  if (match) {
+    return {
+      ...base,
+      risk: true,
+      reason: match.wildcard ? 'wildcard-exposes-file' : 'explicitly-exposed-file',
+      packageName,
+      matchedExport: match.value,
+    };
+  }
+
+  return {
+    ...base,
+    reason: exportsMapHasWildcard(pkgJson.exports)
+      ? 'exports-map-wildcard-does-not-expose-file'
+      : 'exports-map-does-not-expose-file',
+    packageName,
+  };
+}
+
+export function hasPublicDeepImportRisk(pkgJson, relFileFromPkgRoot) {
+  return getPublicDeepImportRisk(pkgJson, relFileFromPkgRoot).risk;
 }
 
 export function findNearestPackageInfo(root, relFile) {
