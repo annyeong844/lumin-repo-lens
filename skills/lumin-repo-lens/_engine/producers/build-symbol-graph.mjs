@@ -25,6 +25,7 @@ import {
   makeResolver,
 } from '../lib/resolver-core.mjs';
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
+import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
 import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
 import { isTestLikePath } from '../lib/test-paths.mjs';
 import { relPath, buildSubmoduleResolver } from '../lib/paths.mjs';
@@ -673,6 +674,14 @@ console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
 console.log(`[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`);
 console.log(`[defs] total symbols: ${[...defIndex.values()].reduce((a, m) => a + m.size, 0)}`);
 
+const generatedConsumerBlindZones = buildGeneratedConsumerBlindZones({
+  unresolvedInternalSpecifierRecords,
+}, {
+  root: ROOT,
+  includeTests: cli.includeTests,
+  exclude: cli.exclude,
+});
+
 // ─── Dead export 탐지 ─────────────────────────────────────
 // Barrel files (workspace package main entries) are skipped —
 // they serve as re-export hubs, not definition sources. Detection
@@ -845,6 +854,7 @@ const artifact = buildSymbolsArtifact({
   externalUses,
   dependencyImportConsumers,
   resolvedInternalEdges,
+  generatedConsumerBlindZones,
   generatedVirtualSurfaces: [...generatedVirtualSurfaces.values()],
   generatedVirtualImportConsumers,
   unresolvedInternalUses,

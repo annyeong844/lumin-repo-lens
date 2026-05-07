@@ -58,7 +58,7 @@ function generatedArtifactBlockingDiagnostics(taints) {
   return (taints ?? [])
     .filter((t) => t?.kind === TAINT.GENERATED_ARTIFACT_MISSING_RELEVANT)
     .map((t) => ({
-      reason: GENERATED_ARTIFACT_MISSING_REASON,
+      reason: t.reason ?? GENERATED_ARTIFACT_MISSING_REASON,
       kind: t.kind,
       specifier: t.specifier,
       specifiers: t.specifiers,
@@ -69,6 +69,12 @@ function generatedArtifactBlockingDiagnostics(taints) {
       targetSubpath: t.targetSubpath,
       generatorFamily: t.generatorFamily,
       confidence: t.confidence,
+      candidatePath: t.candidatePath,
+      status: t.status,
+      scopePackageRoot: t.scopePackageRoot,
+      scanScopeReason: t.scanScopeReason,
+      staleStatus: t.staleStatus,
+      staleReason: t.staleReason,
       impact: t.impact,
       relevance: t.relevance,
       effect: t.effect,

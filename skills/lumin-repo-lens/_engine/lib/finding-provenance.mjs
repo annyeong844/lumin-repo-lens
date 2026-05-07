@@ -211,6 +211,7 @@ export function computeFindingProvenance(finding, {
   root,
   astEvidence,
   astCount,
+  generatedConsumerBlindZones = [],
 } = {}) {
   const supportedBy = [];
   const taintedBy = [];
@@ -287,7 +288,10 @@ export function computeFindingProvenance(finding, {
     });
   }
 
-  const generatedTaint = generatedArtifactRelevantTaint(finding, generatedCandidates, { submoduleOf });
+  const generatedTaint = generatedArtifactRelevantTaint(finding, generatedCandidates, {
+    submoduleOf,
+    generatedConsumerBlindZones,
+  });
   if (generatedTaint) taintedBy.push(generatedTaint);
 
   let resolverConfidence;

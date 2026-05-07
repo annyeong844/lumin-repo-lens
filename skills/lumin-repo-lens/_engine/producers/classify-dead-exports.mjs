@@ -52,6 +52,7 @@ import {
   isAliasedSpec,
 } from '../lib/classify-facts.mjs';
 import { computeFindingProvenance } from '../lib/finding-provenance.mjs';
+import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
 import { EVIDENCE, provenanceFields } from '../lib/vocab.mjs';
 
 const cli = parseCliArgs({
@@ -285,6 +286,13 @@ const unresolvedInternalSpecifiers = Array.isArray(symbolsData.unresolvedInterna
 const unresolvedInternalSpecifierRecords = Array.isArray(symbolsData.unresolvedInternalSpecifierRecords)
   ? symbolsData.unresolvedInternalSpecifierRecords
   : unresolvedInternalSpecifiers;
+const generatedConsumerBlindZones = Array.isArray(symbolsData.generatedConsumerBlindZones)
+  ? symbolsData.generatedConsumerBlindZones
+  : buildGeneratedConsumerBlindZones(symbolsData, {
+      root: ROOT,
+      includeTests,
+      exclude,
+    });
 
 // ─── Main classification loop ────────────────────────────────
 const classified = [];
@@ -573,6 +581,7 @@ function computeCachedFindingProvenance(d, evidence, count) {
       root: ROOT,
       astEvidence: evidence,
       astCount: count,
+      generatedConsumerBlindZones,
     });
     base = {
       taintedBy: computed.taintedBy,

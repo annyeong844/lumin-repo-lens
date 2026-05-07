@@ -211,6 +211,12 @@ function sortGeneratedVirtualImportConsumers(consumers) {
       .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.name ?? ''}|${b.kind ?? ''}|${b.surfaceId ?? ''}`));
 }
 
+function sortGeneratedConsumerBlindZones(zones) {
+  return [...(zones ?? [])].sort((a, b) =>
+    `${a.scopePackageRoot ?? ''}|${a.candidatePath ?? ''}|${a.specifier ?? ''}|${a.consumerFile ?? ''}`
+      .localeCompare(`${b.scopePackageRoot ?? ''}|${b.candidatePath ?? ''}|${b.specifier ?? ''}|${b.consumerFile ?? ''}`));
+}
+
 export function buildSymbolsArtifact({
   root,
   files,
@@ -232,6 +238,7 @@ export function buildSymbolsArtifact({
   externalUses,
   dependencyImportConsumers,
   resolvedInternalEdges,
+  generatedConsumerBlindZones,
   generatedVirtualSurfaces,
   generatedVirtualImportConsumers,
   unresolvedInternalUses,
@@ -271,6 +278,7 @@ export function buildSymbolsArtifact({
         unresolvedInternalSummaryByReason: true,
         cjsExportSurface: true,
         cjsRequireOpacity: true,
+        generatedConsumerBlindZones: true,
         generatedVirtualSurfaces: true,
         nonSourceAssetImports: true,
       },
@@ -298,6 +306,7 @@ export function buildSymbolsArtifact({
       `${a.depRoot ?? ''}|${a.fromSpec ?? ''}|${a.file ?? ''}|${a.kind ?? ''}`
         .localeCompare(`${b.depRoot ?? ''}|${b.fromSpec ?? ''}|${b.file ?? ''}|${b.kind ?? ''}`)),
     resolvedInternalEdges: sortResolvedInternalEdges(resolvedInternalEdges),
+    generatedConsumerBlindZones: sortGeneratedConsumerBlindZones(generatedConsumerBlindZones),
     generatedVirtualSurfaces: sortGeneratedVirtualSurfaces(generatedVirtualSurfaces),
     generatedVirtualImportConsumers: sortGeneratedVirtualImportConsumers(generatedVirtualImportConsumers),
     topUnresolvedSpecifiers: buildTopUnresolvedSpecifiers({
