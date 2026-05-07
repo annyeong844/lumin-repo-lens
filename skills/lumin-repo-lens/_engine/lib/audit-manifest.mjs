@@ -179,6 +179,59 @@ function toRepoRelative(root, candidate) {
   return rel.split(path.sep).join('/');
 }
 
+function sortedGeneratedConsumerZoneExamples(zones) {
+  return [...zones]
+    .sort((a, b) =>
+      String(a.consumerFile ?? '').localeCompare(String(b.consumerFile ?? '')) ||
+      String(a.candidatePath ?? '').localeCompare(String(b.candidatePath ?? '')) ||
+      String(a.specifier ?? '').localeCompare(String(b.specifier ?? '')))
+    .slice(0, 5)
+    .map((zone) => ({
+      specifier: zone.specifier ?? null,
+      consumerFile: zone.consumerFile ?? null,
+      candidatePath: zone.candidatePath ?? null,
+      status: zone.status ?? null,
+      ...(zone.scanScopeReason ? { scanScopeReason: zone.scanScopeReason } : {}),
+      mode: zone.mode ?? null,
+    }));
+}
+
+function buildGeneratedConsumerBlindZoneSummary(zones) {
+  const groups = new Map();
+  for (const zone of zones ?? []) {
+    if (!zone || typeof zone !== 'object') continue;
+    const scopePackageRoot = zone.scopePackageRoot ?? 'unknown';
+    if (!groups.has(scopePackageRoot)) {
+      groups.set(scopePackageRoot, {
+        scopePackageRoot,
+        count: 0,
+        statuses: new Map(),
+        specifiers: new Map(),
+        zones: [],
+      });
+    }
+    const group = groups.get(scopePackageRoot);
+    group.count++;
+    group.statuses.set(zone.status ?? 'unknown', (group.statuses.get(zone.status ?? 'unknown') ?? 0) + 1);
+    group.specifiers.set(zone.specifier ?? 'unknown', (group.specifiers.get(zone.specifier ?? 'unknown') ?? 0) + 1);
+    group.zones.push(zone);
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      scopePackageRoot: group.scopePackageRoot,
+      count: group.count,
+      statuses: sortCounterObject(group.statuses),
+      topSpecifiers: [...group.specifiers.entries()]
+        .map(([specifier, count]) => ({ specifier, count }))
+        .sort((a, b) => b.count - a.count || a.specifier.localeCompare(b.specifier))
+        .slice(0, 5),
+      examples: sortedGeneratedConsumerZoneExamples(group.zones),
+    }))
+    .sort((a, b) => b.count - a.count || a.scopePackageRoot.localeCompare(b.scopePackageRoot))
+    .slice(0, 20);
+}
+
 function buildGeneratedArtifactsSummary(symbols, options = {}) {
   const {
     root = process.cwd(),
@@ -191,6 +244,9 @@ function buildGeneratedArtifactsSummary(symbols, options = {}) {
   const misses = new Map();
   const presentButOutOfScope = [];
   const presentKeys = new Set();
+  const generatedConsumerBlindZones = Array.isArray(symbols?.generatedConsumerBlindZones)
+    ? symbols.generatedConsumerBlindZones
+    : [];
 
   for (const record of symbols?.unresolvedInternalSpecifierRecords ?? []) {
     if (record?.reason !== GENERATED_ARTIFACT_MISSING_REASON) continue;
@@ -263,6 +319,9 @@ function buildGeneratedArtifactsSummary(symbols, options = {}) {
     executedGenerators: false,
     reasonSummary: sortCounterObject(reasonSummary),
     topGeneratedMisses,
+    generatedConsumerBlindZoneCount: generatedConsumerBlindZones.length,
+    topGeneratedConsumerBlindZones:
+      buildGeneratedConsumerBlindZoneSummary(generatedConsumerBlindZones),
     presentButOutOfScopeCount: presentButOutOfScope.length,
     presentButOutOfScope: presentButOutOfScope.sort((a, b) =>
       String(a.candidatePath ?? '').localeCompare(String(b.candidatePath ?? '')) ||

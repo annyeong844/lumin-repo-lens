@@ -43,6 +43,44 @@ function formatTopUnresolvedRoots(roots, limit = 3) {
   return parts.length ? parts.join('; ') : null;
 }
 
+function formatCounterObject(counter) {
+  if (!counter || typeof counter !== 'object' || Array.isArray(counter)) return null;
+  const parts = Object.entries(counter)
+    .filter(([, count]) => typeof count === 'number')
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([label, count]) => `${label} ${count}`);
+  return parts.length ? parts.join(', ') : null;
+}
+
+function formatTopSpecifiers(specifiers, limit = 2) {
+  if (!Array.isArray(specifiers) || specifiers.length === 0) return null;
+  const parts = specifiers
+    .slice(0, limit)
+    .map((item) => {
+      if (!item?.specifier || typeof item.count !== 'number') return null;
+      return `${item.specifier} ${item.count}`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(', ') : null;
+}
+
+function formatGeneratedConsumerBlindZoneScopes(groups, limit = 3) {
+  if (!Array.isArray(groups) || groups.length === 0) return null;
+  const parts = groups
+    .slice(0, limit)
+    .map((group) => {
+      const scope = group?.scopePackageRoot;
+      const count = group?.count;
+      if (!scope || typeof count !== 'number') return null;
+      const statusText = formatCounterObject(group.statuses);
+      const specifierText = formatTopSpecifiers(group.topSpecifiers);
+      const detail = [statusText, specifierText].filter(Boolean).join('; ');
+      return `${scope} ${count}${detail ? ` (${detail})` : ''}`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join('; ') : null;
+}
+
 function artifactName(filePath) {
   if (!filePath) return null;
   return String(filePath).replace(/\\/g, '/').split('/').slice(-2).join('/');
@@ -210,6 +248,16 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     lines.push(`- Dead-export tiers: SAFE_FIX ${n(s.SAFE_FIX)}, REVIEW_FIX ${n(s.REVIEW_FIX)}, DEGRADED ${n(s.DEGRADED)}, MUTED ${n(s.MUTED)}. Read \`fix-plan.json\` plus FP context before recommending removal.`);
   }
 
+  const generatedConsumerZoneCount = n(manifest?.generatedArtifacts?.generatedConsumerBlindZoneCount, 0);
+  if (generatedConsumerZoneCount > 0) {
+    const topScopes = formatGeneratedConsumerBlindZoneScopes(
+      manifest?.generatedArtifacts?.topGeneratedConsumerBlindZones
+    );
+    lines.push(
+      `- Generated consumer blind zones: ${generatedConsumerZoneCount}${topScopes ? `; top scopes: ${topScopes}` : ''}. Read \`manifest.json.generatedArtifacts.topGeneratedConsumerBlindZones\` and \`symbols.json.generatedConsumerBlindZones\` before treating generated code as absent.`
+    );
+  }
+
   if (callGraph?.summary) {
     const semiDead = n(callGraph.summary.semiDead, Array.isArray(callGraph.semiDeadList) ? callGraph.semiDeadList.length : 0);
     lines.push(`- Call graph: semi-dead imports ${semiDead}. Read \`call-graph.json.semiDeadList\` and framework/test conventions before cleanup.`);
@@ -240,7 +288,7 @@ function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipl
 
   lines.push('- `manifest.json`: scan range, confidence, blind zones, and command status.');
   if (symbols || produced.has('symbols.json')) {
-    lines.push('- `symbols.json`: export identities, total/type/value fan-in, dependency import consumers, public owner facts, unresolved internal reason summaries, and identity-level anyContamination owner maps.');
+    lines.push('- `symbols.json`: export identities, total/type/value fan-in, dependency import consumers, public owner facts, unresolved internal reason summaries, generated consumer blind zones, and identity-level anyContamination owner maps.');
   }
   if (checklistFacts || produced.has('checklist-facts.json')) {
     lines.push('- `checklist-facts.json`: checklist gates and measured review cues; gates are triggers, not verdicts.');
