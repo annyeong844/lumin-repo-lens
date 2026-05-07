@@ -124,7 +124,7 @@ if (tsEnabled) langList.push('go');
 const PRODUCER_ID = 'symbols';
 const PRODUCER_VERSION = 1;
 const FACT_SCHEMA_VERSION = 4;
-const PARSER_IDENTITY = 'symbol-graph-extractors:v1';
+const PARSER_IDENTITY = 'symbol-graph-extractors:v2';
 
 const contextFingerprint = buildContextFingerprint({
   includeTests: cli.includeTests,

@@ -123,12 +123,19 @@ function memberPropertyName(node) {
 
 function staticMemberPropertyName(node) {
   if (!node?.computed) return memberPropertyName(node);
-  const p = node.property;
-  return p?.type === 'Literal' && typeof p.value === 'string' ? p.value : null;
+  return literalStringValue(node.property);
 }
 
 function isCallCallee(parent, key) {
   return parent?.type === 'CallExpression' && key === 'callee';
+}
+
+function isNonEscapingTrackedIdentifierRead(parent, key) {
+  if (!parent) return false;
+  if (parent.type === 'IfStatement' && key === 'test') return true;
+  if (parent.type === 'LogicalExpression' && key === 'left') return true;
+  if (parent.type === 'UnaryExpression' && parent.operator === 'typeof' && key === 'argument') return true;
+  return false;
 }
 
 function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
@@ -543,7 +550,7 @@ function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key
   if (handleFallbackImportExpression(node, state, getNodeLine)) return;
   if (handleFallbackRequireExpression(node, state, getNodeLine, parent)) return;
   if (handleOpaqueRequireExpression(node, state, getNodeLine)) return;
-  if (handleTrackedIdentifier(node, scope)) return;
+  if (handleTrackedIdentifier(node, scope, parent, key)) return;
 
   walkChildNodes(node, scope, state, getNodeLine);
 }
@@ -710,11 +717,11 @@ function handleCjsReexportAssignment(node, state, getNodeLine) {
 }
 
 function handleDirectRequireMemberExpression(node, state, getNodeLine) {
-  if (node.type !== 'MemberExpression' || node.computed) return false;
+  if (node.type !== 'MemberExpression') return false;
   const fromSpec = literalRequireSource(node.object);
   if (!fromSpec) return false;
   state.handledCjsRequires.add(node.object);
-  const name = memberPropertyName(node);
+  const name = staticMemberPropertyName(node);
   if (name) {
     state.cjsDirectUses.push({
       fromSpec,
@@ -771,7 +778,7 @@ function handleTrackedMemberExpression(node, scope, parent, key, getNodeLine) {
   if (record?.kind !== 'namespace' && record?.kind !== 'dynamic' && record?.kind !== 'cjs') return false;
 
   if (record.kind === 'cjs') {
-    const name = !node.computed ? memberPropertyName(node) : null;
+    const name = staticMemberPropertyName(node);
     if (name) record.members.push({ name, line: getNodeLine(node) });
     else record.degraded = true;
     return true;
@@ -831,10 +838,11 @@ function handleOpaqueRequireExpression(node, state, getNodeLine) {
   return true;
 }
 
-function handleTrackedIdentifier(node, scope) {
+function handleTrackedIdentifier(node, scope, parent, key) {
   if (node.type !== 'Identifier') return false;
   const record = resolveBinding(scope, node.name);
   if (record?.kind === 'namespace' || record?.kind === 'dynamic' || record?.kind === 'cjs') {
+    if (isNonEscapingTrackedIdentifierRead(parent, key)) return true;
     record.degraded = true;
   }
   return true;
