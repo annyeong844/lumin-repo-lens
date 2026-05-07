@@ -21,6 +21,7 @@ import { buildAliasMap } from '../lib/alias-map.mjs';
 import {
   explainUnresolvedSpecifier,
   isGeneratedVirtualResolution,
+  isNonSourceAssetResolution,
   makeResolver,
 } from '../lib/resolver-core.mjs';
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
@@ -404,6 +405,7 @@ let unresolvedUses = 0;
 // blind spots. Feeds into fix-plan's resolverBlindness gate.
 let resolvedInternalUses = 0;
 let resolvedGeneratedVirtualUses = 0;
+let nonSourceAssetUses = 0;
 let externalUses = 0;
 let unresolvedInternalUses = 0;
 let mdxConsumerUses = 0;
@@ -544,6 +546,10 @@ for (const [consumerFile, info] of fileData) {
       unresolvedUses++; // legacy counter for backward-compat
       continue;
     }
+    if (isNonSourceAssetResolution(target)) {
+      nonSourceAssetUses++;
+      continue;
+    }
     if (target === 'UNRESOLVED_INTERNAL') {
       // Local alias matched (e.g. `@/*` from tsconfig paths) but no
       // target file. THIS is a real blind spot — we probably missed
@@ -615,6 +621,10 @@ for (const u of collectMdxImportConsumers({
     externalUses++;
     addDependencyImportConsumer(u.consumerFile, u, 'mdx-import');
     unresolvedUses++;
+    continue;
+  }
+  if (isNonSourceAssetResolution(target)) {
+    nonSourceAssetUses++;
     continue;
   }
   if (target === 'UNRESOLVED_INTERNAL') {
@@ -831,6 +841,7 @@ const artifact = buildSymbolsArtifact({
   unresolvedUses,
   resolvedInternalUses,
   resolvedGeneratedVirtualUses,
+  nonSourceAssetUses,
   externalUses,
   dependencyImportConsumers,
   resolvedInternalEdges,

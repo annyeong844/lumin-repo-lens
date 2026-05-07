@@ -1,3 +1,6 @@
+import path from 'node:path';
+
+import { readJsonFile } from './artifacts.mjs';
 import { relPath } from './paths.mjs';
 
 export const GENERATED_ARTIFACT_POLICY_VERSION = 'generated-artifact-policy-v1';
@@ -58,6 +61,55 @@ function staticScriptOutputEvidence(pkgJson, targetSubpath) {
     items.push(evidence('script-output-path', `scripts.${key}`, targetSubpath));
   }
   return items;
+}
+
+function nearestPackageContext(root, fromFile) {
+  const resolvedRoot = path.resolve(root);
+  let dir = path.dirname(path.resolve(fromFile));
+
+  while (true) {
+    const relToRoot = path.relative(resolvedRoot, dir);
+    if (relToRoot.startsWith('..') || path.isAbsolute(relToRoot)) break;
+
+    const pkgJsonPath = path.join(dir, 'package.json');
+    const pkgJson = readJsonFile(pkgJsonPath);
+    if (pkgJson && typeof pkgJson === 'object') {
+      return { pkgDir: dir, pkgJson };
+    }
+    if (dir === resolvedRoot) break;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+
+  return null;
+}
+
+export function generatedRelativeArtifactEvidence(root, fromFile, targetAbs) {
+  const context = nearestPackageContext(root, fromFile);
+  if (!context) return null;
+
+  const targetSubpath = path.relative(context.pkgDir, targetAbs)
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '');
+  if (!targetSubpath || targetSubpath.startsWith('../') || targetSubpath === '..') {
+    return null;
+  }
+
+  const staticScripts = staticScriptOutputEvidence(context.pkgJson, targetSubpath);
+  if (staticScripts.length === 0) return null;
+
+  return {
+    policyVersion: GENERATED_ARTIFACT_POLICY_VERSION,
+    generatorFamily: 'local-generated-asset',
+    confidence: 'strong',
+    matchedPackage: context.pkgJson.name ?? null,
+    packageRoot: path.resolve(context.pkgDir) === path.resolve(root)
+      ? '.'
+      : relPath(root, context.pkgDir),
+    targetSubpath,
+    evidence: staticScripts,
+  };
 }
 
 export function generatedOutputArtifactEvidence(pkgJson, target, sourceField, { outputArtifactDirs = OUTPUT_ARTIFACT_DIRS } = {}) {

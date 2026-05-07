@@ -14,6 +14,7 @@ import {
   mapOutputToSource,
 } from './alias-map.mjs';
 import { collectFiles } from './collect-files.mjs';
+import { fileExists } from './paths.mjs';
 import { parseOxcOrThrow } from './parse-oxc.mjs';
 
 function normalizeExportsToEntries(rawExports) {
@@ -443,7 +444,12 @@ export function collectPackagePublicSurfaceFiles({ root, repoMode }) {
 }
 
 export function collectHtmlModuleEntrypointFiles({ root, repoMode }) {
+  return collectHtmlModuleEntrypoints({ root, repoMode }).entries;
+}
+
+export function collectHtmlModuleEntrypoints({ root, repoMode }) {
   const entries = [];
+  const unresolved = [];
 
   for (const pkgDir of listPackageDirs(root, repoMode)) {
     const pkg = readJsonFile(path.join(pkgDir, 'package.json'));
@@ -454,16 +460,36 @@ export function collectHtmlModuleEntrypointFiles({ root, repoMode }) {
       for (const src of extractHtmlModuleScriptTargets(html)) {
         const target = normalizeHtmlScriptTarget(pkgDir, htmlFile, src);
         if (!target) continue;
-        addEntry(entries, root, pkgDir, target, {
+        const resolved = mapOutputToSource(pkgDir, target);
+        const resolvedFile = normalizeRel(root, resolved);
+        const evidence = {
           source: 'html-module-script',
           packageName: pkg.name,
           htmlFile: normalizeRel(root, htmlFile),
-        });
+          src,
+          target,
+          resolvedFile,
+          packageDir: normalizeRel(root, pkgDir) || '.',
+        };
+        if (fileExists(resolved)) {
+          entries.push({
+            file: resolvedFile,
+            evidence,
+          });
+        } else {
+          unresolved.push({
+            ...evidence,
+            reason: 'html-module-script-target-missing',
+            effect:
+              'HTML module script target was not found under the package root; ' +
+              'static server URL-to-filesystem mappings are not modeled.',
+          });
+        }
       }
     }
   }
 
-  return entries;
+  return { entries, unresolved };
 }
 
 export function collectScriptEntrypointFiles({ root, repoMode }) {

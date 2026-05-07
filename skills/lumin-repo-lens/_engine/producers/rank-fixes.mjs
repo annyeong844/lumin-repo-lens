@@ -150,6 +150,44 @@ function entryUnreachableSupport(finding) {
   };
 }
 
+function normalizeRel(file) {
+  return String(file ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+}
+
+function htmlTargetCouldReferToFile(file, entry) {
+  const relFile = normalizeRel(file);
+  const candidate = normalizeRel(entry?.resolvedFile);
+  if (!relFile || !candidate) return false;
+  return relFile === candidate || relFile.endsWith('/' + candidate);
+}
+
+function htmlEntrySurfaceBlindZoneForFile(file) {
+  const unresolved = entrySurface?.unresolvedHtmlEntrypoints;
+  if (!Array.isArray(unresolved) || unresolved.length === 0) return null;
+  const matches = unresolved
+    .filter((entry) => htmlTargetCouldReferToFile(file, entry))
+    .sort((a, b) =>
+      String(a.htmlFile ?? '').localeCompare(String(b.htmlFile ?? '')) ||
+      String(a.src ?? '').localeCompare(String(b.src ?? '')) ||
+      String(a.resolvedFile ?? '').localeCompare(String(b.resolvedFile ?? '')));
+  if (matches.length === 0) return null;
+  return {
+    area: 'html-entry-surface',
+    reason: 'html-module-script-target-missing',
+    impact: 'entry-surface-unresolved',
+    relevance: 'candidate-file-matches-html-target-suffix',
+    effect:
+      'HTML module script target could refer to this file through a static server root that Lumin does not model.',
+    matches: matches.slice(0, 5).map((entry) => ({
+      htmlFile: entry.htmlFile ?? null,
+      src: entry.src ?? null,
+      candidateFile: entry.resolvedFile ?? null,
+      packageName: entry.packageName ?? null,
+    })),
+    total: matches.length,
+  };
+}
+
 const FUNCTION_LIKE_KINDS = new Set([
   'FunctionDeclaration',
   'FunctionExpression',
@@ -365,6 +403,9 @@ for (const f of findings) {
         publicDeepImportRiskDetail,
       };
     })(),
+    entrySurface: {
+      htmlEntrypointBlindZone: htmlEntrySurfaceBlindZoneForFile(f.file),
+    },
     policy: { excluded: false },
   };
 

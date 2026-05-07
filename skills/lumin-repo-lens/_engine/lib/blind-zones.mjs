@@ -335,16 +335,44 @@ function detectCjsRequireOpacityZone(symbols) {
   };
 }
 
+function detectHtmlEntrySurfaceZone(entrySurface) {
+  const unresolved = entrySurface?.unresolvedHtmlEntrypoints;
+  if (!Array.isArray(unresolved) || unresolved.length === 0) return null;
+  const examples = unresolved
+    .slice()
+    .sort((a, b) =>
+      `${a?.htmlFile ?? ''}|${a?.src ?? ''}|${a?.resolvedFile ?? ''}`
+        .localeCompare(`${b?.htmlFile ?? ''}|${b?.src ?? ''}|${b?.resolvedFile ?? ''}`))
+    .slice(0, 5)
+    .map((entry) => ({
+      htmlFile: entry.htmlFile ?? null,
+      src: entry.src ?? null,
+      candidateFile: entry.resolvedFile ?? null,
+      reason: entry.reason ?? 'html-module-script-target-missing',
+    }));
+
+  return {
+    area: 'html-entry-surface',
+    severity: 'confidence-gap',
+    effect: 'Some HTML module script entrypoints could not be mapped to repository files; ' +
+            'module reachability and HTML-entry policy claims are confidence-limited.',
+    details: {
+      unresolvedHtmlEntrypoints: unresolved.length,
+      examples,
+    },
+  };
+}
+
 /**
  * Detect blind zones from available artifacts. Any artifact may be
  * null (the orchestrator passes what's on disk); missing inputs
  * silently skip their detection branch. Never invents blind zones
  * out of missing data — the whole point is honest reporting.
  *
- * @param {{triage?: object | null, symbols?: object | null, deadClassify?: object | null}} artifacts
+ * @param {{triage?: object | null, symbols?: object | null, deadClassify?: object | null, entrySurface?: object | null}} artifacts
  * @returns {BlindZone[]}
  */
-export function detectBlindZones({ triage, symbols, deadClassify: _deadClassify }) {
+export function detectBlindZones({ triage, symbols, deadClassify: _deadClassify, entrySurface }) {
   const support = languageSupportState(symbols);
   const zones = [
     ...detectShapeZones(triage, support),
@@ -359,6 +387,8 @@ export function detectBlindZones({ triage, symbols, deadClassify: _deadClassify 
   if (cjsExportSurfaceZone) zones.push(cjsExportSurfaceZone);
   const cjsRequireZone = detectCjsRequireOpacityZone(symbols);
   if (cjsRequireZone) zones.push(cjsRequireZone);
+  const htmlEntryZone = detectHtmlEntrySurfaceZone(entrySurface);
+  if (htmlEntryZone) zones.push(htmlEntryZone);
   return zones;
 }
 

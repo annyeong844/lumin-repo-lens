@@ -11,7 +11,7 @@ import { parseOxcOrThrow } from '../lib/parse-oxc.mjs';
 import { parseCliArgs } from '../lib/cli.mjs';
 import { detectRepoMode } from '../lib/repo-mode.mjs';
 import { buildAliasMap } from '../lib/alias-map.mjs';
-import { makeResolver, isResolvedFile } from '../lib/resolver-core.mjs';
+import { makeResolver, isNonSourceAssetResolution, isResolvedFile } from '../lib/resolver-core.mjs';
 import { producerMetaBase } from '../lib/artifacts.mjs';
 import { collectFiles } from '../lib/collect-files.mjs';
 import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
@@ -152,6 +152,9 @@ function processFileTs(f) {
           typeof s.value === 'string') {
         const target = resolve(f, s.value);
         if (target === 'EXTERNAL') externalCount++;
+        else if (isNonSourceAssetResolution(target)) {
+          // Asset imports do not create JS module topology edges.
+        }
         else if (isResolvedFile(target)) edgesOut.push({ to: target, typeOnly: false, dynamic: true });
         else unresolvedCount++;
       }
@@ -174,6 +177,9 @@ function processFileTs(f) {
       if (node.type === 'ImportDeclaration') {
         const target = resolve(f, node.source.value);
         if (target === 'EXTERNAL') externalCount++;
+        else if (isNonSourceAssetResolution(target)) {
+          // Asset imports do not create JS module topology edges.
+        }
         else if (isResolvedFile(target)) edgesOut.push({ to: target, typeOnly: node.importKind === 'type' });
         else unresolvedCount++;
       } else if (
@@ -193,6 +199,9 @@ function processFileTs(f) {
         const typeOnly = node.exportKind === 'type' || allSpecsTypeOnly;
         const target = resolve(f, node.source.value);
         if (target === 'EXTERNAL') externalCount++;
+        else if (isNonSourceAssetResolution(target)) {
+          // Asset imports do not create JS module topology edges.
+        }
         else if (isResolvedFile(target)) edgesOut.push({ to: target, reExport: true, typeOnly });
         else unresolvedCount++;
       }

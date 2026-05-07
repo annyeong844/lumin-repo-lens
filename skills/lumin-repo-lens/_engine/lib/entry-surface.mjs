@@ -10,7 +10,7 @@ import { producerMetaBase } from './artifacts.mjs';
 import { buildAliasMap } from './alias-map.mjs';
 import { collectFiles } from './collect-files.mjs';
 import {
-  collectHtmlModuleEntrypointFiles,
+  collectHtmlModuleEntrypoints,
   collectPackagePublicSurfaceFiles,
   collectScriptEntrypointFiles,
   indexPublicSurfaceEntries,
@@ -40,6 +40,13 @@ function sortedEvidenceObject(evidenceByFile) {
     out[file] = [...evidenceByFile.get(file)];
   }
   return out;
+}
+
+function sortedRecords(records) {
+  return [...(records ?? [])].sort((a, b) =>
+    String(a.htmlFile ?? '').localeCompare(String(b.htmlFile ?? '')) ||
+    String(a.src ?? '').localeCompare(String(b.src ?? '')) ||
+    String(a.resolvedFile ?? '').localeCompare(String(b.resolvedFile ?? '')));
 }
 
 function addEvidenceFile(targetSet, evidenceMap, relPath, evidence) {
@@ -167,12 +174,13 @@ function collectScriptEntries({ root, repoMode }) {
 function collectHtmlEntries({ root, repoMode }) {
   const files = new Set();
   const evidenceByFile = new Map();
+  const html = collectHtmlModuleEntrypoints({ root, repoMode });
   addIndexedEntries(
-    indexPublicSurfaceEntries(collectHtmlModuleEntrypointFiles({ root, repoMode })),
+    indexPublicSurfaceEntries(html.entries),
     files,
     evidenceByFile,
   );
-  return { files, evidenceByFile };
+  return { files, evidenceByFile, unresolved: html.unresolved };
 }
 
 function collectConfigEntries({ knownFiles }) {
@@ -229,11 +237,11 @@ function mergeEvidenceMaps(...maps) {
   return merged;
 }
 
-function completenessLabels({ entryFiles, knownFiles, symbolsData, submoduleOf }) {
+function completenessLabels({ entryFiles, knownFiles, symbolsData, submoduleOf, limitations = [] }) {
   const parseErrors = (symbolsData?.meta?.warnings ?? [])
     .filter((w) => w?.code === 'parse-errors' || w?.kind === 'parse-errors' || w?.type === 'parse-errors')
     .reduce((sum, w) => sum + (Number(w?.count) || 0), 0);
-  const globalCompleteness = parseErrors > 0 ? 'medium' : 'high';
+  const globalCompleteness = parseErrors > 0 || limitations.length > 0 ? 'medium' : 'high';
   const submodules = new Set([
     ...knownFiles.map(submoduleOf),
     ...entryFiles.map(submoduleOf),
@@ -277,8 +285,15 @@ export function buildEntrySurfaceArtifact({
     framework.evidenceByFile,
     config.evidenceByFile,
   );
+  const unresolvedHtmlEntrypoints = sortedRecords(html.unresolved);
   const { globalCompleteness, completenessBySubmodule } =
-    completenessLabels({ entryFiles, knownFiles, symbolsData, submoduleOf });
+    completenessLabels({
+      entryFiles,
+      knownFiles,
+      symbolsData,
+      submoduleOf,
+      limitations: unresolvedHtmlEntrypoints,
+    });
 
   return {
     meta: {
@@ -288,6 +303,7 @@ export function buildEntrySurfaceArtifact({
         publicApiFiles: true,
         scriptEntrypointFiles: true,
         htmlEntrypointFiles: true,
+        unresolvedHtmlEntrypoints: true,
         frameworkEntrypointFiles: true,
         configEntrypointFiles: true,
         submoduleCompleteness: true,
@@ -299,6 +315,7 @@ export function buildEntrySurfaceArtifact({
     publicApiFiles: sortedSet(publicApi.files),
     scriptEntrypointFiles: sortedSet(script.files),
     htmlEntrypointFiles: sortedSet(html.files),
+    unresolvedHtmlEntrypoints,
     frameworkEntrypointFiles: sortedSet(framework.files),
     configEntrypointFiles: sortedSet(config.files),
     entryFiles,

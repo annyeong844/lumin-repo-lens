@@ -303,6 +303,7 @@ export function buildManifestEvidence({
 }) {
   const triage = loadArtifact(outDir, 'triage.json');
   const symbols = loadArtifact(outDir, 'symbols.json');
+  const entrySurface = loadArtifact(outDir, 'entry-surface.json');
   const deadClassify = loadArtifact(outDir, 'dead-classify.json');
 
   const parseErrors = (() => {
@@ -329,7 +330,7 @@ export function buildManifestEvidence({
       unresolvedInternal: symbols?.uses?.unresolvedInternal ?? null,
     },
     resolverDiagnostics: buildResolverDiagnosticsSummary(symbols),
-    blindZones: detectBlindZones({ triage, symbols, deadClassify }),
+    blindZones: detectBlindZones({ triage, symbols, deadClassify, entrySurface }),
     generatedArtifacts: buildGeneratedArtifactsSummary(symbols, {
       root,
       includeTests,

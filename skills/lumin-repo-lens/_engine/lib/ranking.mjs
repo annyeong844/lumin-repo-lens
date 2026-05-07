@@ -85,12 +85,13 @@ function generatedArtifactBlockingDiagnostics(taints) {
  * @param {object} evidence   {runtime?: {status, grounding, confidence,
  *                            hitsInSymbol}, staleness?: {tier,
  *                            grounding, lineLastTouchedDaysAgo}, contract?:
- *                            {publicDeepImportRisk}, policy?: {excluded,
+ *                            {publicDeepImportRisk}, entrySurface?:
+ *                            {htmlEntrypointBlindZone}, policy?: {excluded,
  *                            reason}, resolver?: {unresolvedRatio}}
  * @returns {{tier: string, reason: string}}
  */
 export function tierForFinding(finding, evidence = {}) {
-  const { runtime, staleness, contract, policy, resolver } = evidence;
+  const { runtime, staleness, contract, entrySurface, policy, resolver } = evidence;
 
   // ─── MUTED: explicit policy exclusion ────────────────────
   // Classifier already dropped these into the `excluded.*` counters
@@ -224,6 +225,21 @@ export function tierForFinding(finding, evidence = {}) {
   const supportedBy = Array.isArray(finding.supportedBy) ? finding.supportedBy : [];
   const hasEntryReachSupport = supportedBy.some((s) => s?.kind === 'entry-unreachable');
   const hasIndependentSupport = supportedBy.some((s) => s?.kind === 'call-graph-no-observed-callers');
+
+  // ─── REVIEW_FIX: unresolved HTML entry surface ───────────
+  // Absolute HTML module URLs such as `/assets/app.js` can be served from
+  // arbitrary static roots (`public/`, framework output dirs, custom
+  // server code). If the HTML target cannot be mapped to a concrete repo
+  // file, candidates that look like that target stay review-gated instead
+  // of becoming SAFE_FIX on an overconfident reachability model.
+  if (entrySurface?.htmlEntrypointBlindZone) {
+    return {
+      tier: 'REVIEW_FIX',
+      reason: 'html-entry-surface-blind-zone',
+      blockedPromotion: true,
+      blockedBy: [entrySurface.htmlEntrypointBlindZone],
+    };
+  }
 
   // ─── REVIEW_FIX: externally observable deep-import contract ─
   // PCEF contract proof: in publishable packages without an exports

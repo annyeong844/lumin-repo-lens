@@ -3,6 +3,9 @@
 // `makeResolver(root, aliasMap)` returns a closure that takes (fromFile,
 // spec) and returns ONE of:
 //   - an absolute file path when resolved to a local source file,
+//   - 'NON_SOURCE_ASSET' when the spec resolves to an existing asset
+//     file outside the JS/TS source family (for example
+//     `./style.css?inline`),
 //   - 'EXTERNAL' when the spec looks like an external npm package
 //     (no matching alias / tsconfig path / root-prefix interpretation),
 //   - 'UNRESOLVED_INTERNAL' when the spec DID match a local alias
@@ -39,6 +42,7 @@ import {
   GENERATED_ARTIFACT_MISSING_HINT,
   GENERATED_ARTIFACT_MISSING_REASON,
   generatedArtifactForTargetCandidates,
+  generatedRelativeArtifactEvidence,
   generatedWorkspaceSubpathEvidence,
   isStrongGeneratedArtifact,
   normalizeGeneratedSpecifierSubpath,
@@ -58,6 +62,30 @@ const RESOLVE_INDEX_EXTS = [
   '/index.mjs', '/index.cjs', '/index.mts', '/index.cts',
   '/index.d.ts', '/index.d.mts', '/index.d.cts',
 ];
+export const NON_SOURCE_ASSET_RESOLUTION = 'NON_SOURCE_ASSET';
+
+const JS_SOURCE_EXT_RE = /\.(d\.)?(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/i;
+
+function resourceQueryStart(spec) {
+  const q = spec.indexOf('?');
+  const h = spec.indexOf('#');
+  const candidates = [];
+  if (q >= 0) candidates.push(q);
+  // Leading # is a Node package-import specifier, not a resource fragment.
+  if (h > 0) candidates.push(h);
+  return candidates.length ? Math.min(...candidates) : -1;
+}
+
+function stripResourceQuery(spec) {
+  const idx = resourceQueryStart(spec);
+  return idx >= 0 ? spec.slice(0, idx) : spec;
+}
+
+function looksLikeNonSourceAsset(spec) {
+  const stripped = stripResourceQuery(spec);
+  if (!/\.[^/.]+$/i.test(stripped)) return false;
+  return !JS_SOURCE_EXT_RE.test(stripped);
+}
 
 // v1.8.0 symlink aliasing fix: resolver returns the realpath (symlinks
 // resolved) so downstream consumers see the same absolute path that
@@ -67,7 +95,7 @@ const RESOLVE_INDEX_EXTS = [
 // Cache realpath calls — invariant for a given audit run.
 const realpathCache = new Map();
 function canonicalize(p) {
-  if (p === null || p === 'EXTERNAL' || p === 'UNRESOLVED_INTERNAL') return p;
+  if (p === null || p === 'EXTERNAL' || p === 'UNRESOLVED_INTERNAL' || p === NON_SOURCE_ASSET_RESOLUTION) return p;
   if (isGeneratedVirtualResolution(p)) return p;
   const cached = realpathCache.get(p);
   if (cached !== undefined) return cached;
@@ -81,7 +109,14 @@ function canonicalize(p) {
 // Callers switch on four cases. Use this predicate to ask "is this a
 // concrete file path?" — returns false for both sentinels AND null.
 export function isResolvedFile(r) {
-  return typeof r === 'string' && r !== 'EXTERNAL' && r !== 'UNRESOLVED_INTERNAL';
+  return typeof r === 'string' &&
+    r !== 'EXTERNAL' &&
+    r !== 'UNRESOLVED_INTERNAL' &&
+    r !== NON_SOURCE_ASSET_RESOLUTION;
+}
+
+export function isNonSourceAssetResolution(r) {
+  return r === NON_SOURCE_ASSET_RESOLUTION;
 }
 
 export { isGeneratedVirtualResolution };
@@ -142,6 +177,12 @@ function probeRootCandidate(base) {
 // an external package candidate).
 
 function resolveRelative(fromFile, spec) {
+  const fsSpec = stripResourceQuery(spec);
+  if (looksLikeNonSourceAsset(spec)) {
+    const asset = path.resolve(path.dirname(fromFile), fsSpec);
+    if (fileExists(asset)) return NON_SOURCE_ASSET_RESOLUTION;
+  }
+
   const base = path.resolve(path.dirname(fromFile), spec);
   for (const ext of RESOLVE_FILE_EXTS) {
     if (fileExists(base + ext)) return base + ext;
@@ -512,9 +553,19 @@ function resolveRootPrefix(spec, root) {
 export function explainUnresolvedSpecifier(root, aliasMap, fromFile, spec) {
   if (!spec || typeof spec !== 'string') return null;
   if (spec.startsWith('.')) {
-    return unresolvedRecord(root, 'relative-target-missing', {
+    const fsSpec = stripResourceQuery(spec);
+    const targetAbs = path.resolve(path.dirname(fromFile), fsSpec);
+    const generatedArtifact = generatedRelativeArtifactEvidence(root, fromFile, targetAbs);
+    const generatedMissing = isStrongGeneratedArtifact(generatedArtifact);
+    return unresolvedRecord(root, generatedMissing
+      ? GENERATED_ARTIFACT_MISSING_REASON
+      : 'relative-target-missing', {
       stage: 'relative',
-      targetCandidates: [path.resolve(path.dirname(fromFile), spec)],
+      targetCandidates: [targetAbs],
+      hint: generatedMissing
+        ? GENERATED_ARTIFACT_MISSING_HINT
+        : unresolvedGeneratedArtifactHintForCandidates([targetAbs]),
+      generatedArtifact: generatedMissing ? generatedArtifact : undefined,
     });
   }
 

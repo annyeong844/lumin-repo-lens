@@ -228,6 +228,7 @@ export function buildSymbolsArtifact({
   unresolvedUses,
   resolvedInternalUses,
   resolvedGeneratedVirtualUses = 0,
+  nonSourceAssetUses = 0,
   externalUses,
   dependencyImportConsumers,
   resolvedInternalEdges,
@@ -271,6 +272,7 @@ export function buildSymbolsArtifact({
         cjsExportSurface: true,
         cjsRequireOpacity: true,
         generatedVirtualSurfaces: true,
+        nonSourceAssetImports: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -283,6 +285,7 @@ export function buildSymbolsArtifact({
     uses: {
       resolvedInternal: resolvedInternalUses,
       resolvedGeneratedVirtual: resolvedGeneratedVirtualUses,
+      nonSourceAsset: nonSourceAssetUses,
       external: externalUses,
       unresolvedInternal: unresolvedInternalUses,
       mdxConsumers: mdxConsumerUses,
