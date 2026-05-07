@@ -7,6 +7,12 @@ import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { detectBlindZones } from './blind-zones.mjs';
 import { loadIfExists as loadArtifact } from './artifacts.mjs';
+import { scanScopeStatusForPath } from './collect-files.mjs';
+import { normalizeGeneratedArtifactsMode } from './generated-artifact-mode.mjs';
+import {
+  GENERATED_ARTIFACT_MISSING_REASON,
+  GENERATED_ARTIFACT_POLICY_VERSION,
+} from './generated-artifact-evidence.mjs';
 
 const LIVING_AUDIT_DOC_CANDIDATES = [
   'docs/current/audit/lumin-structural-audit.md',
@@ -66,6 +72,113 @@ function detectLivingAuditDocs(root) {
   };
 }
 
+function sortCounterObject(counter) {
+  return Object.fromEntries([...counter.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0])));
+}
+
+function toRepoRelative(root, candidate) {
+  const abs = path.isAbsolute(candidate)
+    ? path.resolve(candidate)
+    : path.resolve(root, candidate);
+  const rel = path.relative(path.resolve(root), abs);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+  return rel.split(path.sep).join('/');
+}
+
+function buildGeneratedArtifactsSummary(symbols, options = {}) {
+  const {
+    root = process.cwd(),
+    includeTests = true,
+    excludes = [],
+    generatedArtifactsMode = 'default',
+  } = options;
+  const mode = normalizeGeneratedArtifactsMode(generatedArtifactsMode);
+  const reasonSummary = new Map();
+  const misses = new Map();
+  const presentButOutOfScope = [];
+  const presentKeys = new Set();
+
+  for (const record of symbols?.unresolvedInternalSpecifierRecords ?? []) {
+    if (record?.reason !== GENERATED_ARTIFACT_MISSING_REASON) continue;
+    reasonSummary.set(record.reason, (reasonSummary.get(record.reason) ?? 0) + 1);
+
+    const generatedArtifact = record.generatedArtifact ?? {};
+    const key = [
+      record.specifier ?? '',
+      generatedArtifact.matchedPackage ?? '',
+      generatedArtifact.targetSubpath ?? '',
+      generatedArtifact.generatorFamily ?? '',
+      generatedArtifact.confidence ?? '',
+    ].join('|');
+    if (!misses.has(key)) {
+      misses.set(key, {
+        specifier: record.specifier,
+        matchedPackage: generatedArtifact.matchedPackage ?? null,
+        targetSubpath: generatedArtifact.targetSubpath ?? null,
+        count: 0,
+        generatorFamily: generatedArtifact.generatorFamily ?? null,
+        confidence: generatedArtifact.confidence ?? null,
+      });
+    }
+    misses.get(key).count += 1;
+
+    if (mode !== 'default') {
+      for (const candidate of record.targetCandidates ?? []) {
+        const candidatePath = toRepoRelative(root, candidate);
+        if (!candidatePath) continue;
+        const absCandidate = path.resolve(root, candidatePath);
+        if (!existsSync(absCandidate)) continue;
+        const scope = scanScopeStatusForPath(root, absCandidate, { includeTests, exclude: excludes });
+        if (scope.included) continue;
+        const presentKey = [
+          record.specifier ?? '',
+          record.consumerFile ?? '',
+          candidatePath,
+          mode,
+        ].join('|');
+        if (presentKeys.has(presentKey)) continue;
+        presentKeys.add(presentKey);
+        const present = {
+          specifier: record.specifier,
+          consumerFile: record.consumerFile ?? null,
+          matchedPackage: generatedArtifact.matchedPackage ?? null,
+          targetSubpath: generatedArtifact.targetSubpath ?? null,
+          candidatePath,
+          reason: 'present-but-out-of-scope',
+          mode,
+        };
+        if (mode === 'prepared') {
+          present.staleStatus = 'unknown';
+          present.staleReason = 'generator-input-hash-not-recorded';
+        }
+        presentButOutOfScope.push(present);
+      }
+    }
+  }
+
+  const topGeneratedMisses = [...misses.values()]
+    .sort((a, b) =>
+      b.count - a.count ||
+      String(a.matchedPackage ?? '').localeCompare(String(b.matchedPackage ?? '')) ||
+      String(a.specifier ?? '').localeCompare(String(b.specifier ?? '')))
+    .slice(0, 20);
+
+  return {
+    mode,
+    generatedArtifactPolicyVersion: GENERATED_ARTIFACT_POLICY_VERSION,
+    executedGenerators: false,
+    reasonSummary: sortCounterObject(reasonSummary),
+    topGeneratedMisses,
+    presentButOutOfScopeCount: presentButOutOfScope.length,
+    presentButOutOfScope: presentButOutOfScope.sort((a, b) =>
+      String(a.candidatePath ?? '').localeCompare(String(b.candidatePath ?? '')) ||
+      String(a.specifier ?? '').localeCompare(String(b.specifier ?? '')) ||
+      String(a.consumerFile ?? '').localeCompare(String(b.consumerFile ?? ''))),
+    supportedGenerators: [],
+  };
+}
+
 export function collectProducedArtifacts(outDir) {
   const produced = new Set();
   for (const name of ARTIFACT_CANDIDATES) {
@@ -93,6 +206,7 @@ export function buildManifestEvidence({
   production,
   excludes = [],
   autoExcludes = [],
+  generatedArtifactsMode = 'default',
 }) {
   const triage = loadArtifact(outDir, 'triage.json');
   const symbols = loadArtifact(outDir, 'symbols.json');
@@ -122,6 +236,12 @@ export function buildManifestEvidence({
       unresolvedInternal: symbols?.uses?.unresolvedInternal ?? null,
     },
     blindZones: detectBlindZones({ triage, symbols, deadClassify }),
+    generatedArtifacts: buildGeneratedArtifactsSummary(symbols, {
+      root,
+      includeTests,
+      excludes,
+      generatedArtifactsMode,
+    }),
     livingAudit: detectLivingAuditDocs(root),
   };
 }
@@ -131,5 +251,6 @@ export function refreshManifestEvidence(manifest, options) {
   manifest.scanRange = evidence.scanRange;
   manifest.confidence = evidence.confidence;
   manifest.blindZones = evidence.blindZones;
+  manifest.generatedArtifacts = evidence.generatedArtifacts;
   manifest.livingAudit = evidence.livingAudit;
 }

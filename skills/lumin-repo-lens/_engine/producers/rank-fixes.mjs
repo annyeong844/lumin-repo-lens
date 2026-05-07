@@ -44,6 +44,7 @@ const runtimeEvidence = loadIfExists('runtime-evidence.json');
 const staleness = loadIfExists('staleness.json');
 const symbols = loadIfExists('symbols.json');
 const exportActionSafety = loadIfExists('export-action-safety.json');
+const callGraph = loadIfExists('call-graph.json');
 const entrySurface = loadIfExists('entry-surface.json');
 const moduleReachability = loadIfExists('module-reachability.json');
 
@@ -53,6 +54,7 @@ const inputs = {
   'staleness.json': !!staleness,
   'symbols.json': !!symbols,
   'export-action-safety.json': !!exportActionSafety,
+  'call-graph.json': !!callGraph,
   'entry-surface.json': !!entrySurface,
   'module-reachability.json': !!moduleReachability,
 };
@@ -148,12 +150,90 @@ function entryUnreachableSupport(finding) {
   };
 }
 
-function withReachabilitySupport(finding) {
-  const support = entryUnreachableSupport(finding);
+const FUNCTION_LIKE_KINDS = new Set([
+  'FunctionDeclaration',
+  'FunctionExpression',
+  'ArrowFunctionExpression',
+  'MethodDefinition',
+  'TSDeclareFunction',
+]);
+
+function findingIdentity(finding) {
+  return `${finding.file}::${finding.symbol}`;
+}
+
+function safeActionDefinitionId(finding) {
+  return finding.safeAction?.target?.definitionId
+    ?? symbols?.defIndex?.[finding.file]?.[finding.symbol]?.definitionId
+    ?? callGraph?.exportAliasMap?.[findingIdentity(finding)];
+}
+
+function isFunctionLikeFinding(finding) {
+  const nodeKind = finding.safeAction?.target?.nodeKind;
+  return FUNCTION_LIKE_KINDS.has(finding.kind) ||
+    FUNCTION_LIKE_KINDS.has(nodeKind);
+}
+
+function isFrameworkCallbackLike(finding) {
+  const file = finding.file;
+  const symbol = finding.symbol ?? '';
+  if (/\.(tsx|jsx)$/i.test(file) && /^[A-Z]/.test(symbol)) return true;
+  if (/^use[A-Z]/.test(symbol)) return true;
+  return /(^|\/)(routes|pages|app|api|handlers|middleware|serverless)(\/|$)/.test(file) &&
+    (symbol === 'default' || isFunctionLikeFinding(finding));
+}
+
+function nearbyBoundedOutRatio(file) {
+  const bounded = callGraph?.boundedOutMemberCallsByFile?.[file];
+  const total = callGraph?.memberCallsByFile?.[file];
+  if (typeof bounded !== 'number' && typeof total !== 'number') return 0;
+  return (bounded ?? 0) / Math.max(total ?? 0, 1);
+}
+
+function symbolGraphFanInZero(finding) {
+  const identity = findingIdentity(finding);
+  return symbols?.fanInByIdentity?.[identity] === 0;
+}
+
+function callGraphFanInZero(finding) {
+  const identity = findingIdentity(finding);
+  const definitionId = safeActionDefinitionId(finding);
+  if (definitionId && callGraph?.meta?.supports?.callFanInByDefinitionId === true) {
+    const count = callGraph.callFanInByDefinitionId?.[definitionId];
+    if (count === 0) return true;
+    if (typeof count === 'number') return false;
+  }
+  if (callGraph?.meta?.supports?.callFanInByIdentity === true) {
+    return callGraph.callFanInByIdentity?.[identity] === 0;
+  }
+  return false;
+}
+
+function callGraphNoObservedCallersSupport(finding) {
+  if (!callGraph) return null;
+  if (!isFunctionLikeFinding(finding)) return null;
+  if (isFrameworkCallbackLike(finding)) return null;
+  if (!symbolGraphFanInZero(finding)) return null;
+  if (!callGraphFanInZero(finding)) return null;
+  if (nearbyBoundedOutRatio(finding.file) >= 0.10) return null;
+  return {
+    kind: 'call-graph-no-observed-callers',
+    artifact: 'call-graph.json',
+  };
+}
+
+function addSupport(finding, support) {
   if (!support) return finding;
   const existing = Array.isArray(finding.supportedBy) ? finding.supportedBy : [];
   if (existing.some((s) => s?.kind === support.kind)) return finding;
   return { ...finding, supportedBy: [...existing, support] };
+}
+
+function withEvidenceSupport(finding) {
+  return addSupport(
+    addSupport(finding, entryUnreachableSupport(finding)),
+    callGraphNoObservedCallersSupport(finding),
+  );
 }
 
 // Resolver blindness surfaces as a global gate. v1.9.7 FP-36: prefer
@@ -256,7 +336,7 @@ const mutedFindings = excludedCandidates.map((e) => ({
 // ─── Score each finding ───────────────────────────────────
 const scored = [];
 for (const f of findings) {
-  const rankedFinding = withReachabilitySupport(f);
+  const rankedFinding = withEvidenceSupport(f);
   const key = `${f.file}|${f.symbol}|${f.line}`;
   const rt = runtimeBy.get(key);
   const st = stalenessBy.get(key);
@@ -288,7 +368,14 @@ for (const f of findings) {
     policy: { excluded: false },
   };
 
-  const { tier, reason, confidence, confidenceDetail } = tierForFinding(rankedFinding, evidence);
+  const {
+    tier,
+    reason,
+    confidence,
+    confidenceDetail,
+    blockedPromotion,
+    blockedBy,
+  } = tierForFinding(rankedFinding, evidence);
   scored.push({
     finding: rankedFinding,
     evidence,
@@ -296,6 +383,8 @@ for (const f of findings) {
     reason,
     ...(confidence !== undefined ? { confidence } : {}),
     ...(confidenceDetail !== undefined ? { confidenceDetail } : {}),
+    ...(blockedPromotion !== undefined ? { blockedPromotion } : {}),
+    ...(blockedBy !== undefined ? { blockedBy } : {}),
   });
 }
 

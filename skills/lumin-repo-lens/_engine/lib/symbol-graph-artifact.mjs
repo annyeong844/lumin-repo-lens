@@ -51,6 +51,7 @@ function compactUnresolvedExample(record = {}) {
     specifier: record.specifier,
     consumerFile: record.consumerFile,
     kind: record.kind,
+    ...(typeof record.typeOnly === 'boolean' ? { typeOnly: record.typeOnly } : {}),
     ...(record.resolverStage ? { resolverStage: record.resolverStage } : {}),
     ...(record.matchedPattern ? { matchedPattern: record.matchedPattern } : {}),
     ...(record.hint ? { hint: record.hint } : {}),
@@ -58,6 +59,12 @@ function compactUnresolvedExample(record = {}) {
       ? { targetCandidates: record.targetCandidates.slice(0, 3) }
       : {}),
   };
+}
+
+function unresolvedSpace(record = {}) {
+  if (record.typeOnly === true) return 'type';
+  if (record.typeOnly === false) return 'value';
+  return 'unknown';
 }
 
 function sortedCounterObject(counter) {
@@ -74,6 +81,11 @@ function buildUnresolvedInternalSummaryByReason(records) {
     if (!groups.has(reason)) {
       groups.set(reason, {
         count: 0,
+        spaces: {
+          type: 0,
+          value: 0,
+          unknown: 0,
+        },
         resolverStages: new Map(),
         hints: new Map(),
         examples: [],
@@ -82,6 +94,7 @@ function buildUnresolvedInternalSummaryByReason(records) {
 
     const group = groups.get(reason);
     group.count++;
+    group.spaces[unresolvedSpace(record)]++;
     if (record?.resolverStage) {
       group.resolverStages.set(
         record.resolverStage,
@@ -98,6 +111,7 @@ function buildUnresolvedInternalSummaryByReason(records) {
     .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
     .map(([reason, group]) => [reason, {
       count: group.count,
+      spaces: group.spaces,
       ...(group.resolverStages.size
         ? { resolverStages: sortedCounterObject(group.resolverStages) }
         : {}),
@@ -181,6 +195,22 @@ function sortResolvedInternalEdges(edges) {
       .localeCompare(`${b.from ?? ''}|${b.to ?? ''}|${b.kind ?? ''}|${b.source ?? ''}|${b.typeOnly ? '1' : '0'}`));
 }
 
+function sortGeneratedVirtualSurfaces(surfaces) {
+  return [...(surfaces ?? [])]
+    .map((surface) => ({
+      ...surface,
+      exports: [...(surface.exports ?? [])].sort((a, b) =>
+        `${a.name ?? ''}|${a.kind ?? ''}`.localeCompare(`${b.name ?? ''}|${b.kind ?? ''}`)),
+    }))
+    .sort((a, b) => `${a.id ?? ''}`.localeCompare(`${b.id ?? ''}`));
+}
+
+function sortGeneratedVirtualImportConsumers(consumers) {
+  return [...(consumers ?? [])].sort((a, b) =>
+    `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.name ?? ''}|${a.kind ?? ''}|${a.surfaceId ?? ''}`
+      .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.name ?? ''}|${b.kind ?? ''}|${b.surfaceId ?? ''}`));
+}
+
 export function buildSymbolsArtifact({
   root,
   files,
@@ -197,9 +227,12 @@ export function buildSymbolsArtifact({
   totalUses,
   unresolvedUses,
   resolvedInternalUses,
+  resolvedGeneratedVirtualUses = 0,
   externalUses,
   dependencyImportConsumers,
   resolvedInternalEdges,
+  generatedVirtualSurfaces,
+  generatedVirtualImportConsumers,
   unresolvedInternalUses,
   mdxConsumerUses,
   dead,
@@ -237,6 +270,7 @@ export function buildSymbolsArtifact({
         unresolvedInternalSummaryByReason: true,
         cjsExportSurface: true,
         cjsRequireOpacity: true,
+        generatedVirtualSurfaces: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -248,6 +282,7 @@ export function buildSymbolsArtifact({
     unresolvedUses,
     uses: {
       resolvedInternal: resolvedInternalUses,
+      resolvedGeneratedVirtual: resolvedGeneratedVirtualUses,
       external: externalUses,
       unresolvedInternal: unresolvedInternalUses,
       mdxConsumers: mdxConsumerUses,
@@ -260,6 +295,8 @@ export function buildSymbolsArtifact({
       `${a.depRoot ?? ''}|${a.fromSpec ?? ''}|${a.file ?? ''}|${a.kind ?? ''}`
         .localeCompare(`${b.depRoot ?? ''}|${b.fromSpec ?? ''}|${b.file ?? ''}|${b.kind ?? ''}`)),
     resolvedInternalEdges: sortResolvedInternalEdges(resolvedInternalEdges),
+    generatedVirtualSurfaces: sortGeneratedVirtualSurfaces(generatedVirtualSurfaces),
+    generatedVirtualImportConsumers: sortGeneratedVirtualImportConsumers(generatedVirtualImportConsumers),
     topUnresolvedSpecifiers: buildTopUnresolvedSpecifiers({
       unresolvedInternalByPrefix,
       prefixExamples,

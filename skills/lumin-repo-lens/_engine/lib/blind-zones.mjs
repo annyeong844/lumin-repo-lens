@@ -178,6 +178,16 @@ function topUnresolvedReasons(records) {
     .slice(0, 5);
 }
 
+function compactUnresolvedSpaces(spaces) {
+  if (!spaces || typeof spaces !== 'object') return null;
+  const compact = {};
+  for (const key of ['type', 'value', 'unknown']) {
+    const count = spaces[key];
+    if (typeof count === 'number' && Number.isFinite(count)) compact[key] = count;
+  }
+  return Object.keys(compact).length > 0 ? compact : null;
+}
+
 function topUnresolvedReasonsFromSummary(summary) {
   if (!summary || typeof summary !== 'object') return null;
   const reasons = [];
@@ -185,9 +195,11 @@ function topUnresolvedReasonsFromSummary(summary) {
     if (!reason || !group || typeof group !== 'object') continue;
     const count = group.count;
     if (typeof count !== 'number' || !Number.isFinite(count) || count <= 0) continue;
+    const spaces = compactUnresolvedSpaces(group.spaces);
     reasons.push({
       reason,
       count,
+      ...(spaces ? { spaces } : {}),
       ...(group.resolverStages && typeof group.resolverStages === 'object'
         ? { resolverStages: group.resolverStages }
         : {}),

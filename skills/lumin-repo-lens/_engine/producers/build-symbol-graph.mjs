@@ -18,7 +18,11 @@ import { pythonExtractShape } from '../lib/extract-py.mjs';
 import { parseCliArgs } from '../lib/cli.mjs';
 import { detectRepoMode } from '../lib/repo-mode.mjs';
 import { buildAliasMap } from '../lib/alias-map.mjs';
-import { explainUnresolvedSpecifier, makeResolver } from '../lib/resolver-core.mjs';
+import {
+  explainUnresolvedSpecifier,
+  isGeneratedVirtualResolution,
+  makeResolver,
+} from '../lib/resolver-core.mjs';
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
 import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
 import { isTestLikePath } from '../lib/test-paths.mjs';
@@ -399,6 +403,7 @@ let unresolvedUses = 0;
 // v1.9.7 FP-36 counters: external packages vs genuine scanner
 // blind spots. Feeds into fix-plan's resolverBlindness gate.
 let resolvedInternalUses = 0;
+let resolvedGeneratedVirtualUses = 0;
 let externalUses = 0;
 let unresolvedInternalUses = 0;
 let mdxConsumerUses = 0;
@@ -416,6 +421,8 @@ const prefixExamples = new Map();
 const unresolvedInternalSpecifiers = new Set();
 const unresolvedInternalSpecifierRecords = [];
 const resolvedInternalEdges = [];
+const generatedVirtualSurfaces = new Map();
+const generatedVirtualImportConsumers = [];
 function prefixOf(spec) {
   const slash = spec.indexOf('/');
   return slash > 0 ? spec.slice(0, slash + 1) : spec;
@@ -459,8 +466,43 @@ function recordUnresolvedInternalSpecifier(consumerFile, use) {
     consumerFile: relPath(ROOT, consumerFile),
     fromHint: relPath(ROOT, consumerFile),
     kind: typeof use === 'object' ? (use.kind ?? 'import') : 'import',
+    ...(typeof use === 'object' && typeof use.typeOnly === 'boolean'
+      ? { typeOnly: use.typeOnly }
+      : {}),
     ...explanation,
   });
+}
+
+function generatedVirtualExportForUse(surface, use) {
+  const kind = typeof use === 'object' ? use.kind : 'import';
+  if (kind === 'import-side-effect') return null;
+  if (kind === 'namespace') return { name: '*', spaces: ['value', 'type'] };
+  const name = typeof use === 'object' ? use.name : null;
+  if (!name || name === '*') return null;
+  const exported = (surface.exports ?? []).find((item) => item.name === name);
+  if (!exported) return null;
+  const wantedSpace = use?.typeOnly === true ? 'type' : 'value';
+  return exported.spaces?.includes(wantedSpace) ? exported : null;
+}
+
+function addGeneratedVirtualConsumer(consumerFile, use, surface, exported) {
+  generatedVirtualSurfaces.set(surface.id, surface);
+  const fromSpec = typeof use === 'string' ? use : use.fromSpec;
+  const record = {
+    consumerFile: relPath(ROOT, consumerFile),
+    specifier: fromSpec,
+    kind: typeof use === 'object' ? (use.kind ?? 'import') : 'import',
+    surfaceId: surface.id,
+    source: surface.source,
+  };
+  if (exported?.name) record.name = exported.name;
+  if (Array.isArray(exported?.spaces) && exported.spaces.length > 0) {
+    record.spaces = exported.spaces;
+  }
+  if (typeof use === 'object' && typeof use.typeOnly === 'boolean') {
+    record.typeOnly = use.typeOnly;
+  }
+  generatedVirtualImportConsumers.push(record);
 }
 
 function packageRootFromSpec(spec) {
@@ -515,6 +557,21 @@ for (const [consumerFile, info] of fileData) {
       recordUnresolvedInternalSpecifier(consumerFile, u);
       continue;
     }
+    if (isGeneratedVirtualResolution(target)) {
+      generatedVirtualSurfaces.set(target.id, target);
+      const exported = generatedVirtualExportForUse(target, u);
+      if (!exported) {
+        unresolvedInternalUses++;
+        unresolvedUses++;
+        recordUnresolvedInternalSpecifier(consumerFile, u);
+        continue;
+      }
+      totalUses++;
+      resolvedInternalUses++;
+      resolvedGeneratedVirtualUses++;
+      addGeneratedVirtualConsumer(consumerFile, u, target, exported);
+      continue;
+    }
     if (!target) {
       // null — relative path that didn't resolve, or malformed spec.
       // Treat conservatively as internal: a relative path that
@@ -567,6 +624,21 @@ for (const u of collectMdxImportConsumers({
     unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
     if (!prefixExamples.has(p)) prefixExamples.set(p, u.fromSpec);
     recordUnresolvedInternalSpecifier(u.consumerFile, u);
+    continue;
+  }
+  if (isGeneratedVirtualResolution(target)) {
+    generatedVirtualSurfaces.set(target.id, target);
+    const exported = generatedVirtualExportForUse(target, u);
+    if (!exported) {
+      unresolvedInternalUses++;
+      unresolvedUses++;
+      recordUnresolvedInternalSpecifier(u.consumerFile, u);
+      continue;
+    }
+    totalUses++;
+    resolvedInternalUses++;
+    resolvedGeneratedVirtualUses++;
+    addGeneratedVirtualConsumer(u.consumerFile, u, target, exported);
     continue;
   }
   if (!target) {
@@ -758,9 +830,12 @@ const artifact = buildSymbolsArtifact({
   totalUses,
   unresolvedUses,
   resolvedInternalUses,
+  resolvedGeneratedVirtualUses,
   externalUses,
   dependencyImportConsumers,
   resolvedInternalEdges,
+  generatedVirtualSurfaces: [...generatedVirtualSurfaces.values()],
+  generatedVirtualImportConsumers,
   unresolvedInternalUses,
   mdxConsumerUses,
   dead,

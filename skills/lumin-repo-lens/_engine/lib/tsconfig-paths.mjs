@@ -91,7 +91,7 @@ function loadTsconfig(configPath) {
   } catch {
     return null;
   }
-  return { options: parsed.options, errors: parsed.errors ?? [] };
+  return { options: parsed.options, errors: parsed.errors ?? [], fileNames: parsed.fileNames ?? [] };
 }
 
 // Forward-slash normalization for path-shaped string fields in the output
@@ -136,6 +136,7 @@ export function discoverScopedTsconfigResolution(root) {
   walk(root, files);
   const pathEntries = [];
   const baseUrlEntries = [];
+  const declarationDirEntries = [];
 
   for (const configPath of files) {
     const loaded = loadTsconfig(configPath);
@@ -166,6 +167,19 @@ export function discoverScopedTsconfigResolution(root) {
       });
     }
 
+    const declarationDir = loaded.options.declarationDir;
+    if (declarationDir) {
+      const sourceDir = loaded.options.rootDir ?? commonSourceDir(loaded.fileNames);
+      if (sourceDir && path.resolve(sourceDir) !== path.resolve(declarationDir)) {
+        declarationDirEntries.push({
+          configPath: toFwdSlash(configPath),
+          scopeDir: toFwdSlash(scopeDir),
+          declarationDir: toFwdSlash(declarationDir),
+          sourceDir: toFwdSlash(sourceDir),
+        });
+      }
+    }
+
     const paths = loaded.options.paths;
     if (!paths || typeof paths !== 'object') continue;
 
@@ -187,7 +201,26 @@ export function discoverScopedTsconfigResolution(root) {
     }
   }
 
-  return { paths: pathEntries, baseUrls: baseUrlEntries };
+  return { paths: pathEntries, baseUrls: baseUrlEntries, declarationDirs: declarationDirEntries };
+}
+
+function commonSourceDir(fileNames) {
+  const sourceFiles = (fileNames ?? []).filter((fileName) =>
+    /\.(tsx?|mts|cts|jsx?)$/.test(fileName) &&
+    !/\.d\.[cm]?ts$/.test(fileName) &&
+    !/\.d\.ts$/.test(fileName));
+  if (sourceFiles.length === 0) return null;
+
+  const dirs = sourceFiles.map((fileName) => path.resolve(path.dirname(fileName)));
+  let common = dirs[0];
+  for (const dir of dirs.slice(1)) {
+    while (common && !fileIsInsideScope(dir, common)) {
+      const parent = path.dirname(common);
+      if (parent === common) return null;
+      common = parent;
+    }
+  }
+  return common;
 }
 
 /**

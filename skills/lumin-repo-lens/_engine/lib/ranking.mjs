@@ -1,4 +1,8 @@
 import { BLOCKING_TAINTS, SOFT_TAINTS, TAINT } from './vocab.mjs';
+import {
+  GENERATED_ARTIFACT_MISSING_HINT,
+  GENERATED_ARTIFACT_MISSING_REASON,
+} from './generated-artifact-evidence.mjs';
 
 // 4-tier finding classification.
 //
@@ -43,9 +47,32 @@ function softTaintReasonLabels(taints) {
       labels.push('parse-errors-elsewhere');
     } else if (t?.kind === TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN) {
       labels.push(TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN);
+    } else if (t?.kind === TAINT.GENERATED_ARTIFACT_MISSING_RELEVANT) {
+      labels.push(GENERATED_ARTIFACT_MISSING_HINT);
     }
   }
   return [...new Set(labels)];
+}
+
+function generatedArtifactBlockingDiagnostics(taints) {
+  return (taints ?? [])
+    .filter((t) => t?.kind === TAINT.GENERATED_ARTIFACT_MISSING_RELEVANT)
+    .map((t) => ({
+      reason: GENERATED_ARTIFACT_MISSING_REASON,
+      kind: t.kind,
+      specifier: t.specifier,
+      specifiers: t.specifiers,
+      total: t.total,
+      consumerFile: t.consumerFile,
+      fromHint: t.fromHint,
+      matchedPackage: t.matchedPackage,
+      targetSubpath: t.targetSubpath,
+      generatorFamily: t.generatorFamily,
+      confidence: t.confidence,
+      impact: t.impact,
+      relevance: t.relevance,
+      effect: t.effect,
+    }));
 }
 
 /**
@@ -217,6 +244,7 @@ export function tierForFinding(finding, evidence = {}) {
   if (!hasSoftTaint && !weakRuntimeStatus) {
     const bits = ['safe-action', 'static-graph-clean', `bucket-${finding.bucket}`];
     const hasSingleLensEvidence = hasEntryReachSupport || hasIndependentSupport;
+    const hasTwoLensEvidence = hasEntryReachSupport && hasIndependentSupport;
     if (hasEntryReachSupport) bits.push('entry-unreachable');
     if (hasIndependentSupport) bits.push('no-observed-callers');
     if (strongRuntime) bits.push('runtime-dead-confirmed');
@@ -227,8 +255,12 @@ export function tierForFinding(finding, evidence = {}) {
     return {
       tier: 'SAFE_FIX',
       reason: bits.join(' + '),
-      confidence: 'medium',
-      ...(hasSingleLensEvidence ? { confidenceDetail: 'medium_with_evidence' } : {}),
+      confidence: hasTwoLensEvidence ? 'high' : 'medium',
+      ...(hasTwoLensEvidence
+          ? { confidenceDetail: 'high_two_lens_evidence' }
+          : hasSingleLensEvidence
+            ? { confidenceDetail: 'medium_with_evidence' }
+            : {}),
     };
   }
 
@@ -240,7 +272,14 @@ export function tierForFinding(finding, evidence = {}) {
     const missing = [];
     if (hasSoftTaint) missing.push(...softTaintReasonLabels(perFindingTaint));
     if (weakRuntimeStatus) missing.push(`runtime=${runtime.status}`);
-    return { tier: 'REVIEW_FIX', reason: `safe-action; missing: ${missing.join(', ') || 'none'}` };
+    const generatedBlocks = generatedArtifactBlockingDiagnostics(perFindingTaint);
+    return {
+      tier: 'REVIEW_FIX',
+      reason: `safe-action; missing: ${missing.join(', ') || 'none'}`,
+      ...(generatedBlocks.length > 0
+        ? { blockedPromotion: true, blockedBy: generatedBlocks }
+        : {}),
+    };
   }
 
   // ─── DEGRADED fallback ────────────────────────────────────

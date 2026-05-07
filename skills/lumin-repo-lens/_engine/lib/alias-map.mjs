@@ -9,9 +9,18 @@
 // authored `.ts` source.
 
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileExists } from './paths.mjs';
 import { discoverScopedTsconfigResolution } from './tsconfig-paths.mjs';
 import { readJsonFile } from './artifacts.mjs';
+import {
+  addGeneratedEvidence,
+  evidence,
+  exportsEvidenceField,
+  generatedOutputArtifactEvidence,
+  normalizeGeneratedSubpath,
+} from './generated-artifact-evidence.mjs';
+import { buildPrismaEnumVirtualSurface } from './generated-virtual-surface.mjs';
 
 // Recursively extract a string target from a conditional exports object.
 // Handles nested forms like { node: { import: { types, default }, require: ... } }.
@@ -74,6 +83,7 @@ const OUT_SRC_PAIRS = [
   ['es', 'src'],
   ['esm', 'src'],
 ];
+const OUTPUT_ARTIFACT_DIRS = new Set(OUT_SRC_PAIRS.map(([out]) => out));
 
 export function listPackageDirs(root, repoMode) {
   const dirs = [];
@@ -275,9 +285,169 @@ function addExportsEntries(map, pkgDir, pkgJson) {
     } else {
       const resolvedTarget = mapOutputToSource(pkgDir, t);
       const spec = subpath === '.' ? pkgJson.name : pkgJson.name + subpath.slice(1);
-      map.set(spec, { type: 'exact', source: 'exports', path: resolvedTarget });
+      const generatedArtifact = generatedOutputArtifactEvidence(pkgJson, t, exportsEvidenceField(subpath), {
+        outputArtifactDirs: OUTPUT_ARTIFACT_DIRS,
+      });
+      map.set(spec, {
+        type: 'exact',
+        source: 'exports',
+        path: resolvedTarget,
+        ...(generatedArtifact ? { generatedArtifact } : {}),
+      });
     }
   }
+}
+
+function dependencyNames(pkgJson) {
+  return [
+    ...Object.keys(pkgJson.dependencies ?? {}),
+    ...Object.keys(pkgJson.devDependencies ?? {}),
+    ...Object.keys(pkgJson.peerDependencies ?? {}),
+    ...Object.keys(pkgJson.optionalDependencies ?? {}),
+  ];
+}
+
+function localScriptPathsFromCommand(command) {
+  const text = String(command ?? '');
+  const paths = [];
+  const re = /["']?((?:\.{1,2}\/|[A-Za-z0-9_-]+\/)[^"'`\s;&|]+?\.(?:mjs|cjs|js|ts))["']?/g;
+  for (const match of text.matchAll(re)) {
+    const scriptPath = String(match[1] ?? '').replace(/\\/g, '/');
+    if (!scriptPath || scriptPath.includes('node_modules/')) continue;
+    paths.push(scriptPath);
+  }
+  return [...new Set(paths)];
+}
+
+function readPackageScriptFile(pkgDir, scriptPath) {
+  const abs = path.resolve(pkgDir, scriptPath);
+  if (!fileExists(abs)) return null;
+  try {
+    const src = readFileSync(abs, 'utf8');
+    // Package scripts can be arbitrary code. This classifier only needs small
+    // path literals; oversized files stay out of strong evidence.
+    if (src.length > 256_000) return null;
+    return src;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeStaticOutputPath(parts) {
+  const start = parts.findIndex((part) => /^(public|static|generated|__generated__)$/i.test(part));
+  if (start < 0) return null;
+  const rel = parts.slice(start)
+    .map((part) => String(part).trim().replace(/^\/+|\/+$/g, ''))
+    .filter(Boolean)
+    .join('/');
+  if (!/\.[A-Za-z0-9]+$/.test(rel)) return null;
+  return rel;
+}
+
+function staticOutputPathsFromScriptSource(src) {
+  const outputs = new Set();
+  const literalRe = /["'`]((?:public|static|generated|__generated__)\/[^"'`]+?\.[A-Za-z0-9]+)["'`]/g;
+  for (const match of src.matchAll(literalRe)) {
+    const rel = String(match[1] ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+    if (rel) outputs.add(rel);
+  }
+
+  const joinRe = /path\.join\(\s*(?:process\.cwd\(\)\s*,\s*)?([^)]*)\)/g;
+  for (const match of src.matchAll(joinRe)) {
+    const args = String(match[1] ?? '');
+    const parts = [...args.matchAll(/["'`]([^"'`]+)["'`]/g)]
+      .map((m) => String(m[1] ?? '').replace(/\\/g, '/'));
+    const rel = normalizeStaticOutputPath(parts);
+    if (rel) outputs.add(rel);
+  }
+  return [...outputs].sort();
+}
+
+function addGeneratedStaticEvidenceFromScripts(packets, pkgDir, scriptEntries) {
+  for (const [key, value] of scriptEntries) {
+    const scriptPaths = localScriptPathsFromCommand(value);
+    for (const scriptPath of scriptPaths) {
+      const src = readPackageScriptFile(pkgDir, scriptPath);
+      if (!src) continue;
+      for (const outputPath of staticOutputPathsFromScriptSource(src)) {
+        addGeneratedEvidence(packets, outputPath, 'static-artifact', [
+          evidence('package-script', `scripts.${key}`, String(value)),
+          evidence('script-output-path', `scripts.${key}`, outputPath),
+          evidence('script-source', scriptPath, outputPath),
+        ], { full: true });
+      }
+    }
+  }
+}
+
+function inferGeneratedSubpathEvidence(pkgJson, pkgDir) {
+  const packets = new Map();
+  const deps = new Set(dependencyNames(pkgJson));
+  const prismaDeps = [...deps].filter((name) => /^(@prisma\/client|prisma|prisma-)/.test(name));
+  const zodPrismaDeps = [...deps].filter((name) => /zod[-_]prisma|prisma[-_]zod/.test(name));
+  const scriptEntries = Object.entries(pkgJson.scripts ?? {});
+  const binEntries = typeof pkgJson.bin === 'string'
+    ? [[pkgJson.name, pkgJson.bin]]
+    : Object.entries(pkgJson.bin ?? {});
+  const fileEntries = Array.isArray(pkgJson.files) ? pkgJson.files : [];
+
+  const prismaScriptEvidence = scriptEntries
+    .filter(([, value]) => /\bprisma\s+generate\b/i.test(String(value)))
+    .map(([key, value]) => evidence('package-script', `scripts.${key}`, String(value)));
+  const prismaConfigEvidence = pkgJson.prisma && typeof pkgJson.prisma === 'object'
+    ? [evidence('package-metadata', 'prisma', 'package.json#prisma')]
+    : [];
+  const prismaDependencyEvidence = prismaDeps.map((name) =>
+    evidence('dependency', `dependencies.${name}`, name));
+
+  const enumEvidence = [
+    ...binEntries
+      .filter(([key, value]) => /prisma[-_]enum|enum[-_]generator/i.test(`${key} ${value}`))
+      .map(([key, value]) => evidence('package-bin', `bin.${key}`, String(value))),
+    ...scriptEntries
+      .filter(([key, value]) => /prisma[-_]enum|enum[-_]generator/i.test(`${key} ${value}`))
+      .map(([key, value]) => evidence('package-script', `scripts.${key}`, String(value))),
+  ];
+  addGeneratedEvidence(packets, 'enums', 'prisma', enumEvidence);
+
+  for (const file of fileEntries) {
+    const normalized = String(file).replace(/^\.\//, '').replace(/\\/g, '/');
+    const first = normalizeGeneratedSubpath(normalized);
+    const fileEvidence = [
+      evidence('package-files', 'files', String(file)),
+      ...prismaScriptEvidence,
+      ...prismaConfigEvidence,
+    ];
+    if (/^(generated|__generated__)(\/|$)/i.test(normalized)) {
+      addGeneratedEvidence(packets, first, 'prisma', fileEvidence);
+    }
+    if (/^(client|zod)(\/|$)/i.test(normalized) && prismaScriptEvidence.length > 0) {
+      addGeneratedEvidence(packets, first, 'prisma', fileEvidence);
+    }
+  }
+
+  if (prismaScriptEvidence.length > 0 || prismaConfigEvidence.length > 0) {
+    addGeneratedEvidence(packets, 'generated', 'prisma', [
+      ...prismaScriptEvidence,
+      ...prismaConfigEvidence,
+      ...prismaDependencyEvidence,
+    ]);
+  }
+  if (zodPrismaDeps.length > 0 && (prismaScriptEvidence.length > 0 || prismaConfigEvidence.length > 0)) {
+    const zodEvidence = [
+      ...zodPrismaDeps.map((name) => evidence('dependency', `dependencies.${name}`, name)),
+      ...prismaScriptEvidence,
+      ...prismaConfigEvidence,
+    ];
+    addGeneratedEvidence(packets, 'zod', 'prisma', zodEvidence);
+    addGeneratedEvidence(packets, 'zod-utils.ts', 'prisma', zodEvidence);
+  }
+
+  if (pkgDir) {
+    addGeneratedStaticEvidenceFromScripts(packets, pkgDir, scriptEntries);
+  }
+
+  return [...packets.values()].sort((a, b) => a.targetSubpath.localeCompare(b.targetSubpath));
 }
 
 // Pass 2 (v1.9.11 FP-38): workspace packages without `exports`. Older
@@ -289,11 +459,37 @@ function addExportsEntries(map, pkgDir, pkgJson) {
 //
 // Only adds when the `exports` pass (above) did NOT already register a
 // matching entry — an explicit `exports` map always wins.
-function addLegacySubpathFallback(map, pkgDir, pkgJson) {
+function buildGeneratedVirtualSurfaces(root, pkgDir, pkgJson, generatedSubpathEvidence) {
+  const surfaces = [];
+  for (const packet of generatedSubpathEvidence ?? []) {
+    const surface = buildPrismaEnumVirtualSurface({
+      root,
+      pkgDir,
+      pkgName: pkgJson.name,
+      targetSubpath: packet.targetSubpath,
+      generatedArtifact: {
+        ...packet,
+        matchedPackage: pkgJson.name,
+      },
+    });
+    if (surface) surfaces.push(surface);
+  }
+  return surfaces.sort((a, b) => a.id.localeCompare(b.id));
+}
+
+function addLegacySubpathFallback(map, root, pkgDir, pkgJson) {
   const hasExplicitBare = map.has(pkgJson.name);
   if (!hasExplicitBare && typeof pkgJson.main === 'string') {
     const mainResolved = mapOutputToSource(pkgDir, pkgJson.main);
-    map.set(pkgJson.name, { type: 'exact', source: 'legacy-main', path: mainResolved });
+    const generatedArtifact = generatedOutputArtifactEvidence(pkgJson, pkgJson.main, 'main', {
+      outputArtifactDirs: OUTPUT_ARTIFACT_DIRS,
+    });
+    map.set(pkgJson.name, {
+      type: 'exact',
+      source: 'legacy-main',
+      path: mainResolved,
+      ...(generatedArtifact ? { generatedArtifact } : {}),
+    });
   }
 
   // Legacy subpath wildcard. Check for existing wildcard OR exact entry
@@ -306,6 +502,13 @@ function addLegacySubpathFallback(map, pkgDir, pkgJson) {
   if (hasSubpathCoverage) return;
 
   const uniqueKey = `${pkgJson.name}/__LEGACY_SUBPATH__`;
+  const generatedSubpathEvidence = inferGeneratedSubpathEvidence(pkgJson, pkgDir);
+  const generatedVirtualSurfaces = buildGeneratedVirtualSurfaces(
+    root,
+    pkgDir,
+    pkgJson,
+    generatedSubpathEvidence,
+  );
   map.set(uniqueKey, {
     type: 'wildcard',
     source: 'legacy-subpath',
@@ -318,7 +521,45 @@ function addLegacySubpathFallback(map, pkgDir, pkgJson) {
     // directly, not compiled output.
     targetPattern: './*',
     legacySubpath: true,
+    ...(generatedSubpathEvidence.length
+      ? {
+          generatedSubpathHints: generatedSubpathEvidence.map((p) => p.targetSubpath),
+          generatedSubpathEvidence,
+        }
+      : {}),
+    ...(generatedVirtualSurfaces.length ? { generatedVirtualSurfaces } : {}),
   });
+}
+
+// TypeScript declaration-output subpaths. Some workspace packages import
+// their generated declaration tree from sibling packages, but a source
+// checkout may only contain the source files. If tsconfig says
+// `declarationDir: "types/server"` and the current source set lives under
+// `server/`, map `<pkg>/types/server/*` back to `<pkg>/server/*`.
+function addDeclarationDirFallback(map, pkgDir, pkgJson, declarationDirs = []) {
+  const pkgResolved = path.resolve(pkgDir);
+  for (const entry of declarationDirs) {
+    const configDir = path.resolve(path.dirname(entry.configPath));
+    if (configDir !== pkgResolved) continue;
+    if (!entry.declarationDir || !entry.sourceDir) continue;
+
+    const declarationRel = path.relative(pkgResolved, path.resolve(entry.declarationDir)).replace(/\\/g, '/');
+    const sourceRel = path.relative(pkgResolved, path.resolve(entry.sourceDir)).replace(/\\/g, '/');
+    if (!declarationRel || !sourceRel || declarationRel.startsWith('..') || sourceRel.startsWith('..')) continue;
+    if (path.isAbsolute(declarationRel) || path.isAbsolute(sourceRel)) continue;
+
+    const uniqueKey = `${pkgJson.name}/${declarationRel}/__DECLARATION_DIR__`;
+    map.set(uniqueKey, {
+      type: 'wildcard',
+      source: 'tsconfig-declarationDir',
+      pkgDir,
+      pkgName: pkgJson.name,
+      matchPrefix: `${pkgJson.name}/${declarationRel.replace(/\/$/, '')}/`,
+      matchSuffix: '',
+      targetPattern: `./${sourceRel.replace(/\/$/, '')}/*`,
+      declarationDirSubpath: true,
+    });
+  }
 }
 
 // Pass 3 (FP-03): Node.js `#imports` subpath support. Covers both exact
@@ -361,6 +602,7 @@ function addHashImports(map, pkgDir, pkgJson) {
 export function buildAliasMap(root, repoMode) {
   const map = new Map();
   const packages = listPackageDirs(root, repoMode);
+  const tsconfigResolution = discoverScopedTsconfigResolution(root);
 
   for (const pkgDir of packages) {
     // readJsonFile returns null on missing OR malformed — either way we
@@ -375,7 +617,11 @@ export function buildAliasMap(root, repoMode) {
     // exports pass added; hash-imports uses an independent key namespace
     // so its order is flexible.
     addExportsEntries(map, pkgDir, pkgJson);
-    addLegacySubpathFallback(map, pkgDir, pkgJson);
+    addLegacySubpathFallback(map, root, pkgDir, pkgJson);
+    // Add after the broad legacy wildcard. Resolver wildcard lookup prefers
+    // the longest matchPrefix, so declarationDir-specific mappings win for
+    // `pkg/types/...` without suppressing ordinary `pkg/server/...` subpaths.
+    addDeclarationDirFallback(map, pkgDir, pkgJson, tsconfigResolution.declarationDirs);
     addHashImports(map, pkgDir, pkgJson);
   }
 
@@ -384,9 +630,9 @@ export function buildAliasMap(root, repoMode) {
   // callers that iterate the Map as `for (const [k, v] of aliasMap)`.
   // Resolver-core reads `.scopedTsconfigPaths` and applies
   // nearest-scope-first for non-relative specifiers.
-  const tsconfigResolution = discoverScopedTsconfigResolution(root);
   map.scopedTsconfigPaths = tsconfigResolution.paths;
   map.scopedTsconfigBaseUrls = tsconfigResolution.baseUrls;
+  map.scopedTsconfigDeclarationDirs = tsconfigResolution.declarationDirs;
 
   return map;
 }

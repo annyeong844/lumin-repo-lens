@@ -74,6 +74,7 @@ export const EVIDENCE_VALUES = Object.freeze(new Set(Object.values(EVIDENCE)));
 export const TAINT = Object.freeze({
   UNRESOLVED_SPEC_MATCH: 'unresolved-specifier-could-match',
   UNRESOLVED_SPEC_MATCH_UNKNOWN: 'unresolved-specifier-could-match-unknown',
+  GENERATED_ARTIFACT_MISSING_RELEVANT: 'generated-artifact-missing-relevant',
   DEFINING_FILE_PARSE_ERROR: 'defining-file-parse-error',
   PARSE_ERRORS_ELSEWHERE: 'parse-errors-present',
 });
@@ -85,6 +86,7 @@ export const BLOCKING_TAINTS = Object.freeze(new Set([
 
 export const SOFT_TAINTS = Object.freeze(new Set([
   TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN,
+  TAINT.GENERATED_ARTIFACT_MISSING_RELEVANT,
   TAINT.PARSE_ERRORS_ELSEWHERE,
 ]));
 

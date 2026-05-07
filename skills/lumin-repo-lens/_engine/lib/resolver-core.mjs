@@ -35,6 +35,19 @@ import path from 'node:path';
 import { mapOutputToSource } from './alias-map.mjs';
 import { fileExists, dirExists, relPath } from './paths.mjs';
 import { fileIsInsideScope, matchSpec } from './tsconfig-paths.mjs';
+import {
+  GENERATED_ARTIFACT_MISSING_HINT,
+  GENERATED_ARTIFACT_MISSING_REASON,
+  generatedArtifactForTargetCandidates,
+  generatedWorkspaceSubpathEvidence,
+  isStrongGeneratedArtifact,
+  normalizeGeneratedSpecifierSubpath,
+  unresolvedGeneratedArtifactHintForCandidates,
+} from './generated-artifact-evidence.mjs';
+import {
+  generatedVirtualSurfaceForSubpath,
+  isGeneratedVirtualResolution,
+} from './generated-virtual-surface.mjs';
 
 const RESOLVE_FILE_EXTS = [
   '', '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.mts', '.cts',
@@ -55,6 +68,7 @@ const RESOLVE_INDEX_EXTS = [
 const realpathCache = new Map();
 function canonicalize(p) {
   if (p === null || p === 'EXTERNAL' || p === 'UNRESOLVED_INTERNAL') return p;
+  if (isGeneratedVirtualResolution(p)) return p;
   const cached = realpathCache.get(p);
   if (cached !== undefined) return cached;
   let real;
@@ -69,6 +83,8 @@ function canonicalize(p) {
 export function isResolvedFile(r) {
   return typeof r === 'string' && r !== 'EXTERNAL' && r !== 'UNRESOLVED_INTERNAL';
 }
+
+export { isGeneratedVirtualResolution };
 
 // ── Shared path-probe helper ─────────────────────────────
 //
@@ -179,13 +195,6 @@ function resolveScopedTsconfig(fromFile, spec, scoped) {
   return undefined;
 }
 
-function unresolvedHintForCandidates(candidates) {
-  return candidates.some((c) =>
-    /(^|\/)(generated|__generated__|gen)(\/|$)/i.test(String(c).replace(/\\/g, '/')))
-    ? 'generated-artifact-missing'
-    : undefined;
-}
-
 function unresolvedRecord(root, reason, details = {}) {
   const targetCandidates = (details.targetCandidates ?? [])
     .filter((p) => typeof p === 'string' && p.length > 0)
@@ -197,6 +206,7 @@ function unresolvedRecord(root, reason, details = {}) {
     ...(details.source ? { source: details.source } : {}),
     ...(targetCandidates.length ? { targetCandidates: [...new Set(targetCandidates)].slice(0, 8) } : {}),
     ...(details.hint ? { hint: details.hint } : {}),
+    ...(details.generatedArtifact ? { generatedArtifact: details.generatedArtifact } : {}),
   };
 }
 
@@ -209,11 +219,13 @@ function explainScopedTsconfig(root, fromFile, spec, scoped) {
       const substituted = entry.wildcard ? target.replace('*', star) : target;
       return path.resolve(entry.baseUrlDir, substituted);
     });
+    const generatedArtifact = generatedArtifactForTargetCandidates(root, candidates);
     return unresolvedRecord(root, 'tsconfig-path-target-missing', {
       stage: 'tsconfig-paths',
       matchedPattern: entry.key,
       targetCandidates: candidates,
-      hint: unresolvedHintForCandidates(candidates),
+      hint: generatedArtifact ? GENERATED_ARTIFACT_MISSING_HINT : unresolvedGeneratedArtifactHintForCandidates(candidates),
+      ...(generatedArtifact ? { generatedArtifact } : {}),
     });
   }
   return null;
@@ -286,12 +298,18 @@ function explainExactAlias(root, spec, aliasMap) {
   if (!aliasMap.has(spec)) return null;
   const entry = aliasMap.get(spec);
   if (entry.type !== 'exact') return null;
-  return unresolvedRecord(root, 'exact-alias-target-missing', {
+  const generatedArtifact =
+    entry.generatedArtifact ?? generatedArtifactForTargetCandidates(root, [entry.path]);
+  const reason = isStrongGeneratedArtifact(generatedArtifact)
+    ? GENERATED_ARTIFACT_MISSING_REASON
+    : 'exact-alias-target-missing';
+  return unresolvedRecord(root, reason, {
     stage: 'exact-alias',
     matchedPattern: spec,
     source: entry.source,
     targetCandidates: [entry.path],
-    hint: unresolvedHintForCandidates([entry.path]),
+    hint: generatedArtifact ? GENERATED_ARTIFACT_MISSING_HINT : unresolvedGeneratedArtifactHintForCandidates([entry.path]),
+    ...(generatedArtifact ? { generatedArtifact } : {}),
   });
 }
 
@@ -332,6 +350,15 @@ function resolveWildcard(spec, aliasMap) {
   for (const idx of RESOLVE_INDEX_EXTS) {
     if (fileExists(strippedLit + idx)) return strippedLit + idx;
   }
+  const virtualSurface = generatedVirtualSurfaceForSubpath(entry, star);
+  if (virtualSurface) {
+    return {
+      ...virtualSurface,
+      resolverStage: 'wildcard-alias',
+      matchedPattern: entry.legacySubpath ? `${entry.pkgName}/*` : `${entry.matchPrefix}*${entry.matchSuffix ?? ''}`,
+      aliasSource: entry.source,
+    };
+  }
   return 'UNRESOLVED_INTERNAL';
 }
 
@@ -358,14 +385,27 @@ function explainWildcard(root, spec, aliasMap) {
   const substituted = entry.targetPattern.replace('*', star);
   const literal = path.join(entry.pkgDir, substituted.replace(/^\.\//, ''));
   const remapped = mapOutputToSource(entry.pkgDir, substituted);
-  return unresolvedRecord(root, entry.legacySubpath
-    ? 'workspace-package-subpath-target-missing'
-    : 'wildcard-alias-target-missing', {
+  const targetCandidates = [literal, remapped];
+  const generatedArtifact = generatedWorkspaceSubpathEvidence(entry, star);
+  const generatedHint = generatedArtifact ? GENERATED_ARTIFACT_MISSING_HINT : undefined;
+  const reason = entry.legacySubpath
+    ? (generatedHint ? GENERATED_ARTIFACT_MISSING_REASON : 'workspace-package-subpath-target-missing')
+    : 'wildcard-alias-target-missing';
+  return unresolvedRecord(root, reason, {
       stage: 'wildcard-alias',
       matchedPattern: entry.legacySubpath ? `${entry.pkgName}/*` : `${entry.matchPrefix}*${entry.matchSuffix ?? ''}`,
       source: entry.source,
-      targetCandidates: [literal, remapped],
-      hint: unresolvedHintForCandidates([literal, remapped]),
+      targetCandidates,
+      hint: generatedHint ?? unresolvedGeneratedArtifactHintForCandidates(targetCandidates),
+      ...(generatedArtifact
+        ? {
+            generatedArtifact: {
+              ...generatedArtifact,
+              matchedPackage: entry.pkgName,
+              targetSubpath: normalizeGeneratedSpecifierSubpath(star),
+            },
+          }
+        : {}),
     });
 }
 
@@ -418,7 +458,7 @@ function explainHashWildcard(root, spec, aliasMap) {
       matchedPattern: `${entry.keyPrefix}*${entry.keySuffix ?? ''}`,
       source: entry.source,
       targetCandidates: candidates,
-      hint: unresolvedHintForCandidates(candidates),
+      hint: unresolvedGeneratedArtifactHintForCandidates(candidates),
     });
   }
   return null;

@@ -16,6 +16,8 @@
 import path from 'node:path';
 
 import { TAINT } from './vocab.mjs';
+import { generatedArtifactRelevantTaint } from './generated-blind-zone-relevance.mjs';
+import { isGeneratedArtifactMissingRecord } from './generated-artifact-evidence.mjs';
 import { fileIsInsideScope, matchSpec } from './tsconfig-paths.mjs';
 
 const EXT_RE = /\.(d\.[cm]?ts|tsx?|jsx?|mjs|cjs|mts|cts)$/;
@@ -189,6 +191,10 @@ function normalizeUnresolvedSpecifierRecord(item) {
     specifier,
     consumerFile: item.consumerFile ?? item.file ?? null,
     fromHint: item.fromHint ?? item.consumerFile ?? item.file ?? null,
+    reason: item.reason ?? null,
+    hint: item.hint ?? null,
+    generatedArtifact: item.generatedArtifact ?? null,
+    targetCandidates: Array.isArray(item.targetCandidates) ? item.targetCandidates : [],
   };
 }
 
@@ -244,9 +250,12 @@ export function computeFindingProvenance(finding, {
   // could make it resolve and surface a consumer.
   const matching = [];
   const unknown = [];
+  const generatedCandidates = [];
   for (const item of unresolvedInternalSpecifiers) {
     const rec = normalizeUnresolvedSpecifierRecord(item);
     if (!rec) continue;
+    generatedCandidates.push(rec);
+    if (isGeneratedArtifactMissingRecord(rec)) continue;
     const result = specifierCouldMatchFile(rec.specifier, finding.file, {
       aliasMap,
       fromHint: rec.fromHint,
@@ -278,12 +287,16 @@ export function computeFindingProvenance(finding, {
     });
   }
 
+  const generatedTaint = generatedArtifactRelevantTaint(finding, generatedCandidates, { submoduleOf });
+  if (generatedTaint) taintedBy.push(generatedTaint);
+
   let resolverConfidence;
   if (taintedBy.some((t) => t.kind === TAINT.UNRESOLVED_SPEC_MATCH ||
                             t.kind === TAINT.DEFINING_FILE_PARSE_ERROR)) {
     resolverConfidence = 'low';
   } else if (taintedBy.some((t) => t.kind === TAINT.PARSE_ERRORS_ELSEWHERE ||
-                                  t.kind === TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN)) {
+                                  t.kind === TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN ||
+                                  t.kind === TAINT.GENERATED_ARTIFACT_MISSING_RELEVANT)) {
     resolverConfidence = 'medium';
   } else {
     resolverConfidence = 'high';

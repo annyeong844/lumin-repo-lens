@@ -1,0 +1,30 @@
+name: Public Package CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  package-smoke:
+    name: Package Smoke (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20.x', '22.x']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: skills/lumin-repo-lens/package-lock.json
+      - name: Install packaged skill dependencies
+        working-directory: skills/lumin-repo-lens
+        run: npm ci
+      - name: Smoke packaged audit CLI
+        working-directory: skills/lumin-repo-lens
+        run: npm run smoke
+      - name: Verify packaged CLI help
+        run: node skills/lumin-repo-lens/scripts/audit-repo.mjs --help

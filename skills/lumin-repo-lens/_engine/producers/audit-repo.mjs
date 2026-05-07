@@ -70,6 +70,7 @@ import {
   collectProducedArtifacts,
   refreshManifestEvidence,
 } from '../lib/audit-manifest.mjs';
+import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HELP_TEXT = `
@@ -112,6 +113,8 @@ Flags:
   --cache-root <path>     stable incremental cache root (default: <root>/.audit/.cache)
   --clear-incremental-cache
                            clear this repo's incremental cache before supported producers run
+  --generated-artifacts <mode>
+                           default | present | prepared (diagnostic provenance only; does not run generators)
   --no-self-audit-excludes do not auto-exclude maintainer lab/corpus mirrors
   --strict-post-write      exit 2 when post-write orchestration cannot run
   --strict-post-write-confidence
@@ -170,6 +173,7 @@ const CLI_OPTIONS = {
   'no-incremental': { type: 'boolean', default: false },
   'cache-root': { type: 'string' },
   'clear-incremental-cache': { type: 'boolean', default: false },
+  'generated-artifacts': { type: 'string', default: 'default' },
   exclude: { type: 'string', multiple: true, default: [] },
   // P2-2 follow-up: strict mode converts manifest.postWrite.ran === false
   // into exit code 2. Closes the "silent CI green on unreadable advisory"
@@ -238,6 +242,13 @@ const INCLUDE_TESTS = normalizeIncludeTests(values, process.argv.slice(2));
 const PRODUCTION = !INCLUDE_TESTS;
 const EMIT_SARIF = values.sarif || PROFILE === 'ci';
 const PRE_POST_MUTEX = values['pre-write'] && values['post-write'];
+let GENERATED_ARTIFACTS_MODE = 'default';
+try {
+  GENERATED_ARTIFACTS_MODE = normalizeGeneratedArtifactsMode(values['generated-artifacts']);
+} catch (error) {
+  console.error(`[audit-repo] ${error.message}`);
+  process.exit(2);
+}
 const PRE_WRITE_ONLY =
   values['pre-write'] &&
   !values['post-write'] &&
@@ -313,6 +324,7 @@ function manifestEvidenceOptions() {
     production: PRODUCTION,
     excludes: EFFECTIVE_EXCLUDES,
     autoExcludes: AUTO_EXCLUDES,
+    generatedArtifactsMode: GENERATED_ARTIFACTS_MODE,
   };
 }
 
@@ -532,6 +544,7 @@ const manifest = {
   scanRange: initialEvidence.scanRange,
   confidence: initialEvidence.confidence,
   blindZones: initialEvidence.blindZones,
+  generatedArtifacts: initialEvidence.generatedArtifacts,
   livingAudit: initialEvidence.livingAudit,
   artifactsProduced: collectProducedArtifacts(OUT),
 };

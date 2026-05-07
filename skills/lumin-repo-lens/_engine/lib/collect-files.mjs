@@ -212,3 +212,44 @@ export function collectFiles(root, opts = {}) {
   const deduped = dedupeSorted(out);
   return includeTests ? deduped : deduped.filter((f) => !isTestLikePath(f));
 }
+
+export function scanScopeStatusForPath(root, full, opts = {}) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedFull = path.resolve(full);
+  const rel = path.relative(resolvedRoot, resolvedFull);
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { included: false, reason: 'outside-root' };
+  }
+
+  const { includeTests, extSet, excludeRules } = normalizeCollectOptions(opts);
+  if (!extSet.has(path.extname(resolvedFull))) {
+    return { included: false, reason: 'language-excluded' };
+  }
+  if (!includeTests && isTestLikePath(resolvedFull)) {
+    return { included: false, reason: 'test-excluded' };
+  }
+
+  const segments = rel.split(path.sep).filter(Boolean);
+  const rootSegment = segments[0] ?? '';
+  if (rootSegment && shouldPruneRootDir(rootSegment)) {
+    return { included: false, reason: 'root-pruned' };
+  }
+  for (const segment of segments.slice(1, -1)) {
+    if (shouldPruneWalkDir(segment)) {
+      return { included: false, reason: 'walk-pruned' };
+    }
+  }
+
+  let cursor = resolvedRoot;
+  for (const segment of segments.slice(0, -1)) {
+    cursor = path.join(cursor, segment);
+    if (isExcludedPath(resolvedRoot, cursor, excludeRules, { directory: true })) {
+      return { included: false, reason: 'excluded' };
+    }
+  }
+  if (isExcludedPath(resolvedRoot, resolvedFull, excludeRules)) {
+    return { included: false, reason: 'excluded' };
+  }
+
+  return { included: true, reason: null };
+}
