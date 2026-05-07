@@ -34,7 +34,6 @@ export function generatedArtifactRelevance(finding, record, { submoduleOf } = {}
   if (!isGeneratedArtifactMissingRecord(record)) return null;
 
   const candidateFile = slash(finding?.file);
-  const consumerFile = slash(record.consumerFile ?? record.fromHint ?? '');
   const packageRoot = generatedPackageRoot(record);
 
   if (packageRoot && pathInsideDir(candidateFile, packageRoot)) {
@@ -51,13 +50,6 @@ export function generatedArtifactRelevance(finding, record, { submoduleOf } = {}
         relevance: 'target-candidate-submodule',
       };
     }
-  }
-
-  if (sameSubmodule(submoduleOf, candidateFile, consumerFile)) {
-    return {
-      impact: 'provider-surface-unresolved',
-      relevance: 'same-consumer-submodule',
-    };
   }
 
   return null;
@@ -87,6 +79,6 @@ export function generatedArtifactRelevantTaint(finding, records, { submoduleOf }
     confidence: artifact.confidence ?? undefined,
     impact: first.relevance.impact,
     relevance: first.relevance.relevance,
-    effect: 'a missing generated artifact is in the candidate-relevant package or import surface; generated files could affect this cleanup claim',
+    effect: 'a missing generated artifact is in the candidate-relevant provider package or target surface; generated files could affect this cleanup claim',
   };
 }
