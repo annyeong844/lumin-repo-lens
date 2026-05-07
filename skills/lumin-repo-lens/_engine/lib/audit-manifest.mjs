@@ -25,6 +25,7 @@ const ARTIFACT_CANDIDATES = [
   'triage.json', 'topology.json', 'discipline.json',
   'call-graph.json', 'barrels.json', 'shape-index.json',
   'function-clones.json',
+  'resolver-capabilities.json', 'resolver-diagnostics.json',
   'symbols.json', 'entry-surface.json', 'module-reachability.json',
   'dead-classify.json', 'runtime-evidence.json',
   'staleness.json', 'fix-plan.json', 'checklist-facts.json',
@@ -160,12 +161,26 @@ function buildTopSpecifierRoots(symbols) {
     .slice(0, 20);
 }
 
-function buildResolverDiagnosticsSummary(symbols) {
+function buildResolverDiagnosticsSummary(symbols, {
+  resolverCapabilities = null,
+  resolverDiagnostics = null,
+} = {}) {
   return {
+    resolverVersion:
+      resolverDiagnostics?.resolverVersion ??
+      resolverCapabilities?.resolverVersion ??
+      null,
+    resolverCapabilityArtifact: resolverCapabilities ? 'resolver-capabilities.json' : null,
+    resolverDiagnosticsArtifact: resolverDiagnostics ? 'resolver-diagnostics.json' : null,
     unresolvedInternal: symbols?.uses?.unresolvedInternal ?? null,
     unresolvedInternalRatio: symbols?.uses?.unresolvedInternalRatio ?? null,
-    topUnresolvedReasons: topUnresolvedReasons(symbols),
-    topSpecifierRoots: buildTopSpecifierRoots(symbols),
+    blindZoneCount: resolverDiagnostics?.summary?.blindZoneCount ?? null,
+    candidateTargetCount: resolverDiagnostics?.summary?.candidateTargetCount ?? null,
+    topFamilies: resolverDiagnostics?.summary?.topFamilies ?? [],
+    topUnresolvedReasons:
+      resolverDiagnostics?.summary?.topUnresolvedReasons ?? topUnresolvedReasons(symbols),
+    topSpecifierRoots:
+      resolverDiagnostics?.summary?.topSpecifierRoots ?? buildTopSpecifierRoots(symbols),
     topUnresolvedSpecifiers: (symbols?.topUnresolvedSpecifiers ?? []).slice(0, 20),
   };
 }
@@ -362,6 +377,8 @@ export function buildManifestEvidence({
 }) {
   const triage = loadArtifact(outDir, 'triage.json');
   const symbols = loadArtifact(outDir, 'symbols.json');
+  const resolverCapabilities = loadArtifact(outDir, 'resolver-capabilities.json');
+  const resolverDiagnostics = loadArtifact(outDir, 'resolver-diagnostics.json');
   const entrySurface = loadArtifact(outDir, 'entry-surface.json');
   const deadClassify = loadArtifact(outDir, 'dead-classify.json');
 
@@ -388,8 +405,11 @@ export function buildManifestEvidence({
       resolvedInternal: symbols?.uses?.resolvedInternal ?? null,
       unresolvedInternal: symbols?.uses?.unresolvedInternal ?? null,
     },
-    resolverDiagnostics: buildResolverDiagnosticsSummary(symbols),
-    blindZones: detectBlindZones({ triage, symbols, deadClassify, entrySurface }),
+    resolverDiagnostics: buildResolverDiagnosticsSummary(symbols, {
+      resolverCapabilities,
+      resolverDiagnostics,
+    }),
+    blindZones: detectBlindZones({ triage, symbols, deadClassify, entrySurface, resolverDiagnostics }),
     generatedArtifacts: buildGeneratedArtifactsSummary(symbols, {
       root,
       includeTests,

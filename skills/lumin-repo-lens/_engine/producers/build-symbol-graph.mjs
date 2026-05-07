@@ -26,6 +26,7 @@ import {
 } from '../lib/resolver-core.mjs';
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
 import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
+import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
 import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
 import { isTestLikePath } from '../lib/test-paths.mjs';
 import { relPath, buildSubmoduleResolver } from '../lib/paths.mjs';
@@ -62,8 +63,16 @@ const cli = parseCliArgs({
   'no-incremental': { type: 'boolean', default: false },
   'cache-root': { type: 'string' },
   'clear-incremental-cache': { type: 'boolean', default: false },
+  'generated-artifacts': { type: 'string', default: 'default' },
 });
 const { root: ROOT, output, verbose } = cli;
+let GENERATED_ARTIFACTS_MODE = 'default';
+try {
+  GENERATED_ARTIFACTS_MODE = normalizeGeneratedArtifactsMode(cli.raw?.['generated-artifacts']);
+} catch (error) {
+  console.error(`[symbols] ${error.message}`);
+  process.exit(2);
+}
 const pyEnabled = isPythonAvailable();
 const tsEnabled = await isTreeSitterAvailable();
 const goModule = findGoModule(ROOT);
@@ -680,6 +689,7 @@ const generatedConsumerBlindZones = buildGeneratedConsumerBlindZones({
   root: ROOT,
   includeTests: cli.includeTests,
   exclude: cli.exclude,
+  mode: GENERATED_ARTIFACTS_MODE,
 });
 
 // ─── Dead export 탐지 ─────────────────────────────────────

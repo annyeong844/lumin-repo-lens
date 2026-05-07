@@ -18,6 +18,7 @@ import path from 'node:path';
 import { TAINT } from './vocab.mjs';
 import { generatedArtifactRelevantTaint } from './generated-blind-zone-relevance.mjs';
 import { isGeneratedArtifactMissingRecord } from './generated-artifact-evidence.mjs';
+import { resolverBlindZoneRelevantTaint } from './resolver-blind-zone-relevance.mjs';
 import { fileIsInsideScope, matchSpec } from './tsconfig-paths.mjs';
 
 const EXT_RE = /\.(d\.[cm]?ts|tsx?|jsx?|mjs|cjs|mts|cts)$/;
@@ -193,6 +194,10 @@ function normalizeUnresolvedSpecifierRecord(item) {
     fromHint: item.fromHint ?? item.consumerFile ?? item.file ?? null,
     reason: item.reason ?? null,
     hint: item.hint ?? null,
+    family: item.family ?? null,
+    resolverStage: item.resolverStage ?? null,
+    outputLevel: item.outputLevel ?? null,
+    affectedPackageScope: item.affectedPackageScope ?? null,
     generatedArtifact: item.generatedArtifact ?? null,
     targetCandidates: Array.isArray(item.targetCandidates) ? item.targetCandidates : [],
   };
@@ -294,12 +299,18 @@ export function computeFindingProvenance(finding, {
   });
   if (generatedTaint) taintedBy.push(generatedTaint);
 
+  const resolverTaint = resolverBlindZoneRelevantTaint(finding, generatedCandidates, {
+    submoduleOf,
+  });
+  if (resolverTaint) taintedBy.push(resolverTaint);
+
   let resolverConfidence;
   if (taintedBy.some((t) => t.kind === TAINT.UNRESOLVED_SPEC_MATCH ||
                             t.kind === TAINT.DEFINING_FILE_PARSE_ERROR)) {
     resolverConfidence = 'low';
   } else if (taintedBy.some((t) => t.kind === TAINT.PARSE_ERRORS_ELSEWHERE ||
                                   t.kind === TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN ||
+                                  t.kind === TAINT.RESOLVER_BLIND_ZONE_RELEVANT ||
                                   t.kind === TAINT.GENERATED_ARTIFACT_MISSING_RELEVANT)) {
     resolverConfidence = 'medium';
   } else {

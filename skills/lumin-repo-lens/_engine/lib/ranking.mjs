@@ -47,6 +47,8 @@ function softTaintReasonLabels(taints) {
       labels.push('parse-errors-elsewhere');
     } else if (t?.kind === TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN) {
       labels.push(TAINT.UNRESOLVED_SPEC_MATCH_UNKNOWN);
+    } else if (t?.kind === TAINT.RESOLVER_BLIND_ZONE_RELEVANT) {
+      labels.push('resolver-blind-zone');
     } else if (t?.kind === TAINT.GENERATED_ARTIFACT_MISSING_RELEVANT) {
       labels.push(GENERATED_ARTIFACT_MISSING_HINT);
     }
@@ -75,6 +77,28 @@ function generatedArtifactBlockingDiagnostics(taints) {
       scanScopeReason: t.scanScopeReason,
       staleStatus: t.staleStatus,
       staleReason: t.staleReason,
+      impact: t.impact,
+      relevance: t.relevance,
+      effect: t.effect,
+    }));
+}
+
+function resolverBlindZoneBlockingDiagnostics(taints) {
+  return (taints ?? [])
+    .filter((t) => t?.kind === TAINT.RESOLVER_BLIND_ZONE_RELEVANT)
+    .map((t) => ({
+      reason: t.reason,
+      kind: t.kind,
+      family: t.family,
+      specifier: t.specifier,
+      specifiers: t.specifiers,
+      total: t.total,
+      consumerFile: t.consumerFile,
+      fromHint: t.fromHint,
+      targetCandidates: t.targetCandidates,
+      affectedPackageScope: t.affectedPackageScope,
+      resolverStage: t.resolverStage,
+      outputLevel: t.outputLevel,
       impact: t.impact,
       relevance: t.relevance,
       effect: t.effect,
@@ -295,11 +319,13 @@ export function tierForFinding(finding, evidence = {}) {
     if (hasSoftTaint) missing.push(...softTaintReasonLabels(perFindingTaint));
     if (weakRuntimeStatus) missing.push(`runtime=${runtime.status}`);
     const generatedBlocks = generatedArtifactBlockingDiagnostics(perFindingTaint);
+    const resolverBlocks = resolverBlindZoneBlockingDiagnostics(perFindingTaint);
+    const blockedBy = [...generatedBlocks, ...resolverBlocks];
     return {
       tier: 'REVIEW_FIX',
       reason: `safe-action; missing: ${missing.join(', ') || 'none'}`,
-      ...(generatedBlocks.length > 0
-        ? { blockedPromotion: true, blockedBy: generatedBlocks }
+      ...(blockedBy.length > 0
+        ? { blockedPromotion: true, blockedBy }
         : {}),
     };
   }

@@ -222,10 +222,40 @@ export function formatUnresolvedReasonCounts(reasons, limit = 3) {
   return parts.length > 0 ? parts.join(', ') : null;
 }
 
-function detectResolverZone(symbols) {
-  const r = symbols?.uses?.unresolvedInternalRatio;
-  const unresolvedInternal = symbols?.uses?.unresolvedInternal;
-  const top = symbols?.topUnresolvedSpecifiers?.slice(0, 3) ?? [];
+function resolverDiagnosticsSummary(resolverDiagnostics) {
+  const summary = resolverDiagnostics?.summary;
+  return summary && typeof summary === 'object' ? summary : null;
+}
+
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  return undefined;
+}
+
+function optionalArray(value) {
+  return Array.isArray(value) ? value : undefined;
+}
+
+function optionalObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : undefined;
+}
+
+function detectResolverZone(symbols, resolverDiagnostics = null) {
+  const diagnosticSummary = resolverDiagnosticsSummary(resolverDiagnostics);
+  const r = firstFiniteNumber(
+    symbols?.uses?.unresolvedInternalRatio,
+    diagnosticSummary?.unresolvedInternalRatio
+  );
+  const unresolvedInternal = firstFiniteNumber(
+    symbols?.uses?.unresolvedInternal,
+    diagnosticSummary?.unresolvedInternal
+  );
+  const top =
+    optionalArray(symbols?.topUnresolvedSpecifiers)?.slice(0, 3) ??
+    optionalArray(diagnosticSummary?.topUnresolvedSpecifiers)?.slice(0, 3) ??
+    [];
   const topCount = top[0]?.count;
   const ratioTrigger = typeof r === 'number' && r >= RESOLVER_RATIO_THRESHOLD;
   const absoluteTrigger =
@@ -243,6 +273,11 @@ function detectResolverZone(symbols) {
     : absoluteTrigger
       ? 'absolute-count'
       : 'prefix-concentration';
+  const hasDiagnosticSummary = diagnosticSummary !== null;
+  const topUnresolvedReasonsDetail =
+    optionalArray(diagnosticSummary?.topUnresolvedReasons) ??
+    topUnresolvedReasonsFromSummary(symbols?.unresolvedInternalSummaryByReason) ??
+    topUnresolvedReasons(symbols?.unresolvedInternalSpecifierRecords);
   return {
     area: 'resolver',
     severity: 'confidence-gap',
@@ -253,10 +288,30 @@ function detectResolverZone(symbols) {
       trigger,
       unresolvedInternalRatio: r,
       unresolvedInternal,
+      sourceArtifact: hasDiagnosticSummary ? 'resolver-diagnostics.json' : 'symbols.json',
+      ...(hasDiagnosticSummary && resolverDiagnostics?.resolverVersion
+        ? { resolverVersion: resolverDiagnostics.resolverVersion }
+        : {}),
+      ...(hasDiagnosticSummary && typeof diagnosticSummary.blindZoneCount === 'number'
+        ? { blindZoneCount: diagnosticSummary.blindZoneCount }
+        : {}),
+      ...(hasDiagnosticSummary && typeof diagnosticSummary.candidateTargetCount === 'number'
+        ? { candidateTargetCount: diagnosticSummary.candidateTargetCount }
+        : {}),
+      ...(hasDiagnosticSummary && typeof diagnosticSummary.unresolvedImportCount === 'number'
+        ? { unresolvedImportCount: diagnosticSummary.unresolvedImportCount }
+        : {}),
+      ...(hasDiagnosticSummary && optionalObject(diagnosticSummary.reasonCounts)
+        ? { reasonCounts: diagnosticSummary.reasonCounts }
+        : {}),
+      ...(hasDiagnosticSummary && optionalArray(diagnosticSummary.topFamilies)
+        ? { topFamilies: diagnosticSummary.topFamilies }
+        : {}),
+      ...(hasDiagnosticSummary && optionalArray(diagnosticSummary.topSpecifierRoots)
+        ? { topSpecifierRoots: diagnosticSummary.topSpecifierRoots }
+        : {}),
       topUnresolvedSpecifiers: top.map((t) => t.specifierPrefix ?? t),
-      topUnresolvedReasons:
-        topUnresolvedReasonsFromSummary(symbols?.unresolvedInternalSummaryByReason) ??
-        topUnresolvedReasons(symbols?.unresolvedInternalSpecifierRecords),
+      topUnresolvedReasons: topUnresolvedReasonsDetail,
     },
   };
 }
@@ -369,17 +424,23 @@ function detectHtmlEntrySurfaceZone(entrySurface) {
  * silently skip their detection branch. Never invents blind zones
  * out of missing data — the whole point is honest reporting.
  *
- * @param {{triage?: object | null, symbols?: object | null, deadClassify?: object | null, entrySurface?: object | null}} artifacts
+ * @param {{triage?: object | null, symbols?: object | null, deadClassify?: object | null, entrySurface?: object | null, resolverDiagnostics?: object | null}} artifacts
  * @returns {BlindZone[]}
  */
-export function detectBlindZones({ triage, symbols, deadClassify: _deadClassify, entrySurface }) {
+export function detectBlindZones({
+  triage,
+  symbols,
+  deadClassify: _deadClassify,
+  entrySurface,
+  resolverDiagnostics,
+}) {
   const support = languageSupportState(symbols);
   const zones = [
     ...detectShapeZones(triage, support),
   ];
 
   zones.push(...detectByLanguageZones(triage, support, zones));
-  const resolverZone = detectResolverZone(symbols);
+  const resolverZone = detectResolverZone(symbols, resolverDiagnostics);
   if (resolverZone) zones.push(resolverZone);
   const parserZone = detectParserZone(symbols);
   if (parserZone) zones.push(parserZone);

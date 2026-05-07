@@ -316,6 +316,12 @@ function forwardedIncrementalArgs() {
   return args;
 }
 
+function forwardedGeneratedArtifactArgs(stepName) {
+  return stepName === 'build-symbol-graph.mjs'
+    ? ['--generated-artifacts', GENERATED_ARTIFACTS_MODE]
+    : [];
+}
+
 function manifestEvidenceOptions() {
   return {
     root: ROOT,
@@ -388,6 +394,7 @@ function runStep(scriptRelPath, { required = false, precondition = null, reason 
     '--output', OUT,
     ...forwardedScanArgs(),
     ...(INCREMENTAL_PRODUCER_STEPS.has(name) ? forwardedIncrementalArgs() : []),
+    ...forwardedGeneratedArtifactArgs(name),
   ];
   const t0 = Date.now();
   try {
@@ -442,6 +449,13 @@ if (!RUN_BASE_PIPELINE) {
 
   // ─── Step 5: symbol graph (always, required for classify) ──
   runStep('build-symbol-graph.mjs', { required: true });
+
+  // ─── Step 5b: resolver capability + per-run diagnostics ───
+  runStep('build-resolver-diagnostics.mjs', {
+    required: false,
+    precondition: () => existsSync(path.join(OUT, 'symbols.json')),
+    reason: 'symbols.json missing (symbol graph step failed or was skipped)',
+  });
 
   // ─── Step 6: PCEF entry surface evidence ────────────────
   runStep('build-entry-surface.mjs', {
