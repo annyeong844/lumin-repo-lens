@@ -77,6 +77,99 @@ function sortCounterObject(counter) {
     .sort((a, b) => a[0].localeCompare(b[0])));
 }
 
+function countObjectFromSummary(summary) {
+  if (!summary || typeof summary !== 'object') return null;
+  const out = [];
+  for (const [reason, value] of Object.entries(summary)) {
+    const count = typeof value?.count === 'number'
+      ? value.count
+      : typeof value === 'number'
+        ? value
+        : null;
+    if (count === null) continue;
+    out.push({ reason, count });
+  }
+  return out.length ? out : null;
+}
+
+function unresolvedSpecifierRoot(specifier) {
+  if (typeof specifier !== 'string' || specifier.length === 0) return null;
+  if (/^[@~#]\//.test(specifier)) return specifier.slice(0, 2);
+  if (specifier.startsWith('@')) {
+    const parts = specifier.split('/');
+    if (parts[0] && parts[1]) return `${parts[0]}/${parts[1]}`;
+  }
+  const first = specifier.split('/')[0];
+  return first || null;
+}
+
+function topUnresolvedReasons(symbols) {
+  const fromSummary = countObjectFromSummary(symbols?.unresolvedInternalSummaryByReason);
+  const reasons = fromSummary ?? (() => {
+    const counts = new Map();
+    for (const record of symbols?.unresolvedInternalSpecifierRecords ?? []) {
+      const reason = record?.reason ?? 'unknown-internal-resolution';
+      counts.set(reason, (counts.get(reason) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([reason, count]) => ({ reason, count }));
+  })();
+
+  return reasons
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
+    .slice(0, 10);
+}
+
+function buildTopSpecifierRoots(symbols) {
+  const groups = new Map();
+
+  for (const record of symbols?.unresolvedInternalSpecifierRecords ?? []) {
+    const specifierRoot = unresolvedSpecifierRoot(record?.specifier);
+    if (!specifierRoot) continue;
+    if (!groups.has(specifierRoot)) {
+      groups.set(specifierRoot, {
+        specifierRoot,
+        count: 0,
+        reasons: new Map(),
+        examples: [],
+      });
+    }
+    const group = groups.get(specifierRoot);
+    const reason = record?.reason ?? 'unknown-internal-resolution';
+    group.count++;
+    group.reasons.set(reason, (group.reasons.get(reason) ?? 0) + 1);
+    group.examples.push({
+      specifier: record.specifier,
+      consumerFile: record.consumerFile ?? null,
+    });
+  }
+
+  return [...groups.values()]
+    .map((group) => ({
+      specifierRoot: group.specifierRoot,
+      count: group.count,
+      reasons: sortCounterObject(group.reasons),
+      examples: group.examples
+        .sort((a, b) =>
+          `${a.consumerFile ?? ''}|${a.specifier ?? ''}`
+            .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}`))
+        .slice(0, 5),
+    }))
+    .sort((a, b) =>
+      b.count - a.count ||
+      a.specifierRoot.localeCompare(b.specifierRoot))
+    .slice(0, 20);
+}
+
+function buildResolverDiagnosticsSummary(symbols) {
+  return {
+    unresolvedInternal: symbols?.uses?.unresolvedInternal ?? null,
+    unresolvedInternalRatio: symbols?.uses?.unresolvedInternalRatio ?? null,
+    topUnresolvedReasons: topUnresolvedReasons(symbols),
+    topSpecifierRoots: buildTopSpecifierRoots(symbols),
+    topUnresolvedSpecifiers: (symbols?.topUnresolvedSpecifiers ?? []).slice(0, 20),
+  };
+}
+
 function toRepoRelative(root, candidate) {
   const abs = path.isAbsolute(candidate)
     ? path.resolve(candidate)
@@ -235,6 +328,7 @@ export function buildManifestEvidence({
       resolvedInternal: symbols?.uses?.resolvedInternal ?? null,
       unresolvedInternal: symbols?.uses?.unresolvedInternal ?? null,
     },
+    resolverDiagnostics: buildResolverDiagnosticsSummary(symbols),
     blindZones: detectBlindZones({ triage, symbols, deadClassify }),
     generatedArtifacts: buildGeneratedArtifactsSummary(symbols, {
       root,
@@ -250,6 +344,7 @@ export function refreshManifestEvidence(manifest, options) {
   const evidence = buildManifestEvidence(options);
   manifest.scanRange = evidence.scanRange;
   manifest.confidence = evidence.confidence;
+  manifest.resolverDiagnostics = evidence.resolverDiagnostics;
   manifest.blindZones = evidence.blindZones;
   manifest.generatedArtifacts = evidence.generatedArtifacts;
   manifest.livingAudit = evidence.livingAudit;

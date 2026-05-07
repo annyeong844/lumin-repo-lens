@@ -167,14 +167,23 @@ function resolveRelative(fromFile, spec) {
 // ── Stage 2: scoped tsconfig paths (FP-36) ───────────────
 //
 // If `spec` matches a `compilerOptions.paths` pattern whose `scopeDir`
-// contains `fromFile`, substitute and probe. A match that fails to
-// produce a file is UNRESOLVED_INTERNAL (scanner blind spot), NOT
-// EXTERNAL — the user's intent was clearly a local file and the
-// scanner failed to find it.
+// contains `fromFile`, substitute and probe. When that target is absent in a
+// source checkout, a concrete workspace package source or generated virtual
+// surface for the same specifier may still be better evidence than a blind
+// zone. If no concrete fallback exists, the miss stays UNRESOLVED_INTERNAL,
+// NOT EXTERNAL — the user's intent was clearly local.
 //
 // Returns: file path | 'UNRESOLVED_INTERNAL' | undefined (no match).
 
-function resolveScopedTsconfig(fromFile, spec, scoped) {
+function resolveAliasFallbackAfterTsconfigMiss(spec, aliasMap) {
+  for (const resolver of [resolveExactAlias, resolveWildcard, resolveHashWildcard]) {
+    const hit = resolver(spec, aliasMap);
+    if (isResolvedFile(hit) || isGeneratedVirtualResolution(hit)) return hit;
+  }
+  return null;
+}
+
+function resolveScopedTsconfig(fromFile, spec, scoped, aliasMap) {
   for (const entry of scoped) {
     if (!fileIsInsideScope(fromFile, entry.scopeDir)) continue;
     const star = matchSpec(spec, entry);
@@ -188,8 +197,10 @@ function resolveScopedTsconfig(fromFile, spec, scoped) {
       const hit = probeTarget(literal);
       if (hit) return hit;
     }
-    // Pattern matched but no file — scanner blind spot. Do NOT fall
-    // through to alias lookup or EXTERNAL.
+    const fallback = resolveAliasFallbackAfterTsconfigMiss(spec, aliasMap);
+    if (fallback) return fallback;
+    // Pattern matched but neither the tsconfig target nor a concrete package
+    // fallback exists — scanner blind spot. Do NOT fall through to EXTERNAL.
     return 'UNRESOLVED_INTERNAL';
   }
   return undefined;
@@ -550,7 +561,7 @@ export function makeResolver(root, aliasMap) {
     if (spec.startsWith('.')) return resolveRelative(fromFile, spec);
 
     let hit;
-    hit = resolveScopedTsconfig(fromFile, spec, scoped);
+    hit = resolveScopedTsconfig(fromFile, spec, scoped, aliasMap);
     if (hit !== undefined) return hit;
     hit = resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls);
     if (hit !== undefined) return hit;

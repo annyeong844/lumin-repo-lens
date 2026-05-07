@@ -20,6 +20,29 @@ function plural(count, singular, pluralValue = `${singular}s`) {
   return count === 1 ? singular : pluralValue;
 }
 
+function unresolvedReasonObjectToList(reasons) {
+  if (!reasons || typeof reasons !== 'object' || Array.isArray(reasons)) return reasons;
+  return Object.entries(reasons)
+    .filter(([, count]) => typeof count === 'number')
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason));
+}
+
+function formatTopUnresolvedRoots(roots, limit = 3) {
+  if (!Array.isArray(roots) || roots.length === 0) return null;
+  const parts = roots
+    .slice(0, limit)
+    .map((root) => {
+      const name = root?.specifierRoot;
+      const count = root?.count;
+      if (!name || typeof count !== 'number') return null;
+      const reasons = formatUnresolvedReasonCounts(unresolvedReasonObjectToList(root?.reasons));
+      return `${name} ${count}${reasons ? ` (${reasons})` : ''}`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join('; ') : null;
+}
+
 function artifactName(filePath) {
   if (!filePath) return null;
   return String(filePath).replace(/\\/g, '/').split('/').slice(-2).join('/');
@@ -199,6 +222,10 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     const resolverReasons = formatUnresolvedReasonCounts(resolverZone?.details?.topUnresolvedReasons);
     if (resolverReasons) {
       lines.push(`- Resolver blind-zone reasons: ${resolverReasons}. Read \`symbols.json.unresolvedInternalSummaryByReason\` and \`manifest.json.blindZones[].details.topUnresolvedReasons\` before treating unresolved imports as generic noise.`);
+    }
+    const unresolvedRoots = formatTopUnresolvedRoots(manifest?.resolverDiagnostics?.topSpecifierRoots);
+    if (unresolvedRoots) {
+      lines.push(`- Top unresolved roots: ${unresolvedRoots}. Read \`manifest.json.resolverDiagnostics.topSpecifierRoots\` to see which package or alias roots concentrate resolver blind zones.`);
     }
   }
 
