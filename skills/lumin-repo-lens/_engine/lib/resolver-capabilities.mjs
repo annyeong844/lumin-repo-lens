@@ -1,3 +1,6 @@
+import { generatedBlindZoneBlockingPolicy } from './generated-blind-zone-relevance.mjs';
+import { resolverBlindZoneBlockingPolicy } from './resolver-blind-zone-relevance.mjs';
+
 export const RESOLVER_CAPABILITIES_SCHEMA_VERSION = 'resolver-capabilities.v1';
 export const RESOLVER_DIAGNOSTICS_SCHEMA_VERSION = 'resolver-diagnostics.v1';
 export const RESOLVER_VERSION = 'resolver-2026-05-v1';
@@ -328,6 +331,9 @@ function blindZoneFromRecord(record) {
   const family = familyForRecord(record);
   const reason = record.reason ?? 'unknown-internal-resolution';
   const generated = family === 'generated-artifacts';
+  const relevancePolicy = generated
+    ? generatedBlindZoneBlockingPolicy(record)
+    : resolverBlindZoneBlockingPolicy(record);
   return compactObject({
     family,
     reason,
@@ -337,6 +343,8 @@ function blindZoneFromRecord(record) {
     outputLevel: 'unresolved_with_reason',
     affectedPackageScope: affectedPackageScopeForRecord(record),
     blocksAbsenceClaims: true,
+    blockingScope: relevancePolicy?.blockingScope,
+    relevancePolicy,
     relevance: generated ? 'generated-provider-surface' : 'unresolved-internal-surface',
     targetCandidates: targetCandidates(record).length ? sortStrings(targetCandidates(record)) : undefined,
     typeOnly: typeof record.typeOnly === 'boolean' ? record.typeOnly : undefined,
@@ -345,6 +353,7 @@ function blindZoneFromRecord(record) {
 }
 
 function blindZoneFromGeneratedConsumer(zone) {
+  const relevancePolicy = generatedBlindZoneBlockingPolicy(zone);
   return compactObject({
     family: 'generated-artifacts',
     reason: zone.reason,
@@ -354,6 +363,8 @@ function blindZoneFromGeneratedConsumer(zone) {
     outputLevel: 'unresolved_with_reason',
     affectedPackageScope: zone.scopePackageRoot,
     blocksAbsenceClaims: true,
+    blockingScope: relevancePolicy.blockingScope,
+    relevancePolicy,
     relevance: 'generated-consumer-scope',
     candidatePath: zone.candidatePath,
     status: zone.status,
@@ -389,6 +400,12 @@ function topFamilies(unresolvedImports, blindZones) {
     .slice(0, 20);
 }
 
+function topAffectedPackageScopes(blindZones) {
+  return countBy(blindZones, (zone) => zone.affectedPackageScope)
+    .map(({ key, count }) => ({ affectedPackageScope: key, count }))
+    .slice(0, 20);
+}
+
 export function buildResolverDiagnosticsArtifact(symbolsData, {
   capabilityArtifact = CAPABILITY_ARTIFACT_NAME,
 } = {}) {
@@ -415,6 +432,7 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
       candidateTargetCount: candidateTargets.length,
       unresolvedImportCount: unresolvedImports.length,
       topFamilies: topFamilies(unresolvedImports, blindZones),
+      topAffectedPackageScopes: topAffectedPackageScopes(blindZones),
       topUnresolvedReasons: topUnresolvedReasons(records),
       topSpecifierRoots: topSpecifierRoots(records),
       reasonCounts: counterObjectFromValues(records, (record) =>

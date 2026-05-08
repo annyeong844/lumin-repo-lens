@@ -1,6 +1,8 @@
 import { isGeneratedArtifactMissingRecord } from './generated-artifact-evidence.mjs';
 import { TAINT } from './vocab.mjs';
 
+export const RESOLVER_BLIND_ZONE_RELEVANCE_POLICY_VERSION = 'resolver-blind-zone-relevance.v1';
+
 const EXT_RE = /\.(d\.[cm]?ts|tsx?|jsx?|mjs|cjs|mts|cts)$/;
 
 function slash(value) {
@@ -80,6 +82,44 @@ function isResolverBlindZoneRecord(record) {
   if (record.family === 'generated-artifacts') return false;
   if (record.outputLevel === 'resolved') return false;
   return !!(record.reason || record.family || record.resolverStage || targetCandidates(record).length);
+}
+
+function unique(values) {
+  return [...new Set(values.filter(Boolean))].sort();
+}
+
+export function resolverBlindZoneBlockingPolicy(record) {
+  if (!isResolverBlindZoneRecord(record)) return null;
+
+  const candidates = targetCandidates(record);
+  const hasExplicitScope =
+    typeof record?.affectedPackageScope === 'string' ||
+    typeof record?.packageRoot === 'string';
+  const candidateRelevantWhen = [];
+  if (candidates.length > 0) {
+    candidateRelevantWhen.push(
+      'target-candidate-file',
+      'target-candidate-package-scope',
+      'target-candidate-submodule',
+    );
+  }
+  if (hasExplicitScope) candidateRelevantWhen.push('affected-package-scope');
+
+  if (candidateRelevantWhen.length > 0) {
+    return {
+      policyVersion: RESOLVER_BLIND_ZONE_RELEVANCE_POLICY_VERSION,
+      blockingScope: 'candidate-relevant',
+      candidateRelevantWhen: unique(candidateRelevantWhen),
+      mustNotBlockUnrelatedCandidates: true,
+    };
+  }
+
+  return {
+    policyVersion: RESOLVER_BLIND_ZONE_RELEVANCE_POLICY_VERSION,
+    blockingScope: 'repo-confidence-limited',
+    candidateRelevantWhen: ['owner-unknown-internal'],
+    mustNotBlockUnrelatedCandidates: false,
+  };
 }
 
 export function resolverBlindZoneRelevance(finding, record, { submoduleOf } = {}) {

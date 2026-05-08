@@ -8,6 +8,7 @@ import {
 } from './generated-artifact-evidence.mjs';
 
 export const GENERATED_CONSUMER_BLIND_ZONE_REASON = 'generated-consumer-blind-zone';
+export const GENERATED_BLIND_ZONE_RELEVANCE_POLICY_VERSION = 'generated-blind-zone-relevance.v1';
 
 function slash(value) {
   return String(value ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
@@ -174,6 +175,18 @@ export function generatedConsumerBlindZoneRelevance(finding, zone, { submoduleOf
     };
   }
   return null;
+}
+
+export function generatedBlindZoneBlockingPolicy(record) {
+  const consumerZone = record?.reason === GENERATED_CONSUMER_BLIND_ZONE_REASON;
+  return {
+    policyVersion: GENERATED_BLIND_ZONE_RELEVANCE_POLICY_VERSION,
+    blockingScope: 'candidate-relevant',
+    candidateRelevantWhen: consumerZone
+      ? ['generated-consumer-scope', 'generated-consumer-target-submodule']
+      : ['matched-package-root', 'target-candidate-submodule'],
+    mustNotBlockUnrelatedCandidates: true,
+  };
 }
 
 export function generatedArtifactRelevantTaint(
