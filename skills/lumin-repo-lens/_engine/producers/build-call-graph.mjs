@@ -15,6 +15,10 @@ import { makeResolver, isResolvedFile } from '../lib/resolver-core.mjs';
 import { collectFiles as collectFilesShared } from '../lib/collect-files.mjs';
 import { relPath } from '../lib/paths.mjs';
 import { definitionIdFromOxcNode } from '../lib/definition-id.mjs';
+import {
+  buildExportedObjectMaps,
+  staticMemberPropertyName,
+} from '../lib/call-graph-bounded.mjs';
 
 const cli = parseCliArgs();
 const { root: ROOT, output } = cli;
@@ -185,6 +189,14 @@ function collectExportAliasMap(program, relFile) {
   return exportAliases;
 }
 
+function rootIdentifierOfMemberExpression(node) {
+  let current = node;
+  while (current?.type === 'MemberExpression') {
+    current = current.object;
+  }
+  return current?.type === 'Identifier' ? current.name : null;
+}
+
 // ─── 파일별 분석 ─────────────────────────────────────────
 function analyzeFile(filePath) {
   const src = readFileSync(filePath, 'utf8');
@@ -229,9 +241,11 @@ function analyzeFile(filePath) {
   const calls = []; // { calleeName, callSite: 'direct'|'namespace'|'prototype', line }
   const namespaceMethodCalls = []; // { nsName, method, line }
   const prototypeCalls = []; // { owner, method, line }
-  const memberCalls = new Map(); // identifier -> [{method, line}]
+  const importedObjectMemberCalls = []; // { source, imported, method, start }
 
   let totalCallExpressions = 0;
+  let memberCallCount = 0;
+  let boundedOutMemberCalls = 0;
 
   walk(result.program, (node) => {
     if (node.type !== 'CallExpression') return;
@@ -246,12 +260,14 @@ function analyzeFile(filePath) {
     }
 
     // (b) member call
-    if (callee.type === 'MemberExpression' && !callee.computed) {
+    if (callee.type === 'MemberExpression') {
+      memberCallCount++;
       const obj = callee.object;
-      const prop = callee.property;
+      const propName = staticMemberPropertyName(callee);
 
       // X.prototype.Y(...) — MemberExpression -> object is MemberExpression with property.name='prototype'
       if (
+        propName &&
         obj?.type === 'MemberExpression' &&
         !obj.computed &&
         obj.property?.name === 'prototype' &&
@@ -259,26 +275,42 @@ function analyzeFile(filePath) {
       ) {
         prototypeCalls.push({
           owner: obj.object.name,
-          method: prop?.name,
+          method: propName,
           start: node.start,
         });
         return;
       }
 
+      if (!propName) {
+        const rootName = rootIdentifierOfMemberExpression(callee);
+        if (rootName && importMap.has(rootName)) boundedOutMemberCalls++;
+        return;
+      }
+
+      if (obj?.type === 'MemberExpression') {
+        const rootName = rootIdentifierOfMemberExpression(obj);
+        if (rootName && importMap.has(rootName)) boundedOutMemberCalls++;
+        return;
+      }
+
       // obj.method() — obj가 namespace import인 경우 추적
-      if (obj?.type === 'Identifier' && prop?.name) {
+      if (obj?.type === 'Identifier') {
         const imp = importMap.get(obj.name);
         if (imp && imp.kind === 'namespace') {
           namespaceMethodCalls.push({
             nsName: obj.name,
             source: imp.source,
-            method: prop.name,
+            method: propName,
             start: node.start,
           });
-        } else {
-          // 일반 object.method — 추적 어려움. 수집만.
-          if (!memberCalls.has(obj.name)) memberCalls.set(obj.name, []);
-          memberCalls.get(obj.name).push({ method: prop.name, start: node.start });
+        } else if (imp && (imp.kind === 'default' || imp.kind === 'named')) {
+          importedObjectMemberCalls.push({
+            source: imp.source,
+            imported: imp.imported,
+            method: propName,
+            start: node.start,
+            typeOnly: imp.typeOnly,
+          });
         }
       }
     }
@@ -288,10 +320,13 @@ function analyzeFile(filePath) {
     filePath,
     importMap,
     exportAliasMap: collectExportAliasMap(result.program, relFile),
+    exportedObjectMaps: buildExportedObjectMaps(result.program),
     calls,
     namespaceMethodCalls,
+    importedObjectMemberCalls,
     prototypeCalls,
-    memberCallCount: [...memberCalls.values()].reduce((a, v) => a + v.length, 0),
+    memberCallCount,
+    boundedOutMemberCalls,
     totalCallExpressions,
     loc: src.split('\n').length,
   };
@@ -317,12 +352,27 @@ console.log(`[parse errors] ${parseErrors}`);
 // ─── cross-file call edge 구축 ───────────────────────────
 const callEdges = []; // { from, to, callee, count }
 const edgeMap = new Map(); // key: "from→to→callee" -> count
+const boundedOutMemberCallsByAbsFile = new Map();
 
 let totalDirectCalls = 0;
 let resolvedDirectCalls = 0;
 let typeOnlyResolved = 0;
 
+function addCallEdge(from, to, callee, count = 1) {
+  const key = `${from}→${to}→${callee}`;
+  if (!edgeMap.has(key)) {
+    edgeMap.set(key, { from, to, callee, count: 0 });
+  }
+  edgeMap.get(key).count += count;
+}
+
+function addBoundedOutMemberCall(file, count = 1) {
+  boundedOutMemberCallsByAbsFile.set(file, (boundedOutMemberCallsByAbsFile.get(file) ?? 0) + count);
+}
+
 for (const [f, info] of fileInfo) {
+  if (info.boundedOutMemberCalls > 0) addBoundedOutMemberCall(f, info.boundedOutMemberCalls);
+
   for (const c of info.calls) {
     if (c.kind !== 'direct') continue;
     totalDirectCalls++;
@@ -332,11 +382,25 @@ for (const [f, info] of fileInfo) {
     const targetFile = resolveSpecifier(f, imp.source);
     if (!targetFile) continue;
     resolvedDirectCalls++;
-    const key = `${f}→${targetFile}→${imp.imported}`;
-    if (!edgeMap.has(key)) {
-      edgeMap.set(key, { from: f, to: targetFile, callee: imp.imported, count: 0 });
+    addCallEdge(f, targetFile, imp.imported);
+  }
+
+  for (const c of info.importedObjectMemberCalls) {
+    if (c.typeOnly) { typeOnlyResolved++; continue; }
+    const targetFile = resolveSpecifier(f, c.source);
+    if (!targetFile) {
+      addBoundedOutMemberCall(f);
+      continue;
     }
-    edgeMap.get(key).count++;
+    const targetInfo = fileInfo.get(targetFile);
+    const objectMap = targetInfo?.exportedObjectMaps?.get(c.imported);
+    const target = objectMap?.get(c.method);
+    if (!target?.calleeName) {
+      addBoundedOutMemberCall(f);
+      continue;
+    }
+    resolvedDirectCalls++;
+    addCallEdge(f, targetFile, target.calleeName);
   }
 }
 for (const e of edgeMap.values()) callEdges.push(e);
@@ -387,6 +451,14 @@ const topCallees = [...calleeFreq.entries()]
 console.log(`\n════════ Top 25 callees (가장 많이 호출되는 함수) ════════`);
 for (const c of topCallees.slice(0, 25)) {
   console.log(`  ${c.count.toString().padStart(4)}  ${c.name.padEnd(32)}  ${c.file}`);
+}
+
+const boundedOutMemberCallsByFile = Object.create(null);
+const memberCallsByFile = Object.create(null);
+for (const [absFile, info] of fileInfo) {
+  const relFile = relPath(ROOT, absFile);
+  memberCallsByFile[relFile] = info.memberCallCount ?? 0;
+  boundedOutMemberCallsByFile[relFile] = boundedOutMemberCallsByAbsFile.get(absFile) ?? 0;
 }
 
 // ─── Semi-dead: import는 있지만 call이 0인 값 import ────
@@ -540,6 +612,7 @@ writeFileSync(outPath, JSON.stringify({
       callFanInByIdentity: true,
       callSiteFanInByDefinitionId: true,
       exportAliasMap: true,
+      boundedMemberCallResolution: true,
       topCalleesDisplaySlice: 100,
       truncationFix: true,
     },
@@ -551,6 +624,7 @@ writeFileSync(outPath, JSON.stringify({
     resolvedCrossFileCalls: resolvedDirectCalls,
     typeOnlySkipped: typeOnlyResolved,
     callEdges: callEdges.length,
+    boundedOutMemberCalls: [...boundedOutMemberCallsByAbsFile.values()].reduce((a, n) => a + n, 0),
     semiDead: semiDeadCount,
     semiDeadReactFiltered: reactSkipCount, // FP-19
     totalPrototypeCalls: totalProtoCalls,
@@ -560,6 +634,8 @@ writeFileSync(outPath, JSON.stringify({
   callFanInByIdentity,
   callSiteFanInByDefinitionId,
   exportAliasMap,
+  boundedOutMemberCallsByFile,
+  memberCallsByFile,
   moduleCallCount: [...moduleCallCount.entries()].map(([k, v]) => ({ edge: k, count: v })).sort((a, b) => b.count - a.count).slice(0, 50),
   semiDeadList: semiDead,
   prototypeOwners: [...protoByOwner.entries()].map(([owner, m]) => ({

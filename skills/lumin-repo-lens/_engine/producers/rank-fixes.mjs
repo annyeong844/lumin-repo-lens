@@ -221,7 +221,14 @@ function isFrameworkCallbackLike(finding) {
     (symbol === 'default' || isFunctionLikeFinding(finding));
 }
 
+function hasBoundedMemberCallStats() {
+  return callGraph?.meta?.supports?.boundedMemberCallResolution === true &&
+    callGraph?.boundedOutMemberCallsByFile &&
+    callGraph?.memberCallsByFile;
+}
+
 function nearbyBoundedOutRatio(file) {
+  if (!hasBoundedMemberCallStats()) return null;
   const bounded = callGraph?.boundedOutMemberCallsByFile?.[file];
   const total = callGraph?.memberCallsByFile?.[file];
   if (typeof bounded !== 'number' && typeof total !== 'number') return 0;
@@ -249,11 +256,13 @@ function callGraphFanInZero(finding) {
 
 function callGraphNoObservedCallersSupport(finding) {
   if (!callGraph) return null;
+  if (!hasBoundedMemberCallStats()) return null;
   if (!isFunctionLikeFinding(finding)) return null;
   if (isFrameworkCallbackLike(finding)) return null;
   if (!symbolGraphFanInZero(finding)) return null;
   if (!callGraphFanInZero(finding)) return null;
-  if (nearbyBoundedOutRatio(finding.file) >= 0.10) return null;
+  const boundedOutRatio = nearbyBoundedOutRatio(finding.file);
+  if (boundedOutRatio === null || boundedOutRatio >= 0.10) return null;
   return {
     kind: 'call-graph-no-observed-callers',
     artifact: 'call-graph.json',
