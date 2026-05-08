@@ -43,6 +43,20 @@ function formatTopUnresolvedRoots(roots, limit = 3) {
   return parts.length ? parts.join('; ') : null;
 }
 
+function formatTopAffectedPackageScopes(scopes, limit = 3) {
+  if (!Array.isArray(scopes) || scopes.length === 0) return null;
+  const parts = scopes
+    .slice(0, limit)
+    .map((scope) => {
+      const name = scope?.affectedPackageScope;
+      const count = scope?.count;
+      if (!name || typeof count !== 'number') return null;
+      return `${name} ${count}`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join('; ') : null;
+}
+
 function formatCounterObject(counter) {
   if (!counter || typeof counter !== 'object' || Array.isArray(counter)) return null;
   const parts = Object.entries(counter)
@@ -274,6 +288,12 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     const unresolvedRoots = formatTopUnresolvedRoots(manifest?.resolverDiagnostics?.topSpecifierRoots);
     if (unresolvedRoots) {
       lines.push(`- Top unresolved roots: ${unresolvedRoots}. Read \`manifest.json.resolverDiagnostics.topSpecifierRoots\` to see which package or alias roots concentrate resolver blind zones.`);
+    }
+    const affectedScopes = formatTopAffectedPackageScopes(
+      manifest?.resolverDiagnostics?.topAffectedPackageScopes
+    );
+    if (affectedScopes) {
+      lines.push(`- Resolver affected scopes: ${affectedScopes}. Read \`manifest.json.resolverDiagnostics.topAffectedPackageScopes\` before treating resolver blind zones as repo-global blockers.`);
     }
   }
 

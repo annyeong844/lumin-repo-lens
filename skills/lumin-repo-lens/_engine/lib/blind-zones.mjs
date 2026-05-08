@@ -319,6 +319,9 @@ function detectResolverZone(symbols, resolverDiagnostics = null) {
       ...(hasDiagnosticSummary && optionalArray(diagnosticSummary.topFamilies)
         ? { topFamilies: diagnosticSummary.topFamilies }
         : {}),
+      ...(hasDiagnosticSummary && optionalArray(diagnosticSummary.topAffectedPackageScopes)
+        ? { topAffectedPackageScopes: diagnosticSummary.topAffectedPackageScopes }
+        : {}),
       ...(hasDiagnosticSummary && optionalArray(diagnosticSummary.topSpecifierRoots)
         ? { topSpecifierRoots: diagnosticSummary.topSpecifierRoots }
         : {}),

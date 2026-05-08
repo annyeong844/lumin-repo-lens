@@ -177,6 +177,8 @@ function buildResolverDiagnosticsSummary(symbols, {
     blindZoneCount: resolverDiagnostics?.summary?.blindZoneCount ?? null,
     candidateTargetCount: resolverDiagnostics?.summary?.candidateTargetCount ?? null,
     topFamilies: resolverDiagnostics?.summary?.topFamilies ?? [],
+    topAffectedPackageScopes:
+      resolverDiagnostics?.summary?.topAffectedPackageScopes ?? [],
     topUnresolvedReasons:
       resolverDiagnostics?.summary?.topUnresolvedReasons ?? topUnresolvedReasons(symbols),
     topSpecifierRoots:
