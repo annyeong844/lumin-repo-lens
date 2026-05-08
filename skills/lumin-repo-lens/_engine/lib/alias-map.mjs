@@ -477,19 +477,58 @@ function buildGeneratedVirtualSurfaces(root, pkgDir, pkgJson, generatedSubpathEv
   return surfaces.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-function addLegacySubpathFallback(map, root, pkgDir, pkgJson) {
-  const hasExplicitBare = map.has(pkgJson.name);
-  if (!hasExplicitBare && typeof pkgJson.main === 'string') {
-    const mainResolved = mapOutputToSource(pkgDir, pkgJson.main);
-    const generatedArtifact = generatedOutputArtifactEvidence(pkgJson, pkgJson.main, 'main', {
+const PACKAGE_INDEX_ENTRY_CANDIDATES = [
+  'index.ts',
+  'index.tsx',
+  'index.mts',
+  'index.cts',
+  'index.js',
+  'index.jsx',
+  'index.mjs',
+  'index.cjs',
+  'index.d.ts',
+  'index.d.mts',
+  'index.d.cts',
+];
+
+function packageIndexEntryPath(pkgDir) {
+  for (const candidate of PACKAGE_INDEX_ENTRY_CANDIDATES) {
+    const abs = path.join(pkgDir, candidate);
+    if (fileExists(abs)) return abs;
+  }
+  return path.join(pkgDir, 'index');
+}
+
+function legacyBareEntry(pkgDir, pkgJson) {
+  for (const [field, source] of [
+    ['main', 'legacy-main'],
+    ['types', 'legacy-types'],
+    ['typings', 'legacy-typings'],
+  ]) {
+    const target = pkgJson[field];
+    if (typeof target !== 'string' || !target.trim()) continue;
+    const generatedArtifact = generatedOutputArtifactEvidence(pkgJson, target, field, {
       outputArtifactDirs: OUTPUT_ARTIFACT_DIRS,
     });
-    map.set(pkgJson.name, {
+    return {
       type: 'exact',
-      source: 'legacy-main',
-      path: mainResolved,
+      source,
+      path: mapOutputToSource(pkgDir, target),
       ...(generatedArtifact ? { generatedArtifact } : {}),
-    });
+    };
+  }
+
+  return {
+    type: 'exact',
+    source: 'legacy-index',
+    path: packageIndexEntryPath(pkgDir),
+  };
+}
+
+function addLegacySubpathFallback(map, root, pkgDir, pkgJson) {
+  const hasExplicitBare = map.has(pkgJson.name);
+  if (!hasExplicitBare) {
+    map.set(pkgJson.name, legacyBareEntry(pkgDir, pkgJson));
   }
 
   // Legacy subpath wildcard. Check for existing wildcard OR exact entry
