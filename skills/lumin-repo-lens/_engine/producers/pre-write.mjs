@@ -26,6 +26,7 @@ import { lookupName } from '../lib/pre-write-lookup-name.mjs';
 import { lookupFile } from '../lib/pre-write-lookup-file.mjs';
 import { lookupDependency } from '../lib/pre-write-lookup-dep.mjs';
 import { lookupShape } from '../lib/pre-write-lookup-shape.mjs';
+import { lookupInlinePatterns } from '../lib/pre-write-lookup-inline-patterns.mjs';
 import { classifyPreWriteCues } from '../lib/pre-write-cue-tiers.mjs';
 import { parseCanonicalFile } from '../lib/pre-write-canonical-parser.mjs';
 import { computeDrift } from '../lib/pre-write-drift.mjs';
@@ -171,6 +172,7 @@ const topology = loadIfExists(OUTPUT, 'topology.json', { tag: 'pre-write' });
 const triage = loadIfExists(OUTPUT, 'triage.json', { tag: 'pre-write' });
 const shapeIndex = loadIfExists(OUTPUT, 'shape-index.json', { tag: 'pre-write' });
 const functionClones = loadIfExists(OUTPUT, 'function-clones.json', { tag: 'pre-write' });
+const inlinePatterns = loadIfExists(OUTPUT, 'inline-patterns.json', { tag: 'pre-write' });
 
 // Read package.json for dependency lookup. Absence is a caller-level
 // problem — we still continue, emitting NEW_PACKAGE for every dep.
@@ -227,6 +229,10 @@ for (const depName of intent.dependencies) {
 for (const shape of intent.shapes) {
   const result = lookupShape(shape, { shapeIndex, functionClones });
   lookups.push(result);
+}
+
+if ((intent.refactorSources?.length ?? 0) > 0) {
+  lookups.push(lookupInlinePatterns(intent.refactorSources, { inlinePatterns }));
 }
 
 // ── Assemble advisory ────────────────────────────────────────

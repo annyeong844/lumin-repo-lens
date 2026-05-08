@@ -240,6 +240,44 @@ function addShapeLookup({ lookup, cardMap, suppressedCues, unavailableEvidence }
   }
 }
 
+function addInlinePatternLookup({ lookup, cardMap, suppressedCues, unavailableEvidence }) {
+  if (lookup.result === 'UNAVAILABLE') {
+    unavailableEvidence.push({
+      evidenceLane: 'inline-extraction',
+      status: UNAVAILABLE_STATUS,
+      reason: lookup.reason ?? 'lookup-unavailable',
+      artifact: lookup.artifact ?? 'inline-patterns.json',
+      citations: lookup.citations ?? [],
+    });
+    return;
+  }
+  if (lookup.result !== 'INLINE_PATTERN_MATCH') return;
+
+  for (const group of lookup.groups ?? []) {
+    const ownerFile = group.ownerFiles?.[0] ?? group.occurrences?.[0]?.file ?? 'unknown';
+    const candidate = {
+      identity: `inline-pattern:${group.patternHash}`,
+      ownerFile,
+      exportedName: group.kind ?? 'inline-pattern',
+      policyExcluded: group.policyExcluded,
+      policyReason: group.policyReason,
+    };
+    addCue(cardMap, suppressedCues, candidate, reviewCue({
+      lane: 'inline-extraction',
+      claim: 'repeated inline statement pattern',
+      evidence: [{
+        artifact: 'inline-patterns.json',
+        matchedField: 'groups[].patternHash',
+        algorithmVersion: group.normalizerVersion ?? 'inline-statement-normalizer-v1',
+        patternHash: group.patternHash,
+        occurrenceCount: group.size ?? group.occurrences?.length ?? 0,
+        ownerFiles: group.ownerFiles ?? [],
+        reviewReason: group.reviewReason,
+      }],
+    }));
+  }
+}
+
 export function classifyPreWriteCues({ lookups = [], intent = {} } = {}) {
   const cardMap = new Map();
   const suppressedCues = [];
@@ -249,6 +287,7 @@ export function classifyPreWriteCues({ lookups = [], intent = {} } = {}) {
     if (lookup.kind === 'name') addNameLookup({ lookup, cardMap, suppressedCues });
     else if (lookup.kind === 'file') addFileLookup({ lookup, cardMap, suppressedCues });
     else if (lookup.kind === 'shape') addShapeLookup({ lookup, cardMap, suppressedCues, unavailableEvidence });
+    else if (lookup.kind === 'inline-pattern') addInlinePatternLookup({ lookup, cardMap, suppressedCues, unavailableEvidence });
   }
 
   return {

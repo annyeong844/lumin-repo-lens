@@ -171,10 +171,10 @@ function collectScriptEntries({ root, repoMode }) {
   return { files, evidenceByFile };
 }
 
-function collectHtmlEntries({ root, repoMode }) {
+function collectHtmlEntries({ root, repoMode, includeTests, exclude }) {
   const files = new Set();
   const evidenceByFile = new Map();
-  const html = collectHtmlModuleEntrypoints({ root, repoMode });
+  const html = collectHtmlModuleEntrypoints({ root, repoMode, includeTests, exclude });
   addIndexedEntries(
     indexPublicSurfaceEntries(html.entries),
     files,
@@ -267,7 +267,7 @@ export function buildEntrySurfaceArtifact({
 
   const publicApi = collectPublicApi({ root, repoMode, symbolsData, aliasMap, resolve });
   const script = collectScriptEntries({ root, repoMode });
-  const html = collectHtmlEntries({ root, repoMode });
+  const html = collectHtmlEntries({ root, repoMode, includeTests, exclude });
   const framework = collectFrameworkEntries({ root, repoMode, symbolsData, includeTests, exclude, knownFiles });
   const config = collectConfigEntries({ knownFiles });
 

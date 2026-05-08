@@ -71,10 +71,18 @@ const FUNCTION_CLONES_PRODUCER = {
   timeoutKind: 'cold-cache-function-clones-timeout',
 };
 
+const INLINE_PATTERNS_PRODUCER = {
+  artifact: 'inline-patterns.json',
+  script: 'build-inline-pattern-index.mjs',
+  failKind: 'cold-cache-inline-patterns-failed',
+  timeoutKind: 'cold-cache-inline-patterns-timeout',
+};
+
 const PRODUCER_ORDER = [
   ...PRODUCERS,
   SHAPE_INDEX_PRODUCER,
   FUNCTION_CLONES_PRODUCER,
+  INLINE_PATTERNS_PRODUCER,
 ];
 
 function hasEntries(value) {
@@ -123,6 +131,10 @@ function selectProducers({ intent, includeShapeIndex }) {
 
   if (hasFunctionSignatureShapeIntent(intent)) {
     needed.add('function-clones.json');
+  }
+
+  if (hasEntries(intent.refactorSources)) {
+    needed.add('inline-patterns.json');
   }
 
   return PRODUCER_ORDER.filter((producer) => needed.has(producer.artifact));

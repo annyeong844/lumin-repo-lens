@@ -347,6 +347,13 @@ function evidenceSummary(evidence) {
   }).filter(Boolean).join('; ');
 }
 
+function reviewActionForCue(cue) {
+  if (cue.evidenceLane === 'inline-extraction') {
+    return 'inspect the cited occurrence ranges before extracting helper code.';
+  }
+  return 'inspect the cited file or symbol before creating parallel code.';
+}
+
 function renderCueSections(advisory) {
   const cueCards = advisory.cueCards ?? [];
   const unavailable = advisory.unavailableEvidence ?? [];
@@ -360,7 +367,7 @@ function renderCueSections(advisory) {
       if (cue.cueTier === 'SAFE_CUE') {
         grounded.push(row, evidence, '  Note: grounded fact only; not a semantic-equivalence or auto-reuse claim.');
       } else if (cue.cueTier === 'AGENT_REVIEW_CUE') {
-        review.push(row, evidence, '  action: inspect the cited file or symbol before creating parallel code.');
+        review.push(row, evidence, `  action: ${reviewActionForCue(cue)}`);
       }
     }
   }

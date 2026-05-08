@@ -216,16 +216,20 @@ export function collectFiles(root, opts = {}) {
 export function scanScopeStatusForPath(root, full, opts = {}) {
   const resolvedRoot = path.resolve(root);
   const resolvedFull = path.resolve(full);
+  const directory = opts.directory === true;
   const rel = path.relative(resolvedRoot, resolvedFull);
+  if (!rel && directory) {
+    return { included: true, reason: null };
+  }
   if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
     return { included: false, reason: 'outside-root' };
   }
 
   const { includeTests, extSet, excludeRules } = normalizeCollectOptions(opts);
-  if (!extSet.has(path.extname(resolvedFull))) {
+  if (!directory && !extSet.has(path.extname(resolvedFull))) {
     return { included: false, reason: 'language-excluded' };
   }
-  if (!includeTests && isTestLikePath(resolvedFull)) {
+  if (!directory && !includeTests && isTestLikePath(resolvedFull)) {
     return { included: false, reason: 'test-excluded' };
   }
 
@@ -234,20 +238,22 @@ export function scanScopeStatusForPath(root, full, opts = {}) {
   if (rootSegment && shouldPruneRootDir(rootSegment)) {
     return { included: false, reason: 'root-pruned' };
   }
-  for (const segment of segments.slice(1, -1)) {
+  const walkSegments = directory ? segments.slice(1) : segments.slice(1, -1);
+  for (const segment of walkSegments) {
     if (shouldPruneWalkDir(segment)) {
       return { included: false, reason: 'walk-pruned' };
     }
   }
 
   let cursor = resolvedRoot;
-  for (const segment of segments.slice(0, -1)) {
+  const directorySegments = directory ? segments : segments.slice(0, -1);
+  for (const segment of directorySegments) {
     cursor = path.join(cursor, segment);
     if (isExcludedPath(resolvedRoot, cursor, excludeRules, { directory: true })) {
       return { included: false, reason: 'excluded' };
     }
   }
-  if (isExcludedPath(resolvedRoot, resolvedFull, excludeRules)) {
+  if (!directory && isExcludedPath(resolvedRoot, resolvedFull, excludeRules)) {
     return { included: false, reason: 'excluded' };
   }
 

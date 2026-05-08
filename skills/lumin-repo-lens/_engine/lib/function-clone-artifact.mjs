@@ -15,9 +15,12 @@ import {
   FUNCTION_SIGNATURE_NORMALIZED_VERSION,
   functionSignatureFromFunctionNode,
 } from './function-signature-hash.mjs';
+import { getThresholdPolicy, thresholdPolicySummary } from './threshold-policies.mjs';
 
 const FUNCTION_CLONE_SCHEMA_VERSION = 'function-clones.v3';
 const FUNCTION_CLONE_NORMALIZED_VERSION = 'function-body.normalized.v1';
+const FUNCTION_CLONE_NEAR_POLICY = getThresholdPolicy('function-clone-near-policy');
+const FUNCTION_CLONE_NEAR_THRESHOLDS = FUNCTION_CLONE_NEAR_POLICY.thresholds;
 
 const SKIP_KEYS = new Set([
   'start',
@@ -395,11 +398,17 @@ export function extractFunctionCloneFilePayload({ src, relFile, scope }) {
   };
 }
 
-function groupFacts(facts, key, { minSize = 2, minBodyLoc = 3 } = {}) {
+function groupFacts(facts, key, {
+  minSize = FUNCTION_CLONE_NEAR_THRESHOLDS.minGroupSize,
+  minBodyLoc = FUNCTION_CLONE_NEAR_THRESHOLDS.minBodyLocForGrouping,
+} = {}) {
   const byHash = new Map();
   for (const fact of facts) {
     if (!fact?.[key]) continue;
-    if ((fact.bodyLoc ?? 0) < minBodyLoc || (fact.statementCount ?? 0) < 2) continue;
+    if (
+      (fact.bodyLoc ?? 0) < minBodyLoc ||
+      (fact.statementCount ?? 0) < FUNCTION_CLONE_NEAR_THRESHOLDS.minStatementsForGrouping
+    ) continue;
     if (!byHash.has(fact[key])) byHash.set(fact[key], []);
     byHash.get(fact[key]).push(fact);
   }
@@ -444,7 +453,7 @@ function groupFacts(facts, key, { minSize = 2, minBodyLoc = 3 } = {}) {
   return groups;
 }
 
-function groupSignatureFacts(facts, { minSize = 2 } = {}) {
+function groupSignatureFacts(facts, { minSize = FUNCTION_CLONE_NEAR_THRESHOLDS.minGroupSize } = {}) {
   const byHash = new Map();
   for (const fact of facts) {
     if (!fact?.normalizedSignatureHash) continue;
@@ -579,7 +588,10 @@ function buildNearFunctionCandidates(facts, exactBodyGroups, structureGroups) {
         if (pairKeys.has(pairKey)) continue;
         pairKeys.add(pairKey);
         if (a.async !== b.async) continue;
-        if (Math.abs((a.paramCount ?? 0) - (b.paramCount ?? 0)) > 1) continue;
+        if (
+          Math.abs((a.paramCount ?? 0) - (b.paramCount ?? 0)) >
+          FUNCTION_CLONE_NEAR_THRESHOLDS.maxParamCountDelta
+        ) continue;
 
         const aCalls = significantCallTokens(a);
         const bCalls = significantCallTokens(b);
@@ -593,16 +605,22 @@ function buildNearFunctionCandidates(facts, exactBodyGroups, structureGroups) {
         const nameTokenJaccard = jaccard(aNameTokens, bNameTokens);
         const bodyLocSimilarity = rangeSimilarity(a.bodyLoc, b.bodyLoc);
         const statementCountSimilarity = rangeSimilarity(a.statementCount, b.statementCount);
-        if (bodyLocSimilarity < 0.34 || statementCountSimilarity < 0.34) continue;
-        if (callTokenJaccard < 0.5 && nameTokenJaccard < 0.34) continue;
+        if (
+          bodyLocSimilarity < FUNCTION_CLONE_NEAR_THRESHOLDS.minBodyLocSimilarity ||
+          statementCountSimilarity < FUNCTION_CLONE_NEAR_THRESHOLDS.minStatementCountSimilarity
+        ) continue;
+        if (
+          callTokenJaccard < FUNCTION_CLONE_NEAR_THRESHOLDS.minCallTokenJaccard &&
+          nameTokenJaccard < FUNCTION_CLONE_NEAR_THRESHOLDS.minNameTokenJaccardFallback
+        ) continue;
 
         const score = roundScore(
-          (callTokenJaccard * 0.45) +
-          (nameTokenJaccard * 0.25) +
-          (bodyLocSimilarity * 0.15) +
-          (statementCountSimilarity * 0.15)
+          (callTokenJaccard * FUNCTION_CLONE_NEAR_THRESHOLDS.weights.callTokenJaccard) +
+          (nameTokenJaccard * FUNCTION_CLONE_NEAR_THRESHOLDS.weights.nameTokenJaccard) +
+          (bodyLocSimilarity * FUNCTION_CLONE_NEAR_THRESHOLDS.weights.bodyLocSimilarity) +
+          (statementCountSimilarity * FUNCTION_CLONE_NEAR_THRESHOLDS.weights.statementCountSimilarity)
         );
-        if (score < 0.62) continue;
+        if (score < FUNCTION_CLONE_NEAR_THRESHOLDS.minNearScore) continue;
 
         const sorted = [a, b].sort((left, right) => left.identity.localeCompare(right.identity));
         const reasons = [
@@ -645,7 +663,7 @@ function buildNearFunctionCandidates(facts, exactBodyGroups, structureGroups) {
     (b.generatedOnly ? 0 : 1) - (a.generatedOnly ? 0 : 1) ||
     b.score - a.score ||
     a.identities.join('|').localeCompare(b.identities.join('|')));
-  return candidates.slice(0, 50);
+  return candidates.slice(0, FUNCTION_CLONE_NEAR_THRESHOLDS.maxNearCandidates);
 }
 
 export function assembleFunctionCloneArtifact({
@@ -709,6 +727,7 @@ export function assembleFunctionCloneArtifact({
       diagnosticCount: sortedDiagnostics.length,
       filesWithParseErrors,
       filesWithReadErrors,
+      thresholdPolicies: thresholdPolicySummary(['function-clone-near-policy']),
       ...(incremental ? { incremental } : {}),
       supports: {
         exportedTopLevelFunctions: true,

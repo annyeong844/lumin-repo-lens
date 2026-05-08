@@ -194,7 +194,7 @@ for (const [rel, evidence] of scriptEntrypoints) {
 }
 
 const htmlEntrypoints = indexPublicSurfaceEntries(
-  collectHtmlModuleEntrypointFiles({ root: ROOT, repoMode }));
+  collectHtmlModuleEntrypointFiles({ root: ROOT, repoMode, includeTests, exclude }));
 for (const [rel, evidence] of htmlEntrypoints) {
   for (const item of evidence) addHtmlEntrypointVariants(rel, item);
 }

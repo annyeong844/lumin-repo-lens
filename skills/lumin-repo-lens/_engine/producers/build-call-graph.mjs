@@ -33,6 +33,24 @@ function collectFiles() {
   return collectFilesShared(ROOT, { includeTests: cli.includeTests, exclude: cli.exclude });
 }
 
+function parseErrorRecord(filePath, error) {
+  return {
+    file: relPath(ROOT, filePath),
+    message: String(error?.message ?? error ?? 'unknown parse error').split('\n')[0],
+  };
+}
+
+function callGraphWarnings(parseErrorDetails) {
+  if (parseErrorDetails.length === 0) return [];
+  return [{
+    kind: 'parse-errors',
+    code: 'call-graph-parse-errors',
+    count: parseErrorDetails.length,
+    message: `${parseErrorDetails.length} file(s) failed to parse; call graph is partial`,
+    files: parseErrorDetails,
+  }];
+}
+
 function walk(node, visitor, parent = null) {
   if (!node || typeof node !== 'object') return;
   if (node.type) visitor(node, parent);
@@ -285,11 +303,13 @@ console.log(`[scan] ${files.length} files`);
 
 const fileInfo = new Map();
 let parseErrors = 0;
+const parseErrorDetails = [];
 for (const f of files) {
   try {
     fileInfo.set(f, analyzeFile(f));
-  } catch (e) {
+  } catch (error) {
     parseErrors++;
+    parseErrorDetails.push(parseErrorRecord(f, error));
   }
 }
 console.log(`[parse errors] ${parseErrors}`);
@@ -511,6 +531,10 @@ writeFileSync(outPath, JSON.stringify({
     generated: new Date().toISOString(),
     root: ROOT,
     tool: 'build-call-graph.mjs',
+    complete: parseErrors === 0,
+    parseErrors,
+    filesWithParseErrors: parseErrorDetails,
+    warnings: callGraphWarnings(parseErrorDetails),
     supports: {
       callFanInByDefinitionId: true,
       callFanInByIdentity: true,

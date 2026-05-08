@@ -13,7 +13,7 @@ import {
   mapOutputPatternToSourceCandidates,
   mapOutputToSource,
 } from './alias-map.mjs';
-import { collectFiles } from './collect-files.mjs';
+import { collectFiles, scanScopeStatusForPath } from './collect-files.mjs';
 import { fileExists } from './paths.mjs';
 import { parseOxcOrThrow } from './parse-oxc.mjs';
 
@@ -351,7 +351,16 @@ function collectStringLiteralsFromFile(filePath) {
   return out;
 }
 
-function collectHtmlFiles(pkgDir, repoMode, root) {
+function inScanScope(root, full, { includeTests = true, exclude = [], languages, directory = false } = {}) {
+  return scanScopeStatusForPath(root, full, {
+    includeTests,
+    exclude,
+    languages,
+    directory,
+  }).included;
+}
+
+function collectHtmlFiles(pkgDir, repoMode, root, { includeTests = true, exclude = [] } = {}) {
   const out = [];
   const workspaceRoots = new Set((repoMode.workspaceDirs || [])
     .map((wd) => path.resolve(wd)));
@@ -363,6 +372,7 @@ function collectHtmlFiles(pkgDir, repoMode, root) {
   ]);
 
   function walk(dir) {
+    if (!inScanScope(root, dir, { includeTests, exclude, directory: true })) return;
     let entries;
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
@@ -374,6 +384,11 @@ function collectHtmlFiles(pkgDir, repoMode, root) {
         if (pkgResolved === rootResolved && workspaceRoots.has(resolved)) continue;
         walk(full);
       } else if (entry.isFile() && /\.html?$/i.test(entry.name)) {
+        if (!inScanScope(root, full, {
+          includeTests,
+          exclude,
+          languages: ['html', 'htm'],
+        })) continue;
         out.push(full);
       }
     }
@@ -443,18 +458,18 @@ export function collectPackagePublicSurfaceFiles({ root, repoMode }) {
   return entries;
 }
 
-export function collectHtmlModuleEntrypointFiles({ root, repoMode }) {
-  return collectHtmlModuleEntrypoints({ root, repoMode }).entries;
+export function collectHtmlModuleEntrypointFiles({ root, repoMode, includeTests = true, exclude = [] }) {
+  return collectHtmlModuleEntrypoints({ root, repoMode, includeTests, exclude }).entries;
 }
 
-export function collectHtmlModuleEntrypoints({ root, repoMode }) {
+export function collectHtmlModuleEntrypoints({ root, repoMode, includeTests = true, exclude = [] }) {
   const entries = [];
   const unresolved = [];
 
   for (const pkgDir of listPackageDirs(root, repoMode)) {
     const pkg = readJsonFile(path.join(pkgDir, 'package.json'));
     if (!pkg || !pkg.name) continue;
-    for (const htmlFile of collectHtmlFiles(pkgDir, repoMode, root)) {
+    for (const htmlFile of collectHtmlFiles(pkgDir, repoMode, root, { includeTests, exclude })) {
       let html;
       try { html = readFileSync(htmlFile, 'utf8'); } catch { continue; }
       for (const src of extractHtmlModuleScriptTargets(html)) {

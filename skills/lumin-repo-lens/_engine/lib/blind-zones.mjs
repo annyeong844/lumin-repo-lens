@@ -27,6 +27,7 @@
 // claims to the TS/JS graph only."
 
 import { JS_FAMILY_LANGS } from './lang.mjs';
+import { getThresholdPolicy, thresholdPolicySummary } from './threshold-policies.mjs';
 
 // Extractors currently registered in the pipeline. If triage reports
 // files in a language NOT in this set, we raise a scan-gap blind zone.
@@ -37,11 +38,21 @@ const SUPPORTED_LANGS = new Set([
   'go', // Go: tree-sitter-based, limited
 ]);
 
-const RESOLVER_RATIO_THRESHOLD = 0.15;
-const RESOLVER_ABSOLUTE_UNRESOLVED_THRESHOLD = 1000;
-const RESOLVER_PREFIX_CONCENTRATION_MIN_UNRESOLVED = 100;
-const RESOLVER_PREFIX_CONCENTRATION_MIN_COUNT = 100;
-const RESOLVER_PREFIX_CONCENTRATION_SHARE = 0.8;
+const RESOLVER_BLIND_ZONE_POLICY = getThresholdPolicy('resolver-blind-zone-policy');
+const RESOLVER_BLIND_ZONE_THRESHOLDS = RESOLVER_BLIND_ZONE_POLICY.thresholds;
+const RESOLVER_BLIND_ZONE_POLICY_SUMMARY =
+  thresholdPolicySummary(['resolver-blind-zone-policy'])[0];
+const RESOLVER_RATIO_THRESHOLD = RESOLVER_BLIND_ZONE_THRESHOLDS.unresolvedRatio;
+const RESOLVER_ABSOLUTE_UNRESOLVED_THRESHOLD =
+  RESOLVER_BLIND_ZONE_THRESHOLDS.absoluteUnresolvedCount;
+const RESOLVER_PREFIX_CONCENTRATION_MIN_UNRESOLVED =
+  RESOLVER_BLIND_ZONE_THRESHOLDS.prefixConcentrationMinUnresolved;
+const RESOLVER_PREFIX_CONCENTRATION_MIN_COUNT =
+  RESOLVER_BLIND_ZONE_THRESHOLDS.prefixConcentrationMinCount;
+const RESOLVER_PREFIX_CONCENTRATION_SHARE =
+  RESOLVER_BLIND_ZONE_THRESHOLDS.prefixConcentrationShare;
+const SHAPE_UNKNOWN_FILE_SHARE =
+  RESOLVER_BLIND_ZONE_THRESHOLDS.shapeUnknownFileShare;
 
 /**
  * @typedef {Object} BlindZone
@@ -121,7 +132,7 @@ function detectShapeZones(triage, support) {
     (shape.goFiles   ?? 0);
   // Note: testFiles is a SUBSET of the others, so it's already counted.
   const unknown = shape.totalFiles - known;
-  if (shape.totalFiles > 0 && unknown > 0 && unknown / shape.totalFiles >= 0.1) {
+  if (shape.totalFiles > 0 && unknown > 0 && unknown / shape.totalFiles >= SHAPE_UNKNOWN_FILE_SHARE) {
     zones.push({
       area: 'unclassified-files',
       severity: 'scan-gap',
@@ -286,6 +297,7 @@ function detectResolverZone(symbols, resolverDiagnostics = null) {
             'of internal imports. See FP-36 in references/false-positive-index.md.',
     details: {
       trigger,
+      thresholdPolicy: RESOLVER_BLIND_ZONE_POLICY_SUMMARY,
       unresolvedInternalRatio: r,
       unresolvedInternal,
       sourceArtifact: hasDiagnosticSummary ? 'resolver-diagnostics.json' : 'symbols.json',

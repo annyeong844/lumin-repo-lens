@@ -143,6 +143,49 @@ function normalizeDependencyEntry(entry, index) {
   };
 }
 
+function isUnsafeRepoRelativePath(value) {
+  if (typeof value !== 'string' || value.length === 0) return true;
+  if (value.includes('\\')) return true;
+  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) return true;
+  const parts = value.split('/');
+  return parts.some((part) => part === '..' || part.length === 0);
+}
+
+function normalizeRefactorSourceEntry(entry, index) {
+  const errorPath = `refactorSources[${index}]`;
+  if (!isPlainObject(entry)) {
+    return fail(`${errorPath} must be an object`, errorPath);
+  }
+  if (isUnsafeRepoRelativePath(entry.file)) {
+    return fail(`${errorPath}.file must be a repository-relative path`, `${errorPath}.file`);
+  }
+
+  const out = { file: entry.file };
+
+  if (entry.lines !== undefined) {
+    if (!Array.isArray(entry.lines) || entry.lines.length === 0) {
+      return fail(`${errorPath}.lines must be a non-empty array of positive integers when present`,
+                  `${errorPath}.lines`);
+    }
+    const lines = [];
+    for (let i = 0; i < entry.lines.length; i++) {
+      const line = entry.lines[i];
+      if (!Number.isInteger(line) || line <= 0) {
+        return fail(`${errorPath}.lines[${i}] must be a positive integer`,
+                    `${errorPath}.lines[${i}]`);
+      }
+      lines.push(line);
+    }
+    out.lines = lines;
+  }
+
+  const whyErr = optionalStringField(entry, 'why', errorPath);
+  if (whyErr) return whyErr;
+  if (entry.why !== undefined) out.why = entry.why;
+
+  return { value: out };
+}
+
 // ── Per-entry validators ─────────────────────────────────────
 
 function validateShape(shape, index) {
@@ -325,6 +368,20 @@ export function validateIntent(raw) {
     if (err) return err;
   }
 
+  // 7b. refactorSources — optional inline extraction source hints.
+  let refactorSources = null;
+  if (normalizedInput.refactorSources !== undefined) {
+    if (!Array.isArray(normalizedInput.refactorSources)) {
+      return fail('refactorSources must be an array when present', 'refactorSources');
+    }
+    refactorSources = [];
+    for (let i = 0; i < normalizedInput.refactorSources.length; i++) {
+      const normalized = normalizeRefactorSourceEntry(normalizedInput.refactorSources[i], i);
+      if (normalized.ok === false) return normalized;
+      refactorSources.push(normalized.value);
+    }
+  }
+
   // 8. Normalize — extra top-level keys (like taskId) are preserved
   //    so callers can thread task identifiers through without a schema
   //    revision. The 5 known keys are always present and typed.
@@ -342,6 +399,7 @@ export function validateIntent(raw) {
     files: [...normalizedInput.files],
     dependencies,
     ...(dependencyDeclarations.length > 0 ? { dependencyDeclarations } : {}),
+    ...(refactorSources !== null ? { refactorSources } : {}),
     plannedTypeEscapes: normalizedInput.plannedTypeEscapes.map((e) => {
       // Build the normalized entry from PLANNED_ESCAPE_KEYS so adding a
       // canonical §3.9 field to the constant propagates here without a
