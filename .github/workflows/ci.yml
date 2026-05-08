@@ -28,3 +28,10 @@ jobs:
         run: npm run smoke
       - name: Verify packaged CLI help
         run: node skills/lumin-repo-lens/scripts/audit-repo.mjs --help
+      - name: Smoke packaged hook runners
+        run: |
+          printf '{ bad json' | node hooks/pre-tool-use.mjs
+          node -e "process.stdout.write(JSON.stringify({cwd: process.cwd(), session_id: 'sid_public_smoke', tool_name: 'Read', tool_input: {}}))" | node hooks/pre-tool-use.mjs
+          node -e "process.stdout.write(JSON.stringify({cwd: process.cwd(), session_id: 'sid_public_smoke', tool_calls: []}))" | node hooks/post-tool-batch.mjs
+          node -e "process.stdout.write(JSON.stringify({cwd: process.cwd(), session_id: 'sid_public_smoke', last_assistant_message: ''}))" | node hooks/stop.mjs
+          node -e "process.stdout.write(JSON.stringify({cwd: process.cwd(), session_id: 'sid_public_smoke'}))" | node hooks/user-prompt-submit.mjs
