@@ -13,6 +13,11 @@ import {
   GENERATED_ARTIFACT_MISSING_REASON,
   GENERATED_ARTIFACT_POLICY_VERSION,
 } from './generated-artifact-evidence.mjs';
+import {
+  buildBlockedCandidateHintFamilyCounts,
+  buildBlockedCandidateHintReasonCounts,
+  sortCounterObject,
+} from './resolver-blocked-hints.mjs';
 
 const LIVING_AUDIT_DOC_CANDIDATES = [
   'docs/current/audit/lumin-structural-audit.md',
@@ -73,11 +78,6 @@ function detectLivingAuditDocs(root) {
       ? 'read-and-update-before-final-answer'
       : 'create-only-on-explicit-tracking-request',
   };
-}
-
-function sortCounterObject(counter) {
-  return Object.fromEntries([...counter.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0])));
 }
 
 function countObjectFromSummary(summary) {
@@ -183,6 +183,12 @@ function buildResolverDiagnosticsSummary(symbols, {
     blockedCandidateHintCount: resolverDiagnostics?.summary?.blockedCandidateHintCount ?? null,
     blockedCandidateHintSampleLimit: resolverDiagnostics ? RESOLVER_BLOCKED_CANDIDATE_HINT_SAMPLE_LIMIT : null,
     blockedCandidateHints,
+    blockedCandidateHintReasonCounts: buildBlockedCandidateHintReasonCounts(
+      resolverDiagnostics?.blockedCandidateHints
+    ),
+    blockedCandidateHintFamilyCounts: buildBlockedCandidateHintFamilyCounts(
+      resolverDiagnostics?.blockedCandidateHints
+    ),
     candidateTargetCount: resolverDiagnostics?.summary?.candidateTargetCount ?? null,
     topFamilies: resolverDiagnostics?.summary?.topFamilies ?? [],
     topAffectedPackageScopes:

@@ -8,6 +8,10 @@
 // codebase-reading assignments; the subagent should inspect files directly.
 
 import { formatAnyContaminationReviewCheck } from './any-contamination-summary.mjs';
+import {
+  formatBlockedCandidateHintDistribution,
+  formatBlockedCandidateHints,
+} from './resolver-blocked-hints.mjs';
 
 function n(value, fallback = 0) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -19,21 +23,6 @@ function arr(value) {
 
 function yesNo(value) {
   return value ? 'yes' : 'no';
-}
-
-function formatBlockedCandidateHints(hints, limit = 3) {
-  if (!Array.isArray(hints) || hints.length === 0) return null;
-  const parts = hints
-    .slice(0, limit)
-    .map((hint) => {
-      const target = hint?.candidatePath ?? hint?.affectedPackageScope;
-      const specifier = hint?.specifier;
-      const reason = hint?.reason;
-      if (!target || !specifier || !reason) return null;
-      return `${target} via ${specifier} (${reason})`;
-    })
-    .filter(Boolean);
-  return parts.length ? parts.join('; ') : null;
 }
 
 function scanRange(manifest) {
@@ -140,12 +129,19 @@ function deadSurfaceLane({ fixPlan, deadClassify, manifest }) {
   const blockedCandidateHints = formatBlockedCandidateHints(
     manifest?.resolverDiagnostics?.blockedCandidateHints
   );
+  const blockedCandidateHintDistribution = formatBlockedCandidateHintDistribution(
+    manifest?.resolverDiagnostics
+  );
   const resolverBlockedHint = blockedCandidateHintCount > 0
     ? `Resolver blocked absence hints: ${blockedCandidateHintCount}${blockedCandidateHintSampleLimit > 0 ? `; manifest sample limit ${blockedCandidateHintSampleLimit}` : ''}${blockedCandidateHints ? `; examples: ${blockedCandidateHints}` : ''}. Read manifest.json.resolverDiagnostics.blockedCandidateHints and resolver-diagnostics.json.blockedCandidateHints before treating affected exports as absent.`
+    : null;
+  const resolverBlockedDistribution = blockedCandidateHintDistribution
+    ? `Resolver blocked absence distribution: ${blockedCandidateHintDistribution}. Read manifest.json.resolverDiagnostics.blockedCandidateHintReasonCounts and manifest.json.resolverDiagnostics.blockedCandidateHintFamilyCounts before opening the full hint list.`
     : null;
   const checks = [
     `Tier summary: SAFE_FIX ${safe}, REVIEW_FIX ${review}, DEGRADED ${degraded}, MUTED ${muted}. Do not present REVIEW_FIX as removable without screening.`,
     `Muted/excluded families observed: ${excludedText}. Translate them into plain language for the user.`,
+    ...(resolverBlockedDistribution ? [resolverBlockedDistribution] : []),
     ...(resolverBlockedHint ? [resolverBlockedHint] : []),
     'For each visible cleanup candidate, check whether it is exported through package/API/declaration/test-only surfaces before recommending a change.',
   ];

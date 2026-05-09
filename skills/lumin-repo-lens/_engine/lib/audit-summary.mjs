@@ -6,6 +6,10 @@
 
 import { formatAnyContaminationCue } from './any-contamination-summary.mjs';
 import { formatUnresolvedReasonCounts } from './blind-zones.mjs';
+import {
+  formatBlockedCandidateHintDistribution,
+  formatBlockedCandidateHints,
+} from './resolver-blocked-hints.mjs';
 
 function n(value, fallback = 0) {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -52,21 +56,6 @@ function formatTopAffectedPackageScopes(scopes, limit = 3) {
       const count = scope?.count;
       if (!name || typeof count !== 'number') return null;
       return `${name} ${count}`;
-    })
-    .filter(Boolean);
-  return parts.length ? parts.join('; ') : null;
-}
-
-function formatBlockedCandidateHints(hints, limit = 3) {
-  if (!Array.isArray(hints) || hints.length === 0) return null;
-  const parts = hints
-    .slice(0, limit)
-    .map((hint) => {
-      const target = hint?.candidatePath ?? hint?.affectedPackageScope;
-      const specifier = hint?.specifier;
-      const reason = hint?.reason;
-      if (!target || !specifier || !reason) return null;
-      return `${target} via ${specifier} (${reason})`;
     })
     .filter(Boolean);
   return parts.length ? parts.join('; ') : null;
@@ -319,6 +308,14 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
       const sampleLimit = blockedCandidateHintSampleLimit > 0
         ? `; manifest sample limit ${blockedCandidateHintSampleLimit}`
         : '';
+      const blockerDistribution = formatBlockedCandidateHintDistribution(
+        manifest?.resolverDiagnostics
+      );
+      if (blockerDistribution) {
+        lines.push(
+          `- Resolver blocked absence distribution: ${blockerDistribution}. Read \`manifest.json.resolverDiagnostics.blockedCandidateHintReasonCounts\` and \`manifest.json.resolverDiagnostics.blockedCandidateHintFamilyCounts\` before opening the full hint list.`
+        );
+      }
       lines.push(
         `- Resolver blocked absence hints: ${blockedCandidateHintCount}${sampleLimit}${blockedCandidateHints ? `; examples: ${blockedCandidateHints}` : ''}. Read \`manifest.json.resolverDiagnostics.blockedCandidateHints\` and \`resolver-diagnostics.json.blockedCandidateHints\` before treating affected exports as absent.`
       );
