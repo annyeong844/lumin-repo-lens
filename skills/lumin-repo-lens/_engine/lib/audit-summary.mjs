@@ -70,6 +70,31 @@ function formatCounterObject(counter) {
   return parts.length ? parts.join(', ') : null;
 }
 
+function formatFrameworkResourceSurfaceCounts(summary) {
+  const total = n(summary?.totalFilesWithSurfaces, 0);
+  if (total <= 0) return null;
+  const laneText = formatCounterObject(summary?.byLane);
+  const confidenceText = formatCounterObject(summary?.byConfidence);
+  const examples = Array.isArray(summary?.topExamples)
+    ? summary.topExamples.slice(0, 2)
+        .map((example) => {
+          if (!example?.file) return null;
+          const reason = Array.isArray(example.reasons) && example.reasons.length > 0
+            ? ` (${example.reasons.join(', ')})`
+            : '';
+          return `${example.file}${reason}`;
+        })
+        .filter(Boolean)
+        .join('; ')
+    : '';
+  return [
+    `${total} files`,
+    laneText ? `lanes ${laneText}` : null,
+    confidenceText ? `confidence ${confidenceText}` : null,
+    examples ? `examples: ${examples}` : null,
+  ].filter(Boolean).join('; ');
+}
+
 function formatTopSpecifiers(specifiers, limit = 2) {
   if (!Array.isArray(specifiers) || specifiers.length === 0) return null;
   const parts = specifiers
@@ -273,6 +298,15 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     );
     lines.push(
       `- Generated consumer blind zones: ${generatedConsumerZoneCount}${topScopes ? `; top scopes: ${topScopes}` : ''}. Read \`manifest.json.generatedArtifacts.topGeneratedConsumerBlindZones\` and \`symbols.json.generatedConsumerBlindZones\` before treating generated code as absent.`
+    );
+  }
+
+  const frameworkResourceSurfaces = formatFrameworkResourceSurfaceCounts(
+    manifest?.frameworkResourceSurfaces
+  );
+  if (frameworkResourceSurfaces) {
+    lines.push(
+      `- Framework/resource surfaces: ${frameworkResourceSurfaces}. Read \`manifest.json.frameworkResourceSurfaces\` and \`framework-resource-surfaces.json\` before treating import absence as deadness.`
     );
   }
 

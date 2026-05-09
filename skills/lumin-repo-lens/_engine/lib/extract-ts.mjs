@@ -138,6 +138,14 @@ function isNonEscapingTrackedIdentifierRead(parent, key) {
   return false;
 }
 
+function isMutatingMemberAccess(parent, key) {
+  if (!parent) return false;
+  if (parent.type === 'AssignmentExpression' && key === 'left') return true;
+  if (parent.type === 'UpdateExpression' && key === 'argument') return true;
+  if (parent.type === 'UnaryExpression' && parent.operator === 'delete' && key === 'argument') return true;
+  return false;
+}
+
 function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
   const defs = [];
   const uses = [];
@@ -778,6 +786,10 @@ function handleTrackedMemberExpression(node, scope, parent, key, getNodeLine) {
   if (record?.kind !== 'namespace' && record?.kind !== 'dynamic' && record?.kind !== 'cjs') return false;
 
   if (record.kind === 'cjs') {
+    if (isMutatingMemberAccess(parent, key)) {
+      record.degraded = true;
+      return true;
+    }
     const name = staticMemberPropertyName(node);
     if (name) record.members.push({ name, line: getNodeLine(node) });
     else record.degraded = true;

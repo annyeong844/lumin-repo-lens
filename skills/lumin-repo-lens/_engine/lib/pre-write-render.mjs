@@ -335,6 +335,31 @@ function renderCapabilityNotes(lookups) {
   ];
 }
 
+function renderEvidenceAvailability(advisory) {
+  const availability = advisory.evidenceAvailability;
+  if (!availability || availability.status === 'available' || availability.status === 'not-needed') {
+    return [];
+  }
+
+  const missing = (availability.artifacts ?? [])
+    .filter((entry) => entry.status !== 'available');
+  if (missing.length === 0) return [];
+
+  const out = [];
+  out.push('### Evidence availability');
+  out.push('');
+  out.push(`- ${availability.status.toUpperCase()} — pre-write evidence is not fully grounded from \`${availability.output ?? 'unknown'}\`.`);
+  out.push('  Missing artifacts mean `NOT_OBSERVED` is not grounded absence.');
+  out.push('  Run a baseline audit with the same `--output`, or rerun pre-write without `--no-fresh-audit` so cold-cache can create missing artifacts.');
+  for (const entry of missing) {
+    const requiredFor = (entry.requiredFor ?? []).join(', ') || 'unknown';
+    out.push(`  - \`${entry.artifact}\` missing for ${requiredFor}.`);
+    if (entry.reason) out.push(`    reason: ${entry.reason}`);
+  }
+  out.push('');
+  return out;
+}
+
 function evidenceSummary(evidence) {
   const items = Array.isArray(evidence) ? evidence : [];
   if (items.length === 0) return 'evidence recorded';
@@ -516,6 +541,7 @@ export function renderMarkdown(advisory) {
   }
 
   const lookups = advisory.lookups ?? [];
+  out.push(...renderEvidenceAvailability(advisory));
   out.push(...renderCapabilityNotes(lookups));
   out.push(...renderCueSections(advisory));
   const coveredCueIdentities = cueCoveredIdentities(advisory);
@@ -620,6 +646,7 @@ export function renderJson(advisory) {
     scanRange: advisory.scanRange,
     intent: advisory.intent,
     intentWarnings: advisory.intentWarnings ?? [],
+    evidenceAvailability: advisory.evidenceAvailability ?? null,
     lookups: advisory.lookups ?? [],
     cueCards: advisory.cueCards ?? [],
     suppressedCues: advisory.suppressedCues ?? [],

@@ -30,6 +30,7 @@ const ARTIFACT_CANDIDATES = [
   'triage.json', 'topology.json', 'discipline.json',
   'call-graph.json', 'barrels.json', 'shape-index.json',
   'function-clones.json',
+  'framework-resource-surfaces.json',
   'resolver-capabilities.json', 'resolver-diagnostics.json',
   'symbols.json', 'entry-surface.json', 'module-reachability.json',
   'dead-classify.json', 'runtime-evidence.json',
@@ -362,6 +363,34 @@ function buildGeneratedArtifactsSummary(symbols, options = {}) {
   };
 }
 
+function buildFrameworkResourceSurfacesSummary(artifact) {
+  if (!artifact || typeof artifact !== 'object') return null;
+  const files = Array.isArray(artifact.files) ? artifact.files : [];
+  const summary = artifact.summary ?? {};
+  const topExamples = Array.isArray(summary.topExamples)
+    ? summary.topExamples.slice(0, 10)
+    : files.slice(0, 10).map((entry) => ({
+        file: entry.file ?? null,
+        lanes: (entry.surfaceLanes ?? []).map((lane) => lane.lane).filter(Boolean),
+        reasons: (entry.surfaceLanes ?? []).map((lane) => lane.reason).filter(Boolean),
+      }));
+  return {
+    artifact: 'framework-resource-surfaces.json',
+    schemaVersion: artifact.schemaVersion ?? null,
+    policyVersion: artifact.policyVersion ?? null,
+    totalFilesWithSurfaces: summary.totalFilesWithSurfaces ?? files.length,
+    totalSurfaceLanes: summary.totalSurfaceLanes ?? files.reduce(
+      (count, entry) => count + (Array.isArray(entry.surfaceLanes) ? entry.surfaceLanes.length : 0),
+      0,
+    ),
+    byLane: summary.byLane ?? {},
+    byConfidence: summary.byConfidence ?? {},
+    byReason: summary.byReason ?? {},
+    byFramework: summary.byFramework ?? {},
+    topExamples,
+  };
+}
+
 export function collectProducedArtifacts(outDir) {
   const produced = new Set();
   for (const name of ARTIFACT_CANDIDATES) {
@@ -395,6 +424,7 @@ export function buildManifestEvidence({
   const symbols = loadArtifact(outDir, 'symbols.json');
   const resolverCapabilities = loadArtifact(outDir, 'resolver-capabilities.json');
   const resolverDiagnostics = loadArtifact(outDir, 'resolver-diagnostics.json');
+  const frameworkResourceSurfaces = loadArtifact(outDir, 'framework-resource-surfaces.json');
   const entrySurface = loadArtifact(outDir, 'entry-surface.json');
   const deadClassify = loadArtifact(outDir, 'dead-classify.json');
 
@@ -432,6 +462,7 @@ export function buildManifestEvidence({
       excludes,
       generatedArtifactsMode,
     }),
+    frameworkResourceSurfaces: buildFrameworkResourceSurfacesSummary(frameworkResourceSurfaces),
     livingAudit: detectLivingAuditDocs(root),
   };
 }
@@ -443,5 +474,6 @@ export function refreshManifestEvidence(manifest, options) {
   manifest.resolverDiagnostics = evidence.resolverDiagnostics;
   manifest.blindZones = evidence.blindZones;
   manifest.generatedArtifacts = evidence.generatedArtifacts;
+  manifest.frameworkResourceSurfaces = evidence.frameworkResourceSurfaces;
   manifest.livingAudit = evidence.livingAudit;
 }

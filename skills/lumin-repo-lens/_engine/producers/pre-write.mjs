@@ -31,6 +31,7 @@ import { classifyPreWriteCues } from '../lib/pre-write-cue-tiers.mjs';
 import { parseCanonicalFile } from '../lib/pre-write-canonical-parser.mjs';
 import { computeDrift } from '../lib/pre-write-drift.mjs';
 import { runColdCachePreflight } from '../lib/pre-write-cold-cache.mjs';
+import { functionSignatureFromTypeLiteral } from '../lib/function-signature-hash.mjs';
 import { collectFiles } from '../lib/collect-files.mjs';
 import { repoRelativeFileList } from '../lib/post-write-file-delta.mjs';
 import {
@@ -89,6 +90,136 @@ const OUTPUT = args.output;
 const ADVISORY_OUT = args.raw?.['advisory-out']
   ? path.resolve(args.raw['advisory-out'])
   : OUTPUT;
+
+function hasEntries(value) {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function hasFunctionSignatureShapeIntent(intent) {
+  return (intent?.shapes ?? []).some((shape) =>
+    typeof shape?.typeLiteral === 'string' &&
+    functionSignatureFromTypeLiteral(shape.typeLiteral).ok === true);
+}
+
+function failureReasonForArtifact(failures, artifact) {
+  const stem = artifact.replace(/\.json$/, '').replaceAll('-', '');
+  const hit = failures.find((failure) => {
+    const kind = String(failure?.kind ?? '').replaceAll('-', '');
+    return kind.includes(stem);
+  });
+  return hit?.reason ?? hit?.message ?? null;
+}
+
+function evidenceArtifact({ artifact, requiredFor, loaded, output, freshAudit, failures }) {
+  const status = loaded ? 'available' : 'missing';
+  return {
+    artifact,
+    status,
+    requiredFor,
+    canGroundEvidence: status === 'available',
+    ...(status === 'missing'
+      ? {
+          reason: failureReasonForArtifact(failures, artifact) ??
+            `${artifact} missing in ${output}${freshAudit ? '' : '; cold-cache disabled by --no-fresh-audit'}`,
+        }
+      : {}),
+  };
+}
+
+function buildEvidenceAvailability({
+  intent,
+  output,
+  freshAudit,
+  failures,
+  symbols,
+  topology,
+  triage,
+  shapeIndex,
+  functionClones,
+  inlinePatterns,
+}) {
+  const artifacts = [];
+  const symbolUses = [
+    ...(hasEntries(intent.names) ? ['names'] : []),
+    ...(hasEntries(intent.files) ? ['files'] : []),
+    ...(hasEntries(intent.dependencies) ? ['dependencies'] : []),
+  ];
+  if (symbolUses.length > 0) {
+    artifacts.push(evidenceArtifact({
+      artifact: 'symbols.json',
+      requiredFor: symbolUses,
+      loaded: !!symbols,
+      output,
+      freshAudit,
+      failures,
+    }));
+  }
+  if (hasEntries(intent.files)) {
+    artifacts.push(evidenceArtifact({
+      artifact: 'topology.json',
+      requiredFor: ['files'],
+      loaded: !!topology,
+      output,
+      freshAudit,
+      failures,
+    }));
+    artifacts.push(evidenceArtifact({
+      artifact: 'triage.json',
+      requiredFor: ['files'],
+      loaded: !!triage,
+      output,
+      freshAudit,
+      failures,
+    }));
+  }
+  if (hasEntries(intent.shapes)) {
+    artifacts.push(evidenceArtifact({
+      artifact: 'shape-index.json',
+      requiredFor: ['shapes'],
+      loaded: !!shapeIndex,
+      output,
+      freshAudit,
+      failures,
+    }));
+  }
+  if (hasFunctionSignatureShapeIntent(intent)) {
+    artifacts.push(evidenceArtifact({
+      artifact: 'function-clones.json',
+      requiredFor: ['function-signature'],
+      loaded: !!functionClones,
+      output,
+      freshAudit,
+      failures,
+    }));
+  }
+  if (hasEntries(intent.refactorSources)) {
+    artifacts.push(evidenceArtifact({
+      artifact: 'inline-patterns.json',
+      requiredFor: ['refactorSources'],
+      loaded: !!inlinePatterns,
+      output,
+      freshAudit,
+      failures,
+    }));
+  }
+
+  const missing = artifacts.filter((entry) => entry.status !== 'available');
+  const available = artifacts.filter((entry) => entry.status === 'available');
+  const status = artifacts.length === 0
+    ? 'not-needed'
+    : missing.length === 0
+      ? 'available'
+      : available.length === 0
+        ? 'missing'
+        : 'partial';
+  return {
+    status,
+    freshAudit,
+    output,
+    artifacts,
+    guidance: 'Pre-write grounds cues only from artifacts in this output directory. Run a baseline audit with the same `--output`, or rerun pre-write without `--no-fresh-audit` so cold-cache can create missing artifacts.',
+  };
+}
 
 // ── Load intent ──────────────────────────────────────────────
 
@@ -173,6 +304,18 @@ const triage = loadIfExists(OUTPUT, 'triage.json', { tag: 'pre-write' });
 const shapeIndex = loadIfExists(OUTPUT, 'shape-index.json', { tag: 'pre-write' });
 const functionClones = loadIfExists(OUTPUT, 'function-clones.json', { tag: 'pre-write' });
 const inlinePatterns = loadIfExists(OUTPUT, 'inline-patterns.json', { tag: 'pre-write' });
+const evidenceAvailability = buildEvidenceAvailability({
+  intent,
+  output: OUTPUT,
+  freshAudit: !noFreshAudit,
+  failures,
+  symbols,
+  topology,
+  triage,
+  shapeIndex,
+  functionClones,
+  inlinePatterns,
+});
 
 // Read package.json for dependency lookup. Absence is a caller-level
 // problem — we still continue, emitting NEW_PACKAGE for every dep.
@@ -350,6 +493,7 @@ const advisory = {
   },
   intent,
   intentWarnings,
+  evidenceAvailability,
   lookups,
   cueCards: cueTierResult.cueCards,
   suppressedCues: cueTierResult.suppressedCues,

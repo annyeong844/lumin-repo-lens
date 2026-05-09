@@ -25,6 +25,22 @@ function yesNo(value) {
   return value ? 'yes' : 'no';
 }
 
+function formatCounterObject(counter) {
+  if (!counter || typeof counter !== 'object' || Array.isArray(counter)) return null;
+  const parts = Object.entries(counter)
+    .filter(([, count]) => typeof count === 'number')
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([label, count]) => `${label} ${count}`);
+  return parts.length ? parts.join(', ') : null;
+}
+
+function formatFrameworkResourceSurfaceCounts(summary) {
+  const total = n(summary?.totalFilesWithSurfaces, 0);
+  if (total <= 0) return null;
+  const laneText = formatCounterObject(summary?.byLane);
+  return `Framework/resource surfaces: ${total} files${laneText ? `; lanes ${laneText}` : ''}. Read manifest.json.frameworkResourceSurfaces and framework-resource-surfaces.json before treating import absence as deadness.`;
+}
+
 function scanRange(manifest) {
   const sr = manifest?.scanRange ?? {};
   const langs = arr(sr.languages).length > 0 ? sr.languages.join(', ') : 'unknown';
@@ -138,11 +154,15 @@ function deadSurfaceLane({ fixPlan, deadClassify, manifest }) {
   const resolverBlockedDistribution = blockedCandidateHintDistribution
     ? `Resolver blocked absence distribution: ${blockedCandidateHintDistribution}. Read manifest.json.resolverDiagnostics.blockedCandidateHintReasonCounts and manifest.json.resolverDiagnostics.blockedCandidateHintFamilyCounts before opening the full hint list.`
     : null;
+  const frameworkResourceSurfaceCheck = formatFrameworkResourceSurfaceCounts(
+    manifest?.frameworkResourceSurfaces
+  );
   const checks = [
     `Tier summary: SAFE_FIX ${safe}, REVIEW_FIX ${review}, DEGRADED ${degraded}, MUTED ${muted}. Do not present REVIEW_FIX as removable without screening.`,
     `Muted/excluded families observed: ${excludedText}. Translate them into plain language for the user.`,
     ...(resolverBlockedDistribution ? [resolverBlockedDistribution] : []),
     ...(resolverBlockedHint ? [resolverBlockedHint] : []),
+    ...(frameworkResourceSurfaceCheck ? [frameworkResourceSurfaceCheck] : []),
     'For each visible cleanup candidate, check whether it is exported through package/API/declaration/test-only surfaces before recommending a change.',
   ];
   return lane('Lane 3 — Dead Export And Public Surface Review', renderLanePrompt({

@@ -435,6 +435,9 @@ if (!RUN_BASE_PIPELINE) {
   // ─── Step 1: triage (always) ──────────────────────────────
   runStep('triage-repo.mjs', { required: true });
 
+  // ─── Step 1b: framework/resource surface inventory ─────────
+  runStep('build-framework-resource-surfaces.mjs', { required: false });
+
   // ─── Step 2-3: measurement (quick+) ──────────────────────
   runStep('measure-topology.mjs', { required: false });
   runStep('measure-discipline.mjs', { required: false });
@@ -612,9 +615,11 @@ if (values['pre-write'] && values['post-write']) {
       const latestAdvisoryPath = path.join(OUT, 'pre-write-advisory.latest.json');
       let advisoryPath = latestAdvisoryPath;
       let advisoryInvocationId = null;
+      let advisoryEvidenceAvailability = null;
       try {
         const advisory = JSON.parse(readFileSync(latestAdvisoryPath, 'utf8'));
         advisoryInvocationId = advisory.invocationId ?? null;
+        advisoryEvidenceAvailability = advisory.evidenceAvailability ?? null;
         if (typeof advisory.artifactPaths?.invocationSpecific === 'string') {
           advisoryPath = path.resolve(advisory.artifactPaths.invocationSpecific);
         } else if (typeof advisory.invocationId === 'string') {
@@ -627,6 +632,7 @@ if (values['pre-write'] && values['post-write']) {
         advisoryPath,
         latestAdvisoryPath,
         advisoryInvocationId,
+        evidenceAvailability: advisoryEvidenceAvailability,
       };
     } catch (e) {
       preWriteBlock = {
