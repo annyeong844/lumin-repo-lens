@@ -127,6 +127,18 @@ function candidateTargetKey(item) {
   ].join('|');
 }
 
+function blockedCandidateHintKey(item) {
+  return [
+    item.family ?? '',
+    item.reason ?? '',
+    item.importer ?? '',
+    item.specifier ?? '',
+    item.affectedPackageScope ?? '',
+    item.candidatePath ?? '',
+    item.relevance ?? '',
+  ].join('|');
+}
+
 function topUnresolvedReasons(records) {
   return countBy(records, (record) => record.reason ?? 'unknown-internal-resolution')
     .map(({ key, count }) => ({ reason: key, count }))
@@ -397,6 +409,45 @@ function buildBlindZones(records, generatedConsumerBlindZones) {
   return deduped;
 }
 
+function buildBlockedCandidateHints(blindZones) {
+  const hints = [];
+  for (const zone of blindZones ?? []) {
+    if (zone?.blocksAbsenceClaims !== true || zone.blockingScope !== 'candidate-relevant') continue;
+    const base = compactObject({
+      family: zone.family,
+      reason: zone.reason,
+      importer: zone.importer,
+      specifier: zone.specifier,
+      affectedPackageScope: zone.affectedPackageScope,
+      blockingScope: zone.blockingScope,
+      relevance: zone.relevance,
+      proofUse: 'blocks-absence-claim',
+      outputLevel: zone.outputLevel,
+    });
+    const paths = sortStrings([
+      ...(typeof zone.candidatePath === 'string' ? [zone.candidatePath] : []),
+      ...(Array.isArray(zone.targetCandidates) ? zone.targetCandidates : []),
+    ]);
+    if (paths.length === 0) {
+      hints.push(base);
+      continue;
+    }
+    for (const candidatePath of paths) {
+      hints.push({ ...base, candidatePath });
+    }
+  }
+
+  const seen = new Set();
+  const deduped = [];
+  for (const hint of sortByStableKey(hints, blockedCandidateHintKey)) {
+    const key = blockedCandidateHintKey(hint);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(hint);
+  }
+  return deduped;
+}
+
 function topFamilies(unresolvedImports, blindZones) {
   return countBy([...unresolvedImports, ...blindZones], (item) => item.family)
     .map(({ key, count }) => ({ family: key, count }))
@@ -422,6 +473,7 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
   const unresolvedImports = buildUnresolvedImports(records);
   const candidateTargets = buildCandidateTargets(records);
   const blindZones = buildBlindZones(records, generatedConsumerBlindZones);
+  const blockedCandidateHints = buildBlockedCandidateHints(blindZones);
 
   return {
     schemaVersion: RESOLVER_DIAGNOSTICS_SCHEMA_VERSION,
@@ -437,6 +489,7 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
       unresolvedInternalRatio: symbolsData?.uses?.unresolvedInternalRatio ?? null,
       externalImports: symbolsData?.uses?.external ?? null,
       blindZoneCount: blindZones.length,
+      blockedCandidateHintCount: blockedCandidateHints.length,
       candidateTargetCount: candidateTargets.length,
       unresolvedImportCount: unresolvedImports.length,
       topFamilies: topFamilies(unresolvedImports, blindZones),
@@ -447,6 +500,7 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
         record.reason ?? 'unknown-internal-resolution'),
     },
     blindZones,
+    blockedCandidateHints,
     candidateTargets,
     unresolvedImports,
     topUnresolvedSpecifiers: (symbolsData?.topUnresolvedSpecifiers ?? []).slice(0, 20),
