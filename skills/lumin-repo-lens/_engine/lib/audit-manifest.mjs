@@ -165,6 +165,9 @@ function buildResolverDiagnosticsSummary(symbols, {
   resolverCapabilities = null,
   resolverDiagnostics = null,
 } = {}) {
+  const blockedCandidateHints = Array.isArray(resolverDiagnostics?.blockedCandidateHints)
+    ? resolverDiagnostics.blockedCandidateHints.slice(0, 10)
+    : [];
   return {
     resolverVersion:
       resolverDiagnostics?.resolverVersion ??
@@ -175,6 +178,8 @@ function buildResolverDiagnosticsSummary(symbols, {
     unresolvedInternal: symbols?.uses?.unresolvedInternal ?? null,
     unresolvedInternalRatio: symbols?.uses?.unresolvedInternalRatio ?? null,
     blindZoneCount: resolverDiagnostics?.summary?.blindZoneCount ?? null,
+    blockedCandidateHintCount: resolverDiagnostics?.summary?.blockedCandidateHintCount ?? null,
+    blockedCandidateHints,
     candidateTargetCount: resolverDiagnostics?.summary?.candidateTargetCount ?? null,
     topFamilies: resolverDiagnostics?.summary?.topFamilies ?? [],
     topAffectedPackageScopes:

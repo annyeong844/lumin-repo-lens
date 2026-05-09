@@ -57,6 +57,21 @@ function formatTopAffectedPackageScopes(scopes, limit = 3) {
   return parts.length ? parts.join('; ') : null;
 }
 
+function formatBlockedCandidateHints(hints, limit = 3) {
+  if (!Array.isArray(hints) || hints.length === 0) return null;
+  const parts = hints
+    .slice(0, limit)
+    .map((hint) => {
+      const target = hint?.candidatePath ?? hint?.affectedPackageScope;
+      const specifier = hint?.specifier;
+      const reason = hint?.reason;
+      if (!target || !specifier || !reason) return null;
+      return `${target} via ${specifier} (${reason})`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join('; ') : null;
+}
+
 function formatCounterObject(counter) {
   if (!counter || typeof counter !== 'object' || Array.isArray(counter)) return null;
   const parts = Object.entries(counter)
@@ -294,6 +309,15 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     );
     if (affectedScopes) {
       lines.push(`- Resolver affected scopes: ${affectedScopes}. Read \`manifest.json.resolverDiagnostics.topAffectedPackageScopes\` before treating resolver blind zones as repo-global blockers.`);
+    }
+    const blockedCandidateHintCount = n(manifest?.resolverDiagnostics?.blockedCandidateHintCount, 0);
+    const blockedCandidateHints = formatBlockedCandidateHints(
+      manifest?.resolverDiagnostics?.blockedCandidateHints
+    );
+    if (blockedCandidateHintCount > 0) {
+      lines.push(
+        `- Resolver blocked absence hints: ${blockedCandidateHintCount}${blockedCandidateHints ? `; examples: ${blockedCandidateHints}` : ''}. Read \`manifest.json.resolverDiagnostics.blockedCandidateHints\` and \`resolver-diagnostics.json.blockedCandidateHints\` before treating affected exports as absent.`
+      );
     }
   }
 
