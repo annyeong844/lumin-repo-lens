@@ -117,6 +117,12 @@ function relPath(root, full) {
   return path.relative(root, full).replace(/\\/g, '/');
 }
 
+function dirnameOfRel(rel) {
+  const normalized = String(rel ?? '').replace(/\\/g, '/');
+  const idx = normalized.lastIndexOf('/');
+  return idx === -1 ? '.' : normalized.slice(0, idx);
+}
+
 const FRAMEWORK_CONFIG_FILE_NAMES = new Set([
   'wrangler.toml',
   'wrangler.json',
@@ -210,6 +216,42 @@ function packageRecordsFromRepoMode({ root, repoMode }) {
   return records;
 }
 
+function collectNestedPackageRecords({ root, files, existingRecords }) {
+  const existingRoots = new Set(existingRecords.map((record) => record.relRoot));
+  const records = [];
+  const checkedDirs = new Set();
+
+  function addRecord(relDir) {
+    const relRoot = relDir === '.' ? '.' : relDir.replace(/\\/g, '/');
+    if (existingRoots.has(relRoot)) return;
+    existingRoots.add(relRoot);
+    const packageRoot = path.join(root, relRoot);
+    records.push({
+      root: packageRoot,
+      relRoot,
+      packageJson: readJsonFile(path.join(packageRoot, 'package.json')) ?? {},
+    });
+  }
+
+  for (const file of files) {
+    let relDir = dirnameOfRel(file);
+    while (relDir && relDir !== '.') {
+      if (!checkedDirs.has(relDir)) {
+        checkedDirs.add(relDir);
+        if (existsSync(path.join(root, relDir, 'package.json'))) {
+          addRecord(relDir);
+          break;
+        }
+      }
+      const parent = dirnameOfRel(relDir);
+      if (parent === relDir) break;
+      relDir = parent;
+    }
+  }
+
+  return records;
+}
+
 function packageDependencyNames(packageJson = {}) {
   return new Set([
     ...Object.keys(packageJson.dependencies ?? {}),
@@ -234,6 +276,11 @@ export function createFrameworkPolicyContextForRepo({
 }) {
   const files = collectKnownFiles({ root, symbolsData, deadList, includeTests, exclude });
   const packageRecords = packageRecordsFromRepoMode({ root, repoMode });
+  packageRecords.push(...collectNestedPackageRecords({
+    root,
+    files,
+    existingRecords: packageRecords,
+  }));
   let honoRouteRegistrations = [];
   if (shouldCollectHonoRouteFactsForPackages(packageRecords)) {
     try {

@@ -35,6 +35,7 @@ const ARTIFACT_CANDIDATES = [
   'symbols.json', 'entry-surface.json', 'module-reachability.json',
   'dead-classify.json', 'runtime-evidence.json',
   'staleness.json', 'fix-plan.json', 'checklist-facts.json',
+  'producer-performance.json',
   'canon-drift.json', 'topology.mermaid.md', 'audit-summary.latest.md',
   'audit-review-pack.latest.md', 'lumin-repo-lens.sarif',
 ];

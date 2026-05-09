@@ -448,6 +448,9 @@ function edgeKindForUse(use) {
   if (kind === 'import-side-effect') return 'import-side-effect';
   if (kind === 'reExport') return 'reexport-named';
   if (kind === 'reExportAll') return 'reexport-broad';
+  if (kind === 'reExportNamespace') return 'reexport-namespace';
+  if (kind === 'imported-namespace-member') return 'reexport-namespace-member';
+  if (kind === 'imported-namespace-escape') return 'reexport-namespace-escape';
   if (kind === 'dynamic' || kind === 'dynamic-member') return 'dynamic-literal';
   if (kind === 'cjs-side-effect-only') return 'cjs-side-effect';
   if (kind === 'cjs-require-exact') return 'cjs-require-exact';
@@ -455,6 +458,11 @@ function edgeKindForUse(use) {
   if (kind === 'cjs-namespace-escape') return 'cjs-namespace-escape';
   if (kind === 'cjs-reexport-broad') return 'cjs-reexport-broad';
   return kind;
+}
+
+function isImportedNamespaceAliasUse(use) {
+  return use?.kind === 'imported-namespace-member' ||
+    use?.kind === 'imported-namespace-escape';
 }
 
 function addResolvedInternalEdge(consumerFile, target, use) {
@@ -517,6 +525,31 @@ function addGeneratedVirtualConsumer(consumerFile, use, surface, exported) {
   generatedVirtualImportConsumers.push(record);
 }
 
+const namespaceReExportsByFile = new Map();
+function addNamespaceReExport(barrelFile, exportedName, targetFile, sourceSpec) {
+  if (!namespaceReExportsByFile.has(barrelFile)) {
+    namespaceReExportsByFile.set(barrelFile, new Map());
+  }
+  namespaceReExportsByFile.get(barrelFile).set(exportedName, {
+    targetFile,
+    sourceSpec,
+  });
+}
+
+function getNamespaceReExport(barrelFile, exportedName) {
+  return namespaceReExportsByFile.get(barrelFile)?.get(exportedName) ?? null;
+}
+
+for (const [barrelFile, info] of fileData) {
+  for (const use of info.uses ?? []) {
+    if (use?.kind !== 'reExportNamespace' || !use.name || use.name === '*') continue;
+    const target = resolveSpecifier(barrelFile, use);
+    if (!target || target === 'EXTERNAL' || target === 'UNRESOLVED_INTERNAL') continue;
+    if (isGeneratedVirtualResolution(target) || isNonSourceAssetResolution(target)) continue;
+    addNamespaceReExport(barrelFile, use.name, target, use.fromSpec);
+  }
+}
+
 function packageRootFromSpec(spec) {
   if (typeof spec !== 'string' || spec.length === 0) return null;
   if (spec.startsWith('.') || spec.startsWith('/')) return null;
@@ -549,6 +582,7 @@ for (const [consumerFile, info] of fileData) {
   for (const u of info.uses) {
     const target = resolveSpecifier(consumerFile, u);
     if (target === 'EXTERNAL') {
+      if (isImportedNamespaceAliasUse(u)) continue;
       // External npm package. NOT a blind spot for dead-export
       // analysis — external packages don't consume internal exports.
       externalUses++;
@@ -561,6 +595,7 @@ for (const [consumerFile, info] of fileData) {
       continue;
     }
     if (target === 'UNRESOLVED_INTERNAL') {
+      if (isImportedNamespaceAliasUse(u)) continue;
       // Local alias matched (e.g. `@/*` from tsconfig paths) but no
       // target file. THIS is a real blind spot — we probably missed
       // a legitimate consumer.
@@ -574,6 +609,7 @@ for (const [consumerFile, info] of fileData) {
       continue;
     }
     if (isGeneratedVirtualResolution(target)) {
+      if (isImportedNamespaceAliasUse(u)) continue;
       generatedVirtualSurfaces.set(target.id, target);
       const exported = generatedVirtualExportForUse(target, u);
       if (!exported) {
@@ -589,6 +625,7 @@ for (const [consumerFile, info] of fileData) {
       continue;
     }
     if (!target) {
+      if (isImportedNamespaceAliasUse(u)) continue;
       // null — relative path that didn't resolve, or malformed spec.
       // Treat conservatively as internal: a relative path that
       // doesn't find a file is more likely a scanner/parse issue than
@@ -596,6 +633,23 @@ for (const [consumerFile, info] of fileData) {
       unresolvedInternalUses++;
       unresolvedUses++;
       recordUnresolvedInternalSpecifier(consumerFile, u);
+      continue;
+    }
+    if (u.kind === 'imported-namespace-member' || u.kind === 'imported-namespace-escape') {
+      const reExport = getNamespaceReExport(target, u.name);
+      if (!reExport) continue;
+      totalUses++;
+      resolvedInternalUses++;
+      addResolvedInternalEdge(consumerFile, reExport.targetFile, u);
+      if (u.kind === 'imported-namespace-escape') {
+        if (!namespaceUsers.has(reExport.targetFile)) namespaceUsers.set(reExport.targetFile, new Set());
+        namespaceUsers.get(reExport.targetFile).add(consumerFile);
+      } else if (u.memberName) {
+        addConsumer(reExport.targetFile, u.memberName, consumerFile, {
+          ...u,
+          name: u.memberName,
+        });
+      }
       continue;
     }
     totalUses++;
@@ -606,6 +660,9 @@ for (const [consumerFile, info] of fileData) {
     // PCEF P0: CJS side-effect-only imports evaluate the file but do not
     // consume named exports, while CJS namespace escapes/re-exports are broad.
     if (u.kind === 'cjs-side-effect-only' || u.kind === 'import-side-effect') {
+      continue;
+    }
+    if (u.kind === 'reExportNamespace') {
       continue;
     }
     if (u.kind === 'namespace' ||

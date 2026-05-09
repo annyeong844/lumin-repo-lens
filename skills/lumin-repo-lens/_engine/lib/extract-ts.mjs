@@ -151,16 +151,17 @@ function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
   const uses = [];
   const reExports = [];
   const namespaceImports = new Map();
+  const namedImports = new Map();
   const cjsExportSurface = collectCjsExportSurface(program, getNodeLine);
   const localDeclarations = collectTopLevelDeclarationTargets(program);
 
   for (const node of program.body) {
     collectExportDefinitions(node, defs, getNodeLine, artifactFilePath, localDeclarations);
     collectReExports(node, reExports, uses, getNodeLine);
-    collectImports(node, uses, namespaceImports, getNodeLine);
+    collectImports(node, uses, namespaceImports, namedImports, getNodeLine);
   }
 
-  return { defs, uses, reExports, namespaceImports, cjsExportSurface };
+  return { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface };
 }
 
 function collectTopLevelDeclarationTargets(program) {
@@ -273,11 +274,16 @@ function collectReExports(node, reExports, uses, getNodeLine) {
   }
 
   if (node.type === 'ExportAllDeclaration') {
-    reExports.push({ source: node.source.value, line: getNodeLine(node) });
+    const exportedName = node.exported?.name ?? null;
+    reExports.push({
+      source: node.source.value,
+      line: getNodeLine(node),
+      ...(exportedName ? { namespace: exportedName } : {}),
+    });
     uses.push({
       fromSpec: node.source.value,
-      name: '*',
-      kind: 'reExportAll',
+      name: exportedName ?? '*',
+      kind: exportedName ? 'reExportNamespace' : 'reExportAll',
       typeOnly: node.exportKind === 'type',
       line: getNodeLine(node),
     });
@@ -299,7 +305,7 @@ function collectNamedReExportUses(node, uses, getNodeLine) {
   }
 }
 
-function collectImports(node, uses, namespaceImports, getNodeLine) {
+function collectImports(node, uses, namespaceImports, namedImports, getNodeLine) {
   if (node.type !== 'ImportDeclaration') return;
 
   if ((node.specifiers ?? []).length === 0) {
@@ -315,13 +321,25 @@ function collectImports(node, uses, namespaceImports, getNodeLine) {
 
   for (const spec of node.specifiers ?? []) {
     if (spec.type === 'ImportSpecifier') {
+      const importedName = spec.imported?.name ?? spec.local?.name;
+      const localName = spec.local?.name ?? importedName;
       uses.push({
         fromSpec: node.source.value,
-        name: spec.imported?.name ?? spec.local?.name,
+        name: importedName,
         kind: 'import',
         typeOnly: node.importKind === 'type' || spec.importKind === 'type',
         line: getNodeLine(spec),
+        ...(localName && localName !== importedName ? { localName } : {}),
       });
+      if (localName && importedName) {
+        namedImports.set(localName, {
+          fromSpec: node.source.value,
+          importedName,
+          typeOnly: node.importKind === 'type' || spec.importKind === 'type',
+          line: getNodeLine(spec),
+          localName,
+        });
+      }
     } else if (spec.type === 'ImportDefaultSpecifier') {
       uses.push({
         fromSpec: node.source.value,
@@ -445,10 +463,11 @@ function collectModuleExportsObjectProperties(node, surface, getNodeLine) {
   }
 }
 
-function collectMemberPrecisionUses(program, namespaceImports, getNodeLine) {
+function collectMemberPrecisionUses(program, namespaceImports, namedImports, getNodeLine) {
   const state = createMemberPrecisionState();
   const rootScope = makeScope();
   bindNamespaceImports(rootScope, namespaceImports, state);
+  bindNamedImports(rootScope, namedImports, state);
   walkMemberPrecision(program, rootScope, state, getNodeLine);
   return {
     uses: emitMemberPrecisionUses(state),
@@ -463,6 +482,7 @@ function createMemberPrecisionState() {
     opaqueDynamicImports: [],
     cjsRequireOpacity: [],
     namespaceRecords: [],
+    namedImportRecords: [],
     dynamicRecords: [],
     cjsRecords: [],
     cjsDirectUses: [],
@@ -495,6 +515,7 @@ function makeTracked(state, kind, fields) {
     ...fields,
   };
   if (kind === 'namespace') state.namespaceRecords.push(record);
+  else if (kind === 'named-import') state.namedImportRecords.push(record);
   else if (kind === 'dynamic') state.dynamicRecords.push(record);
   else if (kind === 'cjs') state.cjsRecords.push(record);
   return record;
@@ -525,6 +546,18 @@ function bindNamespaceImports(rootScope, namespaceImports, state) {
   for (const [localName, imp] of namespaceImports) {
     bind(rootScope, localName, makeTracked(state, 'namespace', {
       fromSpec: imp.fromSpec,
+      typeOnly: imp.typeOnly,
+      line: imp.line,
+      localName,
+    }));
+  }
+}
+
+function bindNamedImports(rootScope, namedImports, state) {
+  for (const [localName, imp] of namedImports) {
+    bind(rootScope, localName, makeTracked(state, 'named-import', {
+      fromSpec: imp.fromSpec,
+      importedName: imp.importedName,
       typeOnly: imp.typeOnly,
       line: imp.line,
       localName,
@@ -783,9 +816,23 @@ function handleThenDynamicImport(node, scope, state, getNodeLine) {
 function handleTrackedMemberExpression(node, scope, parent, key, getNodeLine) {
   if (node.type !== 'MemberExpression' || node.object?.type !== 'Identifier') return false;
   const record = resolveBinding(scope, node.object.name);
-  if (record?.kind !== 'namespace' && record?.kind !== 'dynamic' && record?.kind !== 'cjs') return false;
+  if (record?.kind !== 'namespace' &&
+      record?.kind !== 'named-import' &&
+      record?.kind !== 'dynamic' &&
+      record?.kind !== 'cjs') return false;
 
   if (record.kind === 'cjs') {
+    if (isMutatingMemberAccess(parent, key)) {
+      record.degraded = true;
+      return true;
+    }
+    const name = staticMemberPropertyName(node);
+    if (name) record.members.push({ name, line: getNodeLine(node) });
+    else record.degraded = true;
+    return true;
+  }
+
+  if (record.kind === 'named-import') {
     if (isMutatingMemberAccess(parent, key)) {
       record.degraded = true;
       return true;
@@ -853,7 +900,10 @@ function handleOpaqueRequireExpression(node, state, getNodeLine) {
 function handleTrackedIdentifier(node, scope, parent, key) {
   if (node.type !== 'Identifier') return false;
   const record = resolveBinding(scope, node.name);
-  if (record?.kind === 'namespace' || record?.kind === 'dynamic' || record?.kind === 'cjs') {
+  if (record?.kind === 'namespace' ||
+      record?.kind === 'named-import' ||
+      record?.kind === 'dynamic' ||
+      record?.kind === 'cjs') {
     if (isNonEscapingTrackedIdentifierRead(parent, key)) return true;
     record.degraded = true;
   }
@@ -882,10 +932,41 @@ function walkChildNodes(node, scope, state, getNodeLine) {
 function emitMemberPrecisionUses(state) {
   return [
     ...emitNamespaceRecordUses(state.namespaceRecords),
+    ...emitNamedImportRecordUses(state.namedImportRecords),
     ...emitDynamicRecordUses(state),
     ...emitFallbackDynamicUses(state),
     ...emitCjsUses(state),
   ];
+}
+
+function emitNamedImportRecordUses(namedImportRecords) {
+  const uses = [];
+  for (const record of namedImportRecords) {
+    if (record.members.length > 0 && !record.degraded) {
+      for (const member of record.members) {
+        uses.push({
+          fromSpec: record.fromSpec,
+          name: record.importedName,
+          memberName: member.name,
+          kind: 'imported-namespace-member',
+          typeOnly: record.typeOnly,
+          line: member.line,
+          localName: record.localName,
+        });
+      }
+    } else if (record.degraded) {
+      uses.push({
+        fromSpec: record.fromSpec,
+        name: record.importedName,
+        kind: 'imported-namespace-escape',
+        typeOnly: record.typeOnly,
+        line: record.line,
+        localName: record.localName,
+        degraded: true,
+      });
+    }
+  }
+  return uses;
 }
 
 function emitNamespaceRecordUses(namespaceRecords) {
@@ -1000,9 +1081,9 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
   const result = parseOxcOrThrow(filePath, src);
   const getNodeLine = makeLineGetter(src);
   const artifactFilePath = options.artifactFilePath ?? filePath;
-  const { defs, uses, reExports, namespaceImports, cjsExportSurface } =
+  const { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface } =
     collectTopLevelSymbols(result.program, getNodeLine, artifactFilePath);
-  const memberPrecision = collectMemberPrecisionUses(result.program, namespaceImports, getNodeLine);
+  const memberPrecision = collectMemberPrecisionUses(result.program, namespaceImports, namedImports, getNodeLine);
   uses.push(...memberPrecision.uses);
   const typeEscapePath = artifactFilePath;
   const typeEscapeResult = extractTypeEscapes(src, typeEscapePath);

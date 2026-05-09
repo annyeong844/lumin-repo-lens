@@ -16,6 +16,7 @@ function buildReExportsByFile({ root, fileData }) {
     reExportsByFile[rel] = info.reExports.map((r) => ({
       source: r.source,
       line: r.line,
+      ...(r.namespace ? { namespace: r.namespace } : {}),
     }));
   }
   return reExportsByFile;

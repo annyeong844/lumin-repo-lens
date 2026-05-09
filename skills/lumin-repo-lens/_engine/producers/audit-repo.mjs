@@ -46,7 +46,7 @@
 // any step is captured but never hidden.
 
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -334,6 +334,157 @@ function manifestEvidenceOptions() {
   };
 }
 
+const PRODUCER_PERFORMANCE_SCHEMA_VERSION = 'producer-performance.v1';
+const PRODUCER_PERFORMANCE_LARGEST_ARTIFACT_LIMIT = 10;
+
+function performanceCacheRoot() {
+  return path.resolve(values['cache-root'] ?? path.join(ROOT, '.audit', '.cache'));
+}
+
+function memorySnapshot() {
+  const usage = process.memoryUsage();
+  return {
+    rssBytes: usage.rss,
+    heapTotalBytes: usage.heapTotal,
+    heapUsedBytes: usage.heapUsed,
+    externalBytes: usage.external,
+    arrayBuffersBytes: usage.arrayBuffers ?? 0,
+  };
+}
+
+function memoryDelta(before, after) {
+  return {
+    rssBytes: after.rssBytes - before.rssBytes,
+    heapTotalBytes: after.heapTotalBytes - before.heapTotalBytes,
+    heapUsedBytes: after.heapUsedBytes - before.heapUsedBytes,
+    externalBytes: after.externalBytes - before.externalBytes,
+    arrayBuffersBytes: after.arrayBuffersBytes - before.arrayBuffersBytes,
+  };
+}
+
+function sumCommandWallMs(entries) {
+  return entries.reduce((sum, entry) => sum + (typeof entry.ms === 'number' ? entry.ms : 0), 0);
+}
+
+function statusCount(entries, predicate) {
+  return entries.filter(predicate).length;
+}
+
+function maxObservedRss(entries) {
+  let max = 0;
+  for (const entry of entries) {
+    const before = entry.memory?.before?.rssBytes ?? 0;
+    const after = entry.memory?.after?.rssBytes ?? 0;
+    max = Math.max(max, before, after);
+  }
+  return max;
+}
+
+function collectArtifactSizeSummary() {
+  const byName = {};
+  let totalBytes = 0;
+
+  for (const name of collectProducedArtifacts(OUT)) {
+    const artifactPath = path.join(OUT, name);
+    try {
+      const stats = statSync(artifactPath);
+      if (!stats.isFile()) continue;
+      byName[name] = { bytes: stats.size };
+      totalBytes += stats.size;
+    } catch {
+      // Artifact enumeration is best-effort: disappearing files should not
+      // turn a completed audit into a failed one.
+    }
+  }
+
+  const largest = Object.entries(byName)
+    .map(([name, entry]) => ({ name, bytes: entry.bytes }))
+    .sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name))
+    .slice(0, PRODUCER_PERFORMANCE_LARGEST_ARTIFACT_LIMIT);
+
+  return {
+    producedCount: Object.keys(byName).length,
+    totalBytes,
+    largest,
+    byName,
+  };
+}
+
+function buildProducerPerformanceArtifact(generated) {
+  const producers = commandsRun.map((entry) => ({
+    name: entry.step,
+    status: entry.status,
+    wallMs: typeof entry.ms === 'number' ? entry.ms : null,
+    ...(entry.memory ? { memory: entry.memory } : {}),
+    ...(entry.stderr ? { stderrSnippet: entry.stderr } : {}),
+  }));
+  const skippedEntries = skipped.map((entry) => ({
+    name: entry.step,
+    status: 'skipped',
+    reason: entry.reason ?? null,
+  }));
+  const totalWallMs = sumCommandWallMs(commandsRun);
+  const artifacts = collectArtifactSizeSummary();
+  const maxObservedOrchestratorRssBytes = maxObservedRss(commandsRun);
+
+  return {
+    schemaVersion: PRODUCER_PERFORMANCE_SCHEMA_VERSION,
+    generated,
+    root: ROOT,
+    output: OUT,
+    profile: PROFILE,
+    scanRange: {
+      includeTests: INCLUDE_TESTS,
+      production: PRODUCTION,
+      excludes: EFFECTIVE_EXCLUDES,
+      autoExcludes: AUTO_EXCLUDES,
+    },
+    cache: {
+      noIncremental: values['no-incremental'] === true,
+      cacheRoot: performanceCacheRoot(),
+      clearIncrementalCache: values['clear-incremental-cache'] === true,
+    },
+    generatedArtifacts: {
+      mode: GENERATED_ARTIFACTS_MODE,
+    },
+    summary: {
+      producerCount: producers.length,
+      okCount: statusCount(commandsRun, (entry) => entry.status === 'ok'),
+      failedCount: statusCount(commandsRun, (entry) => String(entry.status ?? '').startsWith('failed')),
+      skippedCount: skippedEntries.length,
+      totalWallMs,
+      artifactCount: artifacts.producedCount,
+      totalArtifactBytes: artifacts.totalBytes,
+      maxObservedOrchestratorRssBytes,
+    },
+    memory: {
+      measurement: 'orchestrator-process-snapshots',
+      childPeakRssAvailable: false,
+      note: 'Memory snapshots are measured in the audit-repo orchestrator before and after each child producer; they do not measure child process peak RSS.',
+    },
+    artifacts,
+    producers,
+    skipped: skippedEntries,
+  };
+}
+
+function summarizeProducerPerformance(performanceArtifact) {
+  return {
+    artifact: 'producer-performance.json',
+    schemaVersion: performanceArtifact.schemaVersion,
+    producerCount: performanceArtifact.summary?.producerCount ?? 0,
+    okCount: performanceArtifact.summary?.okCount ?? 0,
+    failedCount: performanceArtifact.summary?.failedCount ?? 0,
+    skippedCount: performanceArtifact.summary?.skippedCount ?? 0,
+    totalWallMs: performanceArtifact.summary?.totalWallMs ?? 0,
+    artifactCount: performanceArtifact.summary?.artifactCount ?? 0,
+    totalArtifactBytes: performanceArtifact.summary?.totalArtifactBytes ?? 0,
+    largestArtifacts: performanceArtifact.artifacts?.largest ?? [],
+    maxObservedOrchestratorRssBytes:
+      performanceArtifact.summary?.maxObservedOrchestratorRssBytes ?? 0,
+  };
+}
+
 function shortenConsoleLine(line, max = 150) {
   const normalized = String(line ?? '').replace(/\s+/g, ' ').trim();
   return normalized.length > max ? `${normalized.slice(0, max - 1)}…` : normalized;
@@ -397,20 +548,37 @@ function runStep(scriptRelPath, { required = false, precondition = null, reason 
     ...forwardedGeneratedArtifactArgs(name),
   ];
   const t0 = Date.now();
+  const memoryBefore = memorySnapshot();
   try {
     const out = execFileSync(process.execPath, argv, {
       stdio: values.verbose ? 'inherit' : ['ignore', 'pipe', 'pipe'],
       encoding: 'utf8',
     });
     const ms = Date.now() - t0;
-    commandsRun.push({ step: name, status: 'ok', ms });
+    const memoryAfter = memorySnapshot();
+    commandsRun.push({
+      step: name,
+      status: 'ok',
+      ms,
+      memory: {
+        before: memoryBefore,
+        after: memoryAfter,
+        delta: memoryDelta(memoryBefore, memoryAfter),
+      },
+    });
     console.log(`[audit-repo] ok    ${name}  (${ms}ms)`);
     return { status: 'ok', out, ms };
   } catch (e) {
     const ms = Date.now() - t0;
+    const memoryAfter = memorySnapshot();
     const status = required ? 'failed-required' : 'failed-optional';
     commandsRun.push({
       step: name, status, ms,
+      memory: {
+        before: memoryBefore,
+        after: memoryAfter,
+        delta: memoryDelta(memoryBefore, memoryAfter),
+      },
       stderr: (e.stderr || e.message || '').toString().slice(0, 500),
     });
     console.log(`[audit-repo] ${required ? 'FAIL' : 'warn'}  ${name}  (${ms}ms) — ` +
@@ -781,6 +949,12 @@ if (values['strict-post-write-confidence'] && postWriteConfidenceLimited(postWri
 }
 
 refreshManifestEvidence(manifest, manifestEvidenceOptions());
+const producerPerformance = buildProducerPerformanceArtifact(manifest.meta.generated);
+atomicWrite(
+  path.join(OUT, 'producer-performance.json'),
+  JSON.stringify(producerPerformance, null, 2)
+);
+manifest.performance = summarizeProducerPerformance(producerPerformance);
 const topologyArtifact = loadIfExists('topology.json');
 if (topologyArtifact) {
   const topologyMermaidPath = path.join(OUT, 'topology.mermaid.md');

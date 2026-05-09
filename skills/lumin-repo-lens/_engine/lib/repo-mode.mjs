@@ -2,9 +2,10 @@
 // `monorepo` / `single-package` / `non-node`, and enumerates workspace
 // directories for the monorepo case.
 //
-// Workspace patterns come from either `pkgJson.workspaces` (npm/yarn/bun)
-// or `pnpm-workspace.yaml` (pnpm). Both forms support `packages/*` plus
-// the modern pnpm `packages/**` recursive + `!pattern` negation syntax.
+// Workspace patterns are additive across workspace manifests. A repo can expose
+// a narrow `package.json#workspaces` list while a sibling manifest carries
+// additional roots, so detection must collect every supported source instead of
+// picking one owner.
 // See CHANGELOG FP-26, FP-29.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
@@ -47,6 +48,35 @@ function parsePnpmWorkspaceYaml(yamlText) {
   return patterns;
 }
 
+function workspacePatternsFromPackageJson(pkgJson) {
+  if (!pkgJson?.workspaces) return [];
+  return Array.isArray(pkgJson.workspaces)
+    ? pkgJson.workspaces
+    : (pkgJson.workspaces.packages ?? []);
+}
+
+function workspacePatternsFromPnpmWorkspaceYaml(root) {
+  const pnpmYamlPath = path.join(root, 'pnpm-workspace.yaml');
+  if (!existsSync(pnpmYamlPath)) return [];
+  try {
+    const yaml = readFileSync(pnpmYamlPath, 'utf8');
+    return parsePnpmWorkspaceYaml(yaml);
+  } catch {
+    // pnpm-workspace.yaml exists but couldn't be read or parsed. Ignore only
+    // that source; other workspace manifests may still provide useful roots.
+    return [];
+  }
+}
+
+function collectWorkspacePatterns(root, pkgJson) {
+  return [
+    ...new Set([
+      ...workspacePatternsFromPackageJson(pkgJson),
+      ...workspacePatternsFromPnpmWorkspaceYaml(root),
+    ]),
+  ];
+}
+
 export function detectRepoMode(root) {
   const pkgJsonPath = path.join(root, 'package.json');
   // readJsonFile returns null on missing OR malformed — either path
@@ -68,28 +98,7 @@ export function detectRepoMode(root) {
     };
   }
 
-  // v0.6.5 FP-26 fix: workspace patterns can come from either
-  //   (1) `pkgJson.workspaces` (npm, yarn, bun), or
-  //   (2) `pnpm-workspace.yaml` (pnpm) at repo root.
-  let workspacePatterns = [];
-  if (pkgJson.workspaces) {
-    workspacePatterns = Array.isArray(pkgJson.workspaces)
-      ? pkgJson.workspaces
-      : (pkgJson.workspaces.packages ?? []);
-  } else {
-    const pnpmYamlPath = path.join(root, 'pnpm-workspace.yaml');
-    if (existsSync(pnpmYamlPath)) {
-      try {
-        const yaml = readFileSync(pnpmYamlPath, 'utf8');
-        workspacePatterns = parsePnpmWorkspaceYaml(yaml);
-      } catch {
-        // pnpm-workspace.yaml exists but couldn't be read or parsed.
-        // Degrade to "no workspace patterns" — repo-mode will report
-        // single-package; callers see a less-sharp but still correct
-        // picture. Better than crashing the whole scan.
-      }
-    }
-  }
+  const workspacePatterns = collectWorkspacePatterns(root, pkgJson);
   const hasWorkspaces = workspacePatterns.length > 0;
 
   // v0.6.7 FP-29: pnpm globs support `packages/**` (recursive) + negated
