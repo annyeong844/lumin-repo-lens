@@ -102,6 +102,12 @@ function addIndexedEntries(indexedEntries, targetSet, evidenceByFile) {
   }
 }
 
+function addConcreteIndexedEntries(indexedEntries, targetSet, evidenceByFile) {
+  for (const [rel, evidence] of indexedEntries) {
+    for (const item of evidence) addEvidenceFile(targetSet, evidenceByFile, rel, item);
+  }
+}
+
 function collectPublicApi({ root, repoMode, symbolsData, aliasMap, resolve }) {
   const files = new Set();
   const evidenceByFile = new Map();
@@ -175,7 +181,7 @@ function collectHtmlEntries({ root, repoMode, includeTests, exclude }) {
   const files = new Set();
   const evidenceByFile = new Map();
   const html = collectHtmlModuleEntrypoints({ root, repoMode, includeTests, exclude });
-  addIndexedEntries(
+  addConcreteIndexedEntries(
     indexPublicSurfaceEntries(html.entries),
     files,
     evidenceByFile,
