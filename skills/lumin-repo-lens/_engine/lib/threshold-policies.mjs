@@ -6,6 +6,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { calibrationCorpusSummary } from './calibration-corpora.mjs';
+
 export const THRESHOLD_POLICY_SCHEMA_VERSION = 'threshold-policy.v1';
 
 function stableObject(value) {
@@ -24,10 +26,19 @@ function policyHash(policy) {
   return 'sha256:' + createHash('sha256').update(canonical).digest('hex');
 }
 
+function thresholdHash(thresholds) {
+  const canonical = JSON.stringify(stableObject(thresholds));
+  return 'sha256:' + createHash('sha256').update(canonical).digest('hex');
+}
+
 function withHash(policy) {
-  return Object.freeze({
+  const policyWithThresholdHash = {
     ...policy,
-    policyHash: policyHash(policy),
+    thresholdHash: thresholdHash(policy.thresholds),
+  };
+  return Object.freeze({
+    ...policyWithThresholdHash,
+    policyHash: policyHash(policyWithThresholdHash),
   });
 }
 
@@ -123,14 +134,33 @@ export function getThresholdPolicy(policyId) {
 export function thresholdPolicySummary(policyIds) {
   return [...policyIds].map((policyId) => {
     const policy = getThresholdPolicy(policyId);
+    const calibrationCorpus = policy.calibration?.corpus
+      ? calibrationCorpusSummary([policy.calibration.corpus])[0]
+      : undefined;
     return {
       schemaVersion: policy.schemaVersion,
       policyId: policy.policyId,
       policyVersion: policy.policyVersion,
       policyClass: policy.policyClass,
       policyHash: policy.policyHash,
+      thresholdHash: policy.thresholdHash,
       thresholds: policy.thresholds,
       calibration: policy.calibration,
+      ...(calibrationCorpus ? { calibrationCorpus } : {}),
+    };
+  });
+}
+
+export function thresholdPolicyDriftSnapshot(policyIds) {
+  return [...policyIds].map((policyId) => {
+    const policy = getThresholdPolicy(policyId);
+    return {
+      policyId: policy.policyId,
+      policyVersion: policy.policyVersion,
+      policyClass: policy.policyClass,
+      thresholdHash: policy.thresholdHash,
+      calibrationCorpus: policy.calibration?.corpus ?? null,
+      calibrationNote: policy.calibration?.note ?? null,
     };
   });
 }

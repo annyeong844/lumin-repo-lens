@@ -319,6 +319,9 @@ function buildCandidateTargets(records) {
       specifier: record.specifier,
       importer: record.consumerFile ?? record.fromHint,
       family: familyForRecord(record),
+      outputLevel: 'candidate',
+      proofUse: 'diagnostic-only',
+      createsGraphEdge: false,
       candidatePaths: sortStrings(candidates),
       notResolvedBecause: record.reason ?? 'unknown-internal-resolution',
       resolverStage: record.resolverStage,
@@ -424,6 +427,11 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
     schemaVersion: RESOLVER_DIAGNOSTICS_SCHEMA_VERSION,
     resolverVersion: RESOLVER_VERSION,
     capabilityArtifact,
+    capabilityReference: {
+      artifact: capabilityArtifact,
+      schemaVersion: RESOLVER_CAPABILITIES_SCHEMA_VERSION,
+      resolverVersion: RESOLVER_VERSION,
+    },
     summary: {
       unresolvedInternal: symbolsData?.uses?.unresolvedInternal ?? records.length,
       unresolvedInternalRatio: symbolsData?.uses?.unresolvedInternalRatio ?? null,
