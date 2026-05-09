@@ -41,6 +41,8 @@ const DYNAMIC_ARTIFACT_PATTERNS = [
   /^any-inventory\.post\..+\.json$/,
 ];
 
+const RESOLVER_BLOCKED_CANDIDATE_HINT_SAMPLE_LIMIT = 10;
+
 function languagesFromTriage(triage) {
   const byLanguage = triage?.byLanguage ?? triage?.languages ?? triage?.summary?.byLanguage;
   if (byLanguage && typeof byLanguage === 'object') return Object.keys(byLanguage);
@@ -166,7 +168,7 @@ function buildResolverDiagnosticsSummary(symbols, {
   resolverDiagnostics = null,
 } = {}) {
   const blockedCandidateHints = Array.isArray(resolverDiagnostics?.blockedCandidateHints)
-    ? resolverDiagnostics.blockedCandidateHints.slice(0, 10)
+    ? resolverDiagnostics.blockedCandidateHints.slice(0, RESOLVER_BLOCKED_CANDIDATE_HINT_SAMPLE_LIMIT)
     : [];
   return {
     resolverVersion:
@@ -179,6 +181,7 @@ function buildResolverDiagnosticsSummary(symbols, {
     unresolvedInternalRatio: symbols?.uses?.unresolvedInternalRatio ?? null,
     blindZoneCount: resolverDiagnostics?.summary?.blindZoneCount ?? null,
     blockedCandidateHintCount: resolverDiagnostics?.summary?.blockedCandidateHintCount ?? null,
+    blockedCandidateHintSampleLimit: resolverDiagnostics ? RESOLVER_BLOCKED_CANDIDATE_HINT_SAMPLE_LIMIT : null,
     blockedCandidateHints,
     candidateTargetCount: resolverDiagnostics?.summary?.candidateTargetCount ?? null,
     topFamilies: resolverDiagnostics?.summary?.topFamilies ?? [],

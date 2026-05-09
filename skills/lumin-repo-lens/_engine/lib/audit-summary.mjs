@@ -311,12 +311,16 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
       lines.push(`- Resolver affected scopes: ${affectedScopes}. Read \`manifest.json.resolverDiagnostics.topAffectedPackageScopes\` before treating resolver blind zones as repo-global blockers.`);
     }
     const blockedCandidateHintCount = n(manifest?.resolverDiagnostics?.blockedCandidateHintCount, 0);
+    const blockedCandidateHintSampleLimit = n(manifest?.resolverDiagnostics?.blockedCandidateHintSampleLimit, 0);
     const blockedCandidateHints = formatBlockedCandidateHints(
       manifest?.resolverDiagnostics?.blockedCandidateHints
     );
     if (blockedCandidateHintCount > 0) {
+      const sampleLimit = blockedCandidateHintSampleLimit > 0
+        ? `; manifest sample limit ${blockedCandidateHintSampleLimit}`
+        : '';
       lines.push(
-        `- Resolver blocked absence hints: ${blockedCandidateHintCount}${blockedCandidateHints ? `; examples: ${blockedCandidateHints}` : ''}. Read \`manifest.json.resolverDiagnostics.blockedCandidateHints\` and \`resolver-diagnostics.json.blockedCandidateHints\` before treating affected exports as absent.`
+        `- Resolver blocked absence hints: ${blockedCandidateHintCount}${sampleLimit}${blockedCandidateHints ? `; examples: ${blockedCandidateHints}` : ''}. Read \`manifest.json.resolverDiagnostics.blockedCandidateHints\` and \`resolver-diagnostics.json.blockedCandidateHints\` before treating affected exports as absent.`
       );
     }
   }
