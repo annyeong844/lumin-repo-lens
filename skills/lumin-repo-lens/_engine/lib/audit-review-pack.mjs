@@ -21,6 +21,21 @@ function yesNo(value) {
   return value ? 'yes' : 'no';
 }
 
+function formatBlockedCandidateHints(hints, limit = 3) {
+  if (!Array.isArray(hints) || hints.length === 0) return null;
+  const parts = hints
+    .slice(0, limit)
+    .map((hint) => {
+      const target = hint?.candidatePath ?? hint?.affectedPackageScope;
+      const specifier = hint?.specifier;
+      const reason = hint?.reason;
+      if (!target || !specifier || !reason) return null;
+      return `${target} via ${specifier} (${reason})`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join('; ') : null;
+}
+
 function scanRange(manifest) {
   const sr = manifest?.scanRange ?? {};
   const langs = arr(sr.languages).length > 0 ? sr.languages.join(', ') : 'unknown';
@@ -109,7 +124,7 @@ function typeLane({ discipline, checklistFacts, shapeIndex, functionClones, symb
   }));
 }
 
-function deadSurfaceLane({ fixPlan, deadClassify }) {
+function deadSurfaceLane({ fixPlan, deadClassify, manifest }) {
   const summary = fixPlan?.summary ?? {};
   const safe = n(summary.SAFE_FIX);
   const review = n(summary.REVIEW_FIX);
@@ -120,15 +135,25 @@ function deadSurfaceLane({ fixPlan, deadClassify }) {
     .slice(0, 4)
     .map(([key, value]) => `${key}: ${value}`)
     .join(', ') || 'none recorded';
+  const blockedCandidateHintCount = n(manifest?.resolverDiagnostics?.blockedCandidateHintCount, 0);
+  const blockedCandidateHintSampleLimit = n(manifest?.resolverDiagnostics?.blockedCandidateHintSampleLimit, 0);
+  const blockedCandidateHints = formatBlockedCandidateHints(
+    manifest?.resolverDiagnostics?.blockedCandidateHints
+  );
+  const resolverBlockedHint = blockedCandidateHintCount > 0
+    ? `Resolver blocked absence hints: ${blockedCandidateHintCount}${blockedCandidateHintSampleLimit > 0 ? `; manifest sample limit ${blockedCandidateHintSampleLimit}` : ''}${blockedCandidateHints ? `; examples: ${blockedCandidateHints}` : ''}. Read manifest.json.resolverDiagnostics.blockedCandidateHints and resolver-diagnostics.json.blockedCandidateHints before treating affected exports as absent.`
+    : null;
+  const checks = [
+    `Tier summary: SAFE_FIX ${safe}, REVIEW_FIX ${review}, DEGRADED ${degraded}, MUTED ${muted}. Do not present REVIEW_FIX as removable without screening.`,
+    `Muted/excluded families observed: ${excludedText}. Translate them into plain language for the user.`,
+    ...(resolverBlockedHint ? [resolverBlockedHint] : []),
+    'For each visible cleanup candidate, check whether it is exported through package/API/declaration/test-only surfaces before recommending a change.',
+  ];
   return lane('Lane 3 — Dead Export And Public Surface Review', renderLanePrompt({
     title: 'Dead-export/public-surface reviewer',
     mission: 'Separate real cleanup from public surface, declaration/type-surface, framework, generated, config, and test-consumer false positives.',
     artifacts: ['fix-plan.json', 'dead-classify.json', 'symbols.json', 'manifest.json'],
-    checks: [
-      `Tier summary: SAFE_FIX ${safe}, REVIEW_FIX ${review}, DEGRADED ${degraded}, MUTED ${muted}. Do not present REVIEW_FIX as removable without screening.`,
-      `Muted/excluded families observed: ${excludedText}. Translate them into plain language for the user.`,
-      'For each visible cleanup candidate, check whether it is exported through package/API/declaration/test-only surfaces before recommending a change.',
-    ],
+    checks,
     report: 'Which candidates are safe to leave alone, which need review together, and at most one action-ready cleanup slice.',
   }));
 }
@@ -175,7 +200,7 @@ export function renderAuditReviewPack({
     '',
     topologyLane({ topology, callGraph, barrels }),
     typeLane({ discipline, checklistFacts, shapeIndex, functionClones, symbols }),
-    deadSurfaceLane({ fixPlan, deadClassify }),
+    deadSurfaceLane({ fixPlan, deadClassify, manifest }),
     failureLane({ checklistFacts, manifest }),
     '## Merge Instructions',
     '',
