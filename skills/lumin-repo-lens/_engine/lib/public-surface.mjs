@@ -410,16 +410,37 @@ function extractHtmlModuleScriptTargets(html) {
   return out;
 }
 
-function normalizeHtmlScriptTarget(pkgDir, htmlFile, src) {
+function htmlScriptTargetCandidates(pkgDir, htmlFile, src) {
   if (/^[a-z][a-z0-9+.-]*:/i.test(src) || src.startsWith('//')) return null;
   const clean = src.split(/[?#]/, 1)[0];
   if (!/\.(?:[cm]?[jt]sx?)$/i.test(clean)) return null;
-  if (clean.startsWith('/')) return `./${clean.slice(1)}`;
+  if (clean.startsWith('/')) {
+    const out = [];
+    const htmlRootAbs = path.resolve(path.dirname(htmlFile), `.${clean}`);
+    const htmlRootRel = path.relative(pkgDir, htmlRootAbs).replace(/\\/g, '/');
+    if (!htmlRootRel.startsWith('../') && htmlRootRel !== '..') {
+      out.push({
+        target: `./${htmlRootRel}`,
+        resolutionBase: 'html-directory',
+      });
+    }
+    const packageRootTarget = `./${clean.slice(1)}`;
+    if (!out.some((candidate) => candidate.target === packageRootTarget)) {
+      out.push({
+        target: packageRootTarget,
+        resolutionBase: 'package-root',
+      });
+    }
+    return out;
+  }
   if (clean.startsWith('./') || clean.startsWith('../')) {
     const abs = path.resolve(path.dirname(htmlFile), clean);
     const rel = path.relative(pkgDir, abs).replace(/\\/g, '/');
     if (rel.startsWith('../')) return null;
-    return `./${rel}`;
+    return [{
+      target: `./${rel}`,
+      resolutionBase: 'html-relative',
+    }];
   }
   return null;
 }
@@ -473,27 +494,41 @@ export function collectHtmlModuleEntrypoints({ root, repoMode, includeTests = tr
       let html;
       try { html = readFileSync(htmlFile, 'utf8'); } catch { continue; }
       for (const src of extractHtmlModuleScriptTargets(html)) {
-        const target = normalizeHtmlScriptTarget(pkgDir, htmlFile, src);
-        if (!target) continue;
-        const resolved = mapOutputToSource(pkgDir, target);
-        const resolvedFile = normalizeRel(root, resolved);
+        const targetCandidates = htmlScriptTargetCandidates(pkgDir, htmlFile, src);
+        if (!targetCandidates?.length) continue;
+        const resolvedCandidates = targetCandidates.map((candidate) => {
+          const resolved = mapOutputToSource(pkgDir, candidate.target);
+          return {
+            ...candidate,
+            resolved,
+            resolvedFile: normalizeRel(root, resolved),
+          };
+        });
+        const matched = resolvedCandidates.find((candidate) => fileExists(candidate.resolved));
+        const selected = matched ?? resolvedCandidates[0];
         const evidence = {
           source: 'html-module-script',
           packageName: pkg.name,
           htmlFile: normalizeRel(root, htmlFile),
           src,
-          target,
-          resolvedFile,
+          target: selected.target,
+          resolvedFile: selected.resolvedFile,
           packageDir: normalizeRel(root, pkgDir) || '.',
+          resolutionBase: selected.resolutionBase,
         };
-        if (fileExists(resolved)) {
+        if (matched) {
           entries.push({
-            file: resolvedFile,
+            file: matched.resolvedFile,
             evidence,
           });
         } else {
           unresolved.push({
             ...evidence,
+            targetCandidates: resolvedCandidates.map((candidate) => ({
+              target: candidate.target,
+              resolvedFile: candidate.resolvedFile,
+              resolutionBase: candidate.resolutionBase,
+            })),
             reason: 'html-module-script-target-missing',
             effect:
               'HTML module script target was not found under the package root; ' +
