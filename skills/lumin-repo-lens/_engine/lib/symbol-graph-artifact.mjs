@@ -30,6 +30,13 @@ function buildFilesWithParseErrors({ root, entries }) {
   return filesWithParseErrors.sort();
 }
 
+function sortNamespaceReExportDiagnostics(items) {
+  return [...(items ?? [])]
+    .sort((a, b) =>
+      `${a.consumerFile ?? ''}|${a.exportedName ?? ''}|${a.targetFile ?? ''}|${a.kind ?? ''}|${a.line ?? ''}`
+        .localeCompare(`${b.consumerFile ?? ''}|${b.exportedName ?? ''}|${b.targetFile ?? ''}|${b.kind ?? ''}|${b.line ?? ''}`));
+}
+
 function buildTopUnresolvedSpecifiers({ unresolvedInternalByPrefix, prefixExamples }) {
   return [...unresolvedInternalByPrefix.entries()]
     .sort((a, b) => b[1] - a[1])
@@ -251,6 +258,7 @@ export function buildSymbolsArtifact({
   symbolFanIn,
   fanInByIdentity,
   fanInByIdentitySpace,
+  namespaceReExportDiagnostics = [],
   anyContaminationFacts,
   incremental = null,
 }) {
@@ -282,6 +290,7 @@ export function buildSymbolsArtifact({
         generatedConsumerBlindZones: true,
         generatedVirtualSurfaces: true,
         nonSourceAssetImports: true,
+        namespaceReExportDiagnostics: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -331,6 +340,7 @@ export function buildSymbolsArtifact({
     topSymbolFanIn: symbolFanIn.slice(0, 50),
     fanInByIdentity,
     fanInByIdentitySpace: fanInByIdentitySpace ?? {},
+    namespaceReExportDiagnostics: sortNamespaceReExportDiagnostics(namespaceReExportDiagnostics),
     helperOwnersByIdentity: anyContaminationFacts?.helperOwnersByIdentity ?? {},
     typeOwnersByIdentity: anyContaminationFacts?.typeOwnersByIdentity ?? {},
     defIndex: buildPlainDefIndex({ root, defIndex }),

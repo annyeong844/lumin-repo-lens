@@ -33,12 +33,17 @@ import {
   findGoModule,
   resolveGoImport,
 } from '../lib/tree-sitter-langs.mjs';
+import { createProducerPhaseTimer } from '../lib/producer-phase-timing.mjs';
 
 const cli = parseCliArgs({
   incremental: { type: 'boolean', default: false },
   'include-type-edges': { type: 'boolean', default: false },
 });
 const { root, output, verbose } = cli;
+const phaseTimer = createProducerPhaseTimer({
+  producer: 'measure-topology.mjs',
+  output,
+});
 const isIncremental = !!cli.raw.incremental;
 // Two lenses for SCC analysis:
 //   default (runtime lens) — type-only imports excluded; tracks what actually
@@ -61,11 +66,11 @@ const tsEnabled = await isTreeSitterAvailable();
 const langList = [...JS_FAMILY_LANGS];
 if (pyEnabled) langList.push('py');
 if (tsEnabled) langList.push('go');
-const files = collectFiles(root, {
+const files = phaseTimer.runPhase('collect-files', () => collectFiles(root, {
   includeTests: cli.includeTests,
   exclude: cli.exclude,
   languages: langList,
-});
+}));
 const pyTotal = files.filter((f) => f.endsWith('.py')).length;
 const goTotal = files.filter((f) => f.endsWith('.go')).length;
 console.error(
@@ -232,6 +237,7 @@ if (isIncremental) {
 }
 
 // Pre-batch Python files among the changed set (one subprocess).
+const processChangedFilesStarted = Date.now();
 const changedPy = changed.filter((f) => f.endsWith('.py'));
 if (changedPy.length > 0 && pyEnabled) {
   try {
@@ -258,8 +264,10 @@ for (const f of changed) {
   if (payload.readError) continue;
   nextCache.entries[f] = { ...(nextCache.entries[f] ?? {}), ...payload };
 }
+phaseTimer.recordPhase('process-changed-files', Date.now() - processChangedFilesStarted);
 
 // ─── aggregate ───────────────────────────────────────────
+const assembleGraphStarted = Date.now();
 const nodes = new Map();
 const edges = [];
 let totalLoc = 0;
@@ -421,9 +429,13 @@ const artifact = {
     .map(([k, n]) => ({ edge: k, count: n })),
   largestFiles: bigFiles.slice(0, 20),
 };
+phaseTimer.recordPhase('assemble-graph', Date.now() - assembleGraphStarted);
 
 const outPath = path.join(output, 'topology.json');
+const writeArtifactStarted = Date.now();
 writeFileSync(outPath, JSON.stringify(artifact, null, 2));
+phaseTimer.recordPhase('write-artifact', Date.now() - writeArtifactStarted);
+phaseTimer.write();
 
 const lensLabel = includeTypeEdges ? 'static' : 'runtime';
 console.log(`[m2s1] ${files.length} files, ${totalLoc.toLocaleString()} LOC, ${edges.length} edges (lens: ${lensLabel})`);

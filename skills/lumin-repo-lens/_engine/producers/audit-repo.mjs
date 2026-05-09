@@ -71,6 +71,10 @@ import {
   refreshManifestEvidence,
 } from '../lib/audit-manifest.mjs';
 import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
+import {
+  clearProducerPhaseTiming,
+  readProducerPhaseTiming,
+} from '../lib/producer-phase-timing.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HELP_TEXT = `
@@ -411,13 +415,19 @@ function collectArtifactSizeSummary() {
 }
 
 function buildProducerPerformanceArtifact(generated) {
-  const producers = commandsRun.map((entry) => ({
-    name: entry.step,
-    status: entry.status,
-    wallMs: typeof entry.ms === 'number' ? entry.ms : null,
-    ...(entry.memory ? { memory: entry.memory } : {}),
-    ...(entry.stderr ? { stderrSnippet: entry.stderr } : {}),
-  }));
+  let phaseSupportCount = 0;
+  const producers = commandsRun.map((entry) => {
+    const phaseTiming = readProducerPhaseTiming(OUT, entry.step);
+    if (phaseTiming?.phases?.length > 0) phaseSupportCount++;
+    return {
+      name: entry.step,
+      status: entry.status,
+      wallMs: typeof entry.ms === 'number' ? entry.ms : null,
+      ...(phaseTiming?.phases?.length > 0 ? { phases: phaseTiming.phases } : {}),
+      ...(entry.memory ? { memory: entry.memory } : {}),
+      ...(entry.stderr ? { stderrSnippet: entry.stderr } : {}),
+    };
+  });
   const skippedEntries = skipped.map((entry) => ({
     name: entry.step,
     status: 'skipped',
@@ -456,6 +466,7 @@ function buildProducerPerformanceArtifact(generated) {
       artifactCount: artifacts.producedCount,
       totalArtifactBytes: artifacts.totalBytes,
       maxObservedOrchestratorRssBytes,
+      phaseSupportCount,
     },
     memory: {
       measurement: 'orchestrator-process-snapshots',
@@ -479,6 +490,7 @@ function summarizeProducerPerformance(performanceArtifact) {
     totalWallMs: performanceArtifact.summary?.totalWallMs ?? 0,
     artifactCount: performanceArtifact.summary?.artifactCount ?? 0,
     totalArtifactBytes: performanceArtifact.summary?.totalArtifactBytes ?? 0,
+    phaseSupportCount: performanceArtifact.summary?.phaseSupportCount ?? 0,
     largestArtifacts: performanceArtifact.artifacts?.largest ?? [],
     maxObservedOrchestratorRssBytes:
       performanceArtifact.summary?.maxObservedOrchestratorRssBytes ?? 0,
@@ -549,6 +561,7 @@ function runStep(scriptRelPath, { required = false, precondition = null, reason 
   ];
   const t0 = Date.now();
   const memoryBefore = memorySnapshot();
+  clearProducerPhaseTiming(OUT, name);
   try {
     const out = execFileSync(process.execPath, argv, {
       stdio: values.verbose ? 'inherit' : ['ignore', 'pipe', 'pipe'],

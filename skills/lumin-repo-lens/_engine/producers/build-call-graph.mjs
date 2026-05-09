@@ -19,9 +19,14 @@ import {
   buildExportedObjectMaps,
   staticMemberPropertyName,
 } from '../lib/call-graph-bounded.mjs';
+import { createProducerPhaseTimer } from '../lib/producer-phase-timing.mjs';
 
 const cli = parseCliArgs();
 const { root: ROOT, output } = cli;
+const phaseTimer = createProducerPhaseTimer({
+  producer: 'build-call-graph.mjs',
+  output,
+});
 
 const repoMode = detectRepoMode(ROOT);
 const aliasMap = buildAliasMap(ROOT, repoMode);
@@ -333,12 +338,13 @@ function analyzeFile(filePath) {
 }
 
 // ─── 전체 스캔 ────────────────────────────────────────────
-const files = collectFiles();
+const files = phaseTimer.runPhase('collect-files', () => collectFiles());
 console.log(`[scan] ${files.length} files`);
 
 const fileInfo = new Map();
 let parseErrors = 0;
 const parseErrorDetails = [];
+const analyzeFilesStarted = Date.now();
 for (const f of files) {
   try {
     fileInfo.set(f, analyzeFile(f));
@@ -347,9 +353,11 @@ for (const f of files) {
     parseErrorDetails.push(parseErrorRecord(f, error));
   }
 }
+phaseTimer.recordPhase('analyze-files', Date.now() - analyzeFilesStarted);
 console.log(`[parse errors] ${parseErrors}`);
 
 // ─── cross-file call edge 구축 ───────────────────────────
+const assembleCallGraphStarted = Date.now();
 const callEdges = []; // { from, to, callee, count }
 const edgeMap = new Map(); // key: "from→to→callee" -> count
 const boundedOutMemberCallsByAbsFile = new Map();
@@ -595,9 +603,11 @@ console.log(`\n파일별 prototype 호출 Top 10:`);
 for (const [f, n] of [...protoByFile.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10)) {
   console.log(`  ${n.toString().padStart(3)}  ${relPath(ROOT, f)}`);
 }
+phaseTimer.recordPhase('assemble-call-graph', Date.now() - assembleCallGraphStarted);
 
 // 저장
 const outPath = path.join(output, 'call-graph.json');
+const writeArtifactStarted = Date.now();
 writeFileSync(outPath, JSON.stringify({
   meta: {
     generated: new Date().toISOString(),
@@ -642,6 +652,8 @@ writeFileSync(outPath, JSON.stringify({
     owner, methods: Object.fromEntries(m), total: [...m.values()].reduce((x, y) => x + y, 0),
   })),
 }, null, 2));
+phaseTimer.recordPhase('write-artifact', Date.now() - writeArtifactStarted);
+phaseTimer.write();
 
 console.log(`[call-graph] edges: ${callEdges.length}, prototype calls: ${totalProtoCalls}, semi-dead: ${semiDeadCount}`);
 console.log(`[call-graph] saved → ${outPath}`);

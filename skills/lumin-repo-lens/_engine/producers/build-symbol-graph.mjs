@@ -57,6 +57,7 @@ import {
   findGoModule,
   resolveGoImport,
 } from '../lib/tree-sitter-langs.mjs';
+import { createProducerPhaseTimer } from '../lib/producer-phase-timing.mjs';
 
 const cli = parseCliArgs({
   incremental: { type: 'boolean', default: false },
@@ -66,6 +67,10 @@ const cli = parseCliArgs({
   'generated-artifacts': { type: 'string', default: 'default' },
 });
 const { root: ROOT, output, verbose } = cli;
+const phaseTimer = createProducerPhaseTimer({
+  producer: 'build-symbol-graph.mjs',
+  output,
+});
 let GENERATED_ARTIFACTS_MODE = 'default';
 try {
   GENERATED_ARTIFACTS_MODE = normalizeGeneratedArtifactsMode(cli.raw?.['generated-artifacts']);
@@ -151,13 +156,13 @@ const contextFingerprint = buildContextFingerprint({
     treeSitterEnabled: tsEnabled,
   },
 });
-const snapshot = buildRepoSnapshot({
+const snapshot = phaseTimer.runPhase('snapshot', () => buildRepoSnapshot({
   root: ROOT,
   includeTests: cli.includeTests,
   exclude: cli.exclude,
   languages: langList,
   contextFingerprint,
-});
+}));
 const snapshotEntries = Object.values(snapshot.files);
 const files = snapshotEntries.map((entry) => entry.absPath);
 const pyTotal = files.filter((f) => f.endsWith('.py')).length;
@@ -194,6 +199,7 @@ let changedFiles = 0;
 let reusedFiles = 0;
 let invalidatedFiles = 0;
 
+const cacheClassificationStarted = Date.now();
 for (const entry of snapshotEntries) {
   currentStrictKeys.add(strictCacheKeyForEntry(entry));
 
@@ -224,6 +230,7 @@ for (const entry of snapshotEntries) {
   changedFiles++;
   changed.push(entry.absPath);
 }
+phaseTimer.recordPhase('cache-classification', Date.now() - cacheClassificationStarted);
 
 const droppedFiles = Object.keys(priorCache.entries ?? {})
   .filter((key) => !currentStrictKeys.has(key)).length;
@@ -235,6 +242,7 @@ if (incrementalEnabled) {
 }
 
 // Pre-batch Python files among the changed set.
+const extractChangedFilesStarted = Date.now();
 const changedPy = changed.filter((f) => f.endsWith('.py'));
 // v1.8.2: collect non-fatal failure records for explicit inclusion in
 // the artifact. Previously these went to stderr (or got silently
@@ -345,11 +353,13 @@ for (const f of changed) {
     }
   }
 }
+phaseTimer.recordPhase('extract-changed-files', Date.now() - extractChangedFilesStarted);
 // Cached parse errors still count in aggregate.
 for (const [f, entry] of Object.entries(nextCache.entries)) {
   if (!changed.includes(f) && entry?.parseError) parseErrors++;
 }
 
+const assembleSymbolGraphStarted = Date.now();
 const fileData = new Map();
 for (const [f, entry] of Object.entries(nextCache.entries)) {
   if (entry.parseError || entry.defs === undefined) continue;
@@ -526,6 +536,9 @@ function addGeneratedVirtualConsumer(consumerFile, use, surface, exported) {
 }
 
 const namespaceReExportsByFile = new Map();
+const namedReExportsByFile = new Map();
+const namespaceReExportDiagnostics = [];
+
 function addNamespaceReExport(barrelFile, exportedName, targetFile, sourceSpec) {
   if (!namespaceReExportsByFile.has(barrelFile)) {
     namespaceReExportsByFile.set(barrelFile, new Map());
@@ -540,13 +553,98 @@ function getNamespaceReExport(barrelFile, exportedName) {
   return namespaceReExportsByFile.get(barrelFile)?.get(exportedName) ?? null;
 }
 
+function addNamedReExport(barrelFile, exportedName, targetFile, sourceSpec) {
+  if (!namedReExportsByFile.has(barrelFile)) {
+    namedReExportsByFile.set(barrelFile, new Map());
+  }
+  namedReExportsByFile.get(barrelFile).set(exportedName, {
+    targetFile,
+    sourceSpec,
+  });
+}
+
+function getNamedReExport(barrelFile, exportedName) {
+  return namedReExportsByFile.get(barrelFile)?.get(exportedName) ?? null;
+}
+
+function namespaceReExportChainEntry(kind, barrelFile, exportedName, targetFile, sourceSpec) {
+  return {
+    kind,
+    file: relPath(ROOT, barrelFile),
+    exportedName,
+    targetFile: relPath(ROOT, targetFile),
+    source: sourceSpec,
+  };
+}
+
+function resolveNamespaceReExport(barrelFile, exportedName, seen = new Set()) {
+  const key = `${barrelFile}::${exportedName}`;
+  if (seen.has(key)) return null;
+  seen.add(key);
+
+  const direct = getNamespaceReExport(barrelFile, exportedName);
+  if (direct) {
+    return {
+      targetFile: direct.targetFile,
+      sourceSpec: direct.sourceSpec,
+      chain: [
+        namespaceReExportChainEntry(
+          'namespace-reexport',
+          barrelFile,
+          exportedName,
+          direct.targetFile,
+          direct.sourceSpec,
+        ),
+      ],
+    };
+  }
+
+  const named = getNamedReExport(barrelFile, exportedName);
+  if (!named) return null;
+  const nested = resolveNamespaceReExport(named.targetFile, exportedName, seen);
+  if (!nested) return null;
+  return {
+    targetFile: nested.targetFile,
+    sourceSpec: nested.sourceSpec,
+    chain: [
+      namespaceReExportChainEntry(
+        'named-reexport',
+        barrelFile,
+        exportedName,
+        named.targetFile,
+        named.sourceSpec,
+      ),
+      ...(nested.chain ?? []),
+    ],
+  };
+}
+
+function addNamespaceReExportDiagnostic(consumerFile, importFile, use, reExport) {
+  namespaceReExportDiagnostics.push({
+    kind: 'opaque-namespace-escape',
+    reason: 'namespace-object-escaped',
+    consumerFile: relPath(ROOT, consumerFile),
+    importFile: relPath(ROOT, importFile),
+    exportedName: use.name,
+    targetFile: relPath(ROOT, reExport.targetFile),
+    source: use.fromSpec,
+    ...(typeof use.line === 'number' ? { line: use.line } : {}),
+    ...(Array.isArray(reExport.chain) && reExport.chain.length > 0 ? { chain: reExport.chain } : {}),
+  });
+}
+
 for (const [barrelFile, info] of fileData) {
   for (const use of info.uses ?? []) {
-    if (use?.kind !== 'reExportNamespace' || !use.name || use.name === '*') continue;
+    if (use?.kind !== 'reExportNamespace' && use?.kind !== 'reExport') continue;
+    if (!use.name || use.name === '*' || use.typeOnly === true) continue;
     const target = resolveSpecifier(barrelFile, use);
     if (!target || target === 'EXTERNAL' || target === 'UNRESOLVED_INTERNAL') continue;
     if (isGeneratedVirtualResolution(target) || isNonSourceAssetResolution(target)) continue;
-    addNamespaceReExport(barrelFile, use.name, target, use.fromSpec);
+    if (use.kind === 'reExportNamespace') {
+      addNamespaceReExport(barrelFile, use.name, target, use.fromSpec);
+    } else {
+      addNamedReExport(barrelFile, use.name, target, use.fromSpec);
+    }
   }
 }
 
@@ -636,12 +734,13 @@ for (const [consumerFile, info] of fileData) {
       continue;
     }
     if (u.kind === 'imported-namespace-member' || u.kind === 'imported-namespace-escape') {
-      const reExport = getNamespaceReExport(target, u.name);
+      const reExport = resolveNamespaceReExport(target, u.name);
       if (!reExport) continue;
       totalUses++;
       resolvedInternalUses++;
       addResolvedInternalEdge(consumerFile, reExport.targetFile, u);
       if (u.kind === 'imported-namespace-escape') {
+        addNamespaceReExportDiagnostic(consumerFile, target, u, reExport);
         if (!namespaceUsers.has(reExport.targetFile)) namespaceUsers.set(reExport.targetFile, new Set());
         namespaceUsers.get(reExport.targetFile).add(consumerFile);
       } else if (u.memberName) {
@@ -897,6 +996,7 @@ console.log(`\n  ─ production dead 샘플 (최대 25) ─`);
 for (const d of deadInProd.slice(0, 25)) {
   console.log(`    ${d.file}:${d.line}  ${d.symbol}  (${d.kind})`);
 }
+phaseTimer.recordPhase('assemble-symbol-graph', Date.now() - assembleSymbolGraphStarted);
 
 // ─── 저장 ─────────────────────────────────────────────────
 const outPath = path.join(output, 'symbols.json');
@@ -933,6 +1033,7 @@ const artifact = buildSymbolsArtifact({
   symbolFanIn,
   fanInByIdentity,
   fanInByIdentitySpace,
+  namespaceReExportDiagnostics,
   anyContaminationFacts,
   incremental: {
     enabled: incrementalEnabled,
@@ -946,6 +1047,9 @@ const artifact = buildSymbolsArtifact({
     reason: incrementalEnabled ? null : 'disabled-by-flag',
   },
 });
+const writeArtifactStarted = Date.now();
 writeFileSync(outPath, JSON.stringify(artifact, null, 2));
+phaseTimer.recordPhase('write-artifact', Date.now() - writeArtifactStarted);
+phaseTimer.write();
 console.log(`[symbols] ${files.length} files, dead production candidates: ${deadInProd.length}`);
 console.log(`[symbols] saved → ${outPath}`);
