@@ -991,6 +991,9 @@ if (sourceUseResolverStageStatsBefore && sourceUseResolverStageStatsAfter) {
       `sourceUseResolverStage${stem}CacheHits`,
       (after.cacheHits ?? 0) - (before.cacheHits ?? 0));
     phaseTimer.setCounter(
+      `sourceUseResolverStage${stem}CacheMisses`,
+      (after.cacheMisses ?? 0) - (before.cacheMisses ?? 0));
+    phaseTimer.setCounter(
       `sourceUseResolverStage${stem}Ms`,
       (after.wallMs ?? 0) - (before.wallMs ?? 0));
   }

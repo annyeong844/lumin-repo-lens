@@ -142,6 +142,7 @@ function createResolverStageStats() {
     terminalResults: 0,
     count: 0,
     cacheHits: 0,
+    cacheMisses: 0,
     wallMs: 0,
   }]));
 }
@@ -154,6 +155,7 @@ function cloneResolverStageStats(stats) {
       terminalResults: Math.max(0, Math.round(stage.terminalResults ?? 0)),
       count: Math.max(0, Math.round(stage.count ?? 0)),
       cacheHits: Math.max(0, Math.round(stage.cacheHits ?? 0)),
+      cacheMisses: Math.max(0, Math.round(stage.cacheMisses ?? 0)),
       wallMs: Math.max(0, Math.round(stage.wallMs ?? 0)),
     }];
   }));
@@ -356,6 +358,7 @@ function resolveScopedBaseUrlEntry(spec, entry, probeCache, stageStats) {
     if (stageStats) stageStats.cacheHits++;
     return probeCache.get(key);
   }
+  if (probeCache && stageStats) stageStats.cacheMisses++;
 
   const literal = path.resolve(entry.baseUrlDir, spec);
   const hit = probeTarget(literal);
