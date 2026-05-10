@@ -35,6 +35,7 @@
 
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { mapOutputToSource } from './alias-map.mjs';
 import { fileExists, dirExists, relPath } from './paths.mjs';
 import { fileIsInsideScope, matchSpec } from './tsconfig-paths.mjs';
@@ -120,6 +121,43 @@ export function isNonSourceAssetResolution(r) {
 }
 
 export { isGeneratedVirtualResolution };
+
+const RESOLVER_STAGE_NAMES = Object.freeze([
+  'invalid',
+  'memoHit',
+  'relative',
+  'scopedTsconfig',
+  'scopedBaseUrl',
+  'exactAlias',
+  'wildcardAlias',
+  'hashWildcard',
+  'rootPrefix',
+  'external',
+  'canonicalize',
+]);
+
+function createResolverStageStats() {
+  return Object.fromEntries(RESOLVER_STAGE_NAMES.map((name) => [name, {
+    attempts: 0,
+    terminalResults: 0,
+    count: 0,
+    cacheHits: 0,
+    wallMs: 0,
+  }]));
+}
+
+function cloneResolverStageStats(stats) {
+  return Object.fromEntries(RESOLVER_STAGE_NAMES.map((name) => {
+    const stage = stats[name] ?? {};
+    return [name, {
+      attempts: Math.max(0, Math.round(stage.attempts ?? 0)),
+      terminalResults: Math.max(0, Math.round(stage.terminalResults ?? 0)),
+      count: Math.max(0, Math.round(stage.count ?? 0)),
+      cacheHits: Math.max(0, Math.round(stage.cacheHits ?? 0)),
+      wallMs: Math.max(0, Math.round(stage.wallMs ?? 0)),
+    }];
+  }));
+}
 
 // ── Shared path-probe helper ─────────────────────────────
 //
@@ -301,18 +339,45 @@ function firstSegmentCandidate(baseUrlDir, spec) {
   return path.resolve(baseUrlDir, parts[0]);
 }
 
-function resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls) {
+const SCOPED_BASEURL_NO_MATCH = Symbol('scoped-baseurl-no-match');
+
+function scopedBaseUrlProbeCacheKey(entry, spec) {
+  return [
+    entry.configPath ?? '',
+    entry.scopeDir ?? '',
+    entry.baseUrlDir ?? '',
+    spec,
+  ].join('\0');
+}
+
+function resolveScopedBaseUrlEntry(spec, entry, probeCache, stageStats) {
+  const key = scopedBaseUrlProbeCacheKey(entry, spec);
+  if (probeCache?.has(key)) {
+    if (stageStats) stageStats.cacheHits++;
+    return probeCache.get(key);
+  }
+
+  const literal = path.resolve(entry.baseUrlDir, spec);
+  const hit = probeTarget(literal);
+  if (hit) {
+    probeCache?.set(key, hit);
+    return hit;
+  }
+
+  const firstSegment = firstSegmentCandidate(entry.baseUrlDir, spec);
+  const result = firstSegment && (dirExists(firstSegment) || probeTarget(firstSegment))
+    ? 'UNRESOLVED_INTERNAL'
+    : SCOPED_BASEURL_NO_MATCH;
+  probeCache?.set(key, result);
+  return result;
+}
+
+function resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls, probeCache, stageStats) {
   for (const entry of scopedBaseUrls) {
     if (!fileIsInsideScope(fromFile, entry.scopeDir)) continue;
 
-    const literal = path.resolve(entry.baseUrlDir, spec);
-    const hit = probeTarget(literal);
-    if (hit) return hit;
-
-    const firstSegment = firstSegmentCandidate(entry.baseUrlDir, spec);
-    if (firstSegment && (dirExists(firstSegment) || probeTarget(firstSegment))) {
-      return 'UNRESOLVED_INTERNAL';
-    }
+    const result = resolveScopedBaseUrlEntry(spec, entry, probeCache, stageStats);
+    if (result !== SCOPED_BASEURL_NO_MATCH) return result;
   }
   return undefined;
 }
@@ -607,30 +672,105 @@ export function makeResolver(root, aliasMap) {
         b.scopeDir.length - a.scopeDir.length)
     : [];
 
+  const stageStats = createResolverStageStats();
+  const scopedBaseUrlProbeCache = new Map();
+
+  function recordInstantStage(name) {
+    const stage = stageStats[name];
+    if (!stage) return;
+    stage.attempts++;
+    stage.terminalResults++;
+    stage.count++;
+  }
+
+  function runResolverStage(name, fn) {
+    const stage = stageStats[name];
+    const started = performance.now();
+    if (stage) stage.attempts++;
+    const hit = fn();
+    if (stage) {
+      stage.wallMs += performance.now() - started;
+      if (hit !== undefined) {
+        stage.terminalResults++;
+        stage.count++;
+      }
+    }
+    return hit;
+  }
+
   const resolveRaw = function resolve(fromFile, spec) {
-    if (!spec || typeof spec !== 'string') return null;
-    if (spec.startsWith('.')) return resolveRelative(fromFile, spec);
+    if (!spec || typeof spec !== 'string') {
+      recordInstantStage('invalid');
+      return null;
+    }
+    if (spec.startsWith('.')) {
+      return runResolverStage('relative', () => resolveRelative(fromFile, spec));
+    }
 
     let hit;
-    hit = resolveScopedTsconfig(fromFile, spec, scoped, aliasMap);
+    hit = runResolverStage('scopedTsconfig', () =>
+      resolveScopedTsconfig(fromFile, spec, scoped, aliasMap));
     if (hit !== undefined) return hit;
-    hit = resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls);
+    hit = runResolverStage('scopedBaseUrl', () =>
+      resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls, scopedBaseUrlProbeCache, stageStats.scopedBaseUrl));
     if (hit !== undefined) return hit;
-    hit = resolveExactAlias(spec, aliasMap);
+    hit = runResolverStage('exactAlias', () => resolveExactAlias(spec, aliasMap));
     if (hit !== undefined) return hit;
-    hit = resolveWildcard(spec, aliasMap);
+    hit = runResolverStage('wildcardAlias', () => resolveWildcard(spec, aliasMap));
     if (hit !== undefined) return hit;
-    hit = resolveHashWildcard(spec, aliasMap);
+    hit = runResolverStage('hashWildcard', () => resolveHashWildcard(spec, aliasMap));
     if (hit !== undefined) return hit;
-    hit = resolveRootPrefix(spec, root);
+    hit = runResolverStage('rootPrefix', () => resolveRootPrefix(spec, root));
     if (hit !== undefined) return hit;
 
+    recordInstantStage('external');
     return 'EXTERNAL';
   };
 
   // Wrap: canonicalize any file path. Null / sentinels pass through.
   // See `canonicalize` docblock for symlink-aliasing rationale.
-  return function resolve(fromFile, spec) {
-    return canonicalize(resolveRaw(fromFile, spec));
+  const memo = new Map();
+  const memoStats = { hits: 0, misses: 0 };
+
+  function memoKey(fromFile, spec) {
+    return `${String(fromFile)}\0${String(spec)}`;
+  }
+
+  function resolve(fromFile, spec) {
+    const key = memoKey(fromFile, spec);
+    if (memo.has(key)) {
+      const started = performance.now();
+      memoStats.hits++;
+      const value = memo.get(key);
+      const stage = stageStats.memoHit;
+      stage.count++;
+      stage.wallMs += performance.now() - started;
+      return value;
+    }
+    memoStats.misses++;
+    const rawValue = resolveRaw(fromFile, spec);
+    const canonicalizeStarted = performance.now();
+    const value = canonicalize(rawValue);
+    const canonicalizeStage = stageStats.canonicalize;
+    canonicalizeStage.attempts++;
+    canonicalizeStage.terminalResults++;
+    canonicalizeStage.count++;
+    canonicalizeStage.wallMs += performance.now() - canonicalizeStarted;
+    memo.set(key, value);
+    return value;
+  }
+
+  resolve.memoStats = function memoStatsSnapshot() {
+    return {
+      hits: memoStats.hits,
+      misses: memoStats.misses,
+      size: memo.size,
+    };
   };
+
+  resolve.stageStats = function stageStatsSnapshot() {
+    return cloneResolverStageStats(stageStats);
+  };
+
+  return resolve;
 }

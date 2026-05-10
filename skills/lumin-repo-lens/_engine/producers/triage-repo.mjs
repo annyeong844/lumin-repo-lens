@@ -11,6 +11,7 @@ import { collectFiles } from '../lib/collect-files.mjs';
 import { isTestLikePath } from '../lib/test-paths.mjs';
 import { relPath } from '../lib/paths.mjs';
 import { readJsonFile, producerMetaBase } from '../lib/artifacts.mjs';
+import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
 
 const cli = parseCliArgs();
 const { root, output, verbose, includeTests } = cli;
@@ -29,10 +30,32 @@ const repoMode = detectRepoMode(root);
 // v1.8.3: count `.mts` / `.cts` alongside `.ts`/`.tsx` and the full JS
 // family (`.jsx`, `.cjs`). Previously these were dropped from the triage
 // count, making dual-emit packages look half their actual size.
-const tsFiles = collectFiles(root, { languages: ['ts', 'tsx', 'mts', 'cts'], includeTests, exclude: cli.exclude });
-const jsFiles = collectFiles(root, { languages: ['js', 'jsx', 'mjs', 'cjs'], includeTests, exclude: cli.exclude });
-const pyFiles = collectFiles(root, { languages: ['py'], includeTests, exclude: cli.exclude });
-const goFiles = collectFiles(root, { languages: ['go'], includeTests, exclude: cli.exclude });
+const TS_LANGS = ['ts', 'tsx', 'mts', 'cts'];
+const JS_LANGS = JS_FAMILY_LANGS.filter((lang) => !TS_LANGS.includes(lang));
+const TRIAGE_LANGS = [...TS_LANGS, ...JS_LANGS, 'py', 'go'];
+const allFiles = collectFiles(root, { languages: TRIAGE_LANGS, includeTests, exclude: cli.exclude });
+
+function filesForLanguages(files, languages) {
+  const extSet = new Set(languages.map((lang) => '.' + lang));
+  return files.filter((file) => extSet.has(path.extname(file)));
+}
+
+const tsFiles = filesForLanguages(allFiles, TS_LANGS);
+const jsFiles = filesForLanguages(allFiles, JS_LANGS);
+const pyFiles = filesForLanguages(allFiles, ['py']);
+const goFiles = filesForLanguages(allFiles, ['go']);
+const fileCollectionPerformance = {
+  strategy: 'single-pass-language-split',
+  collectFilesCalls: 1,
+  languages: TRIAGE_LANGS,
+  totalFilesCollected: allFiles.length,
+  languageFiles: {
+    ts: tsFiles.length,
+    js: jsFiles.length,
+    py: pyFiles.length,
+    go: goFiles.length,
+  },
+};
 
 const totalFiles = tsFiles.length + jsFiles.length + pyFiles.length + goFiles.length;
 let totalLoc = 0;
@@ -182,6 +205,9 @@ const artifact = {
   topDirs,
   mode: repoMode.mode,
   hypotheses,
+  performance: {
+    fileCollection: fileCollectionPerformance,
+  },
 };
 
 const outPath = path.join(output, 'triage.json');

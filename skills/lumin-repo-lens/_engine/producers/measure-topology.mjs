@@ -17,6 +17,10 @@ import { collectFiles } from '../lib/collect-files.mjs';
 import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
 import { relPath, buildSubmoduleResolver } from '../lib/paths.mjs';
 import {
+  MODULE_EDGE_SCANNER_POLICY_VERSION,
+  scanJsModuleEdgesFast,
+} from '../lib/js-module-edge-scanner.mjs';
+import {
   loadCache,
   saveCache,
   pickChangedFiles,
@@ -71,6 +75,7 @@ const files = phaseTimer.runPhase('collect-files', () => collectFiles(root, {
   exclude: cli.exclude,
   languages: langList,
 }));
+phaseTimer.setCounter('filesCollected', files.length);
 const pyTotal = files.filter((f) => f.endsWith('.py')).length;
 const goTotal = files.filter((f) => f.endsWith('.go')).length;
 console.error(
@@ -86,6 +91,29 @@ if (goTotal > 0 && verbose) console.error(`[m2s1] go.mod: ${goModule?.moduleName
 //   else → oxc-parser (TypeScript/JavaScript)
 let pyResults = new Map();
 let tsResults = new Map(); // tree-sitter results (go, future: rust, java...)
+const scannerRiskCounts = new Map();
+
+function incrementScannerRisk(reason) {
+  const key = String(reason ?? 'unknown');
+  scannerRiskCounts.set(key, (scannerRiskCounts.get(key) ?? 0) + 1);
+  phaseTimer.incrementCounter(`scannerRisk_${key}`);
+}
+
+function resolveTopologyEdge(fromFile, source, flags, edgesOut) {
+  const target = resolve(fromFile, source);
+  if (target === 'EXTERNAL') return 'external';
+  if (isNonSourceAssetResolution(target)) return 'asset';
+  if (isResolvedFile(target)) {
+    edgesOut.push({
+      to: target,
+      typeOnly: !!flags.typeOnly,
+      ...(flags.dynamic ? { dynamic: true } : {}),
+      ...(flags.reExport ? { reExport: true } : {}),
+    });
+    return 'resolved';
+  }
+  return 'unresolved';
+}
 
 function processFilePython(f) {
   const r = pyResults.get(f);
@@ -136,10 +164,35 @@ function processFileTs(f) {
   } catch {
     return { readError: true };
   }
+  phaseTimer.incrementCounter('jsFilesProcessed');
+  phaseTimer.incrementCounter('jsBytesRead', Buffer.byteLength(src, 'utf8'));
   const loc = src.split('\n').length;
   const edgesOut = [];
   let externalCount = 0;
   let unresolvedCount = 0;
+
+  const scannerStarted = Date.now();
+  phaseTimer.incrementCounter('scannerFilesAttempted');
+  const scanned = scanJsModuleEdgesFast(src, { filename: f });
+  phaseTimer.incrementCounter('scannerMs', Date.now() - scannerStarted);
+  if (scanned.ok) {
+    phaseTimer.incrementCounter('scannerAcceptedFiles');
+    for (const edge of scanned.edges ?? []) {
+      const outcome = resolveTopologyEdge(f, edge.source, edge, edgesOut);
+      if (outcome === 'external') externalCount++;
+      else if (outcome === 'unresolved') unresolvedCount++;
+    }
+    return {
+      loc: scanned.loc ?? loc,
+      edges: edgesOut,
+      externalCount,
+      unresolvedCount,
+      parseError: false,
+      scannerMode: 'fast-module-edge',
+    };
+  }
+  phaseTimer.incrementCounter('scannerFallbackFiles');
+  for (const reason of scanned.risk ?? []) incrementScannerRisk(reason);
 
   // v0.6.8 FP-18 sync-back: dynamic `import('./x')` edges must surface in
   // topology — SKILL.md promises dynamic imports are ALWAYS in both the
@@ -155,13 +208,9 @@ function processFileTs(f) {
       const s = node.source;
       if (s && (s.type === 'Literal' || s.type === 'StringLiteral') &&
           typeof s.value === 'string') {
-        const target = resolve(f, s.value);
-        if (target === 'EXTERNAL') externalCount++;
-        else if (isNonSourceAssetResolution(target)) {
-          // Asset imports do not create JS module topology edges.
-        }
-        else if (isResolvedFile(target)) edgesOut.push({ to: target, typeOnly: false, dynamic: true });
-        else unresolvedCount++;
+        const outcome = resolveTopologyEdge(f, s.value, { typeOnly: false, dynamic: true }, edgesOut);
+        if (outcome === 'external') externalCount++;
+        else if (outcome === 'unresolved') unresolvedCount++;
       }
     }
     for (const key of Object.keys(node)) {
@@ -177,16 +226,15 @@ function processFileTs(f) {
 
   // v1.8.3: helper centralizes oxc error escalation; see _lib/parse-oxc.mjs.
   try {
+    phaseTimer.incrementCounter('oxcParseCalls');
     const r = parseOxcOrThrow(f, src);
     for (const node of r.program.body) {
       if (node.type === 'ImportDeclaration') {
-        const target = resolve(f, node.source.value);
-        if (target === 'EXTERNAL') externalCount++;
-        else if (isNonSourceAssetResolution(target)) {
-          // Asset imports do not create JS module topology edges.
-        }
-        else if (isResolvedFile(target)) edgesOut.push({ to: target, typeOnly: node.importKind === 'type' });
-        else unresolvedCount++;
+        const outcome = resolveTopologyEdge(f, node.source.value, {
+          typeOnly: node.importKind === 'type',
+        }, edgesOut);
+        if (outcome === 'external') externalCount++;
+        else if (outcome === 'unresolved') unresolvedCount++;
       } else if (
         (node.type === 'ExportNamedDeclaration' || node.type === 'ExportAllDeclaration') &&
         node.source
@@ -202,18 +250,18 @@ function processFileTs(f) {
         const specs = node.specifiers ?? [];
         const allSpecsTypeOnly = specs.length > 0 && specs.every((s) => s.exportKind === 'type');
         const typeOnly = node.exportKind === 'type' || allSpecsTypeOnly;
-        const target = resolve(f, node.source.value);
-        if (target === 'EXTERNAL') externalCount++;
-        else if (isNonSourceAssetResolution(target)) {
-          // Asset imports do not create JS module topology edges.
-        }
-        else if (isResolvedFile(target)) edgesOut.push({ to: target, reExport: true, typeOnly });
-        else unresolvedCount++;
+        const outcome = resolveTopologyEdge(f, node.source.value, {
+          reExport: true,
+          typeOnly,
+        }, edgesOut);
+        if (outcome === 'external') externalCount++;
+        else if (outcome === 'unresolved') unresolvedCount++;
       }
     }
     // Sweep the entire AST once for dynamic import() expressions anywhere.
     walkDynamic(r.program);
   } catch (e) {
+    phaseTimer.incrementCounter('oxcParseErrors');
     if (verbose) console.error(`[m2s1] parse error: ${relPath(root, f)}: ${e.message}`);
     return { loc, edges: [], externalCount: 0, unresolvedCount: 0, parseError: true };
   }
@@ -231,6 +279,9 @@ const cache = isIncremental ? loadCache(output, 'topology') : { version: 1, entr
 const { changed, unchanged, dropped, nextCache } = isIncremental
   ? pickChangedFiles(files, cache)
   : { changed: files, unchanged: [], dropped: [], nextCache: { version: 1, entries: {} } };
+phaseTimer.setCounter('changedFiles', changed.length);
+phaseTimer.setCounter('unchangedFiles', unchanged.length);
+phaseTimer.setCounter('droppedFiles', dropped.length);
 
 if (isIncremental) {
   console.error(cacheBanner('m2s1', changed, unchanged, dropped));
@@ -356,6 +407,24 @@ const bigFiles = [...nodes.entries()]
   .filter(x => x.loc >= 400)
   .sort((a, b) => b.loc - a.loc);
 
+for (const counterName of [
+  'scannerFilesAttempted',
+  'scannerAcceptedFiles',
+  'scannerFallbackFiles',
+  'scannerMs',
+  'oxcParseCalls',
+  'oxcParseErrors',
+]) {
+  phaseTimer.setCounter(counterName, phaseTimer.counters[counterName] ?? 0);
+}
+
+const resolverMemoStats = typeof resolve.memoStats === 'function'
+  ? resolve.memoStats()
+  : { hits: 0, misses: 0, size: 0 };
+phaseTimer.setCounter('resolverMemoHits', resolverMemoStats.hits);
+phaseTimer.setCounter('resolverMemoMisses', resolverMemoStats.misses);
+phaseTimer.setCounter('resolverMemoSize', resolverMemoStats.size);
+
 const artifact = {
   meta: {
     ...producerMetaBase({ tool: 'm2s1-topology.mjs', root }),
@@ -389,6 +458,26 @@ const artifact = {
     typeOnlyEdges: edges.filter((e) => e.typeOnly).length,
     bigFiles: bigFiles.length,
     oneThousandPlusFiles: bigFiles.filter(x => x.loc >= 1000).length,
+    performance: {
+      filesCollected: phaseTimer.counters.filesCollected ?? files.length,
+      changedFiles: phaseTimer.counters.changedFiles ?? changed.length,
+      unchangedFiles: phaseTimer.counters.unchangedFiles ?? unchanged.length,
+      droppedFiles: phaseTimer.counters.droppedFiles ?? dropped.length,
+      jsFilesProcessed: phaseTimer.counters.jsFilesProcessed ?? 0,
+      jsBytesRead: phaseTimer.counters.jsBytesRead ?? 0,
+      scannerPolicyVersion: MODULE_EDGE_SCANNER_POLICY_VERSION,
+      scannerFilesAttempted: phaseTimer.counters.scannerFilesAttempted ?? 0,
+      scannerAcceptedFiles: phaseTimer.counters.scannerAcceptedFiles ?? 0,
+      scannerFallbackFiles: phaseTimer.counters.scannerFallbackFiles ?? 0,
+      scannerMs: phaseTimer.counters.scannerMs ?? 0,
+      scannerRiskCounts: Object.fromEntries([...scannerRiskCounts.entries()].sort(([a], [b]) =>
+        a.localeCompare(b))),
+      oxcParseCalls: phaseTimer.counters.oxcParseCalls ?? 0,
+      oxcParseErrors: phaseTimer.counters.oxcParseErrors ?? 0,
+      resolverMemoHits: phaseTimer.counters.resolverMemoHits ?? 0,
+      resolverMemoMisses: phaseTimer.counters.resolverMemoMisses ?? 0,
+      resolverMemoSize: phaseTimer.counters.resolverMemoSize ?? 0,
+    },
   },
   // P1-2 / P2-0 contract: `nodes` lists every successfully-parsed file
   // so pre-write file lookup can distinguish FILE_EXISTS / NEW_FILE

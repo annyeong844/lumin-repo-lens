@@ -10,6 +10,7 @@
 
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import { detectBarrelFiles } from '../lib/alias-map.mjs';
 import { extractDefinitionsAndUses } from '../lib/extract-ts.mjs';
@@ -142,6 +143,16 @@ const PRODUCER_VERSION = 1;
 const FACT_SCHEMA_VERSION = 4;
 const PARSER_IDENTITY = 'symbol-graph-extractors:v2';
 
+function isJsFamilyFile(filePath) {
+  return JS_FAMILY_LANGS.includes(path.extname(filePath).slice(1).toLowerCase());
+}
+
+function countNestedMapEntries(map) {
+  let count = 0;
+  for (const inner of map.values()) count += inner?.size ?? 0;
+  return count;
+}
+
 const contextFingerprint = buildContextFingerprint({
   includeTests: cli.includeTests,
   exclude: cli.exclude,
@@ -165,8 +176,15 @@ const snapshot = phaseTimer.runPhase('snapshot', () => buildRepoSnapshot({
 }));
 const snapshotEntries = Object.values(snapshot.files);
 const files = snapshotEntries.map((entry) => entry.absPath);
+const jsTotal = files.filter(isJsFamilyFile).length;
 const pyTotal = files.filter((f) => f.endsWith('.py')).length;
 const goTotal = files.filter((f) => f.endsWith('.go')).length;
+phaseTimer.setCounter('snapshotFiles', files.length);
+phaseTimer.setCounter('snapshotReadableFiles', snapshotEntries.filter((entry) => entry.readable).length);
+phaseTimer.setCounter('snapshotUnreadableFiles', snapshotEntries.filter((entry) => !entry.readable).length);
+phaseTimer.setCounter('snapshotJsFiles', jsTotal);
+phaseTimer.setCounter('snapshotPythonFiles', pyTotal);
+phaseTimer.setCounter('snapshotGoFiles', goTotal);
 console.error(
   `[symbols] scanning ${files.length} files (python=${pyEnabled ? `on, ${pyTotal} .py` : 'off'}, go=${tsEnabled ? `on, ${goTotal} .go` : 'off'})`
 );
@@ -234,6 +252,10 @@ phaseTimer.recordPhase('cache-classification', Date.now() - cacheClassificationS
 
 const droppedFiles = Object.keys(priorCache.entries ?? {})
   .filter((key) => !currentStrictKeys.has(key)).length;
+phaseTimer.setCounter('changedFiles', changedFiles);
+phaseTimer.setCounter('reusedFiles', reusedFiles);
+phaseTimer.setCounter('droppedFiles', droppedFiles);
+phaseTimer.setCounter('invalidatedFiles', invalidatedFiles);
 
 if (incrementalEnabled) {
   console.error(
@@ -244,6 +266,7 @@ if (incrementalEnabled) {
 // Pre-batch Python files among the changed set.
 const extractChangedFilesStarted = Date.now();
 const changedPy = changed.filter((f) => f.endsWith('.py'));
+const changedJs = changed.filter(isJsFamilyFile);
 // v1.8.2: collect non-fatal failure records for explicit inclusion in
 // the artifact. Previously these went to stderr (or got silently
 // swallowed at a deeper level). The `warnings[]` field in
@@ -278,6 +301,9 @@ if (changedPy.length > 0 && pyEnabled) {
 
 // Pre-batch Go files (and any other tree-sitter languages).
 const changedTs = changed.filter((f) => f.endsWith('.go'));
+phaseTimer.setCounter('changedJsFiles', changedJs.length);
+phaseTimer.setCounter('changedPythonFiles', changedPy.length);
+phaseTimer.setCounter('changedGoFiles', changedTs.length);
 let tsBatch = new Map();
 if (changedTs.length > 0 && tsEnabled) {
   try {
@@ -293,6 +319,10 @@ if (changedTs.length > 0 && tsEnabled) {
 }
 
 let parseErrors = 0;
+let extractedFiles = 0;
+let extractedJsFiles = 0;
+let extractedPythonFiles = 0;
+let extractedGoFiles = 0;
 for (const f of changed) {
   const entry = snapshot.files[relPath(ROOT, f)];
   try {
@@ -333,6 +363,14 @@ for (const f of changed) {
       payload = extractDefinitionsAndUses(f, { artifactFilePath: relPath(ROOT, f) });
     }
     nextCache.entries[f] = { ...payload, parseError: false };
+    extractedFiles++;
+    if (f.endsWith('.py')) {
+      extractedPythonFiles++;
+    } else if (f.endsWith('.go')) {
+      extractedGoFiles++;
+    } else if (isJsFamilyFile(f)) {
+      extractedJsFiles++;
+    }
     if (incrementalEnabled && entry) {
       putFact(nextProducerCache, {
         snapshotEntry: entry,
@@ -358,11 +396,29 @@ phaseTimer.recordPhase('extract-changed-files', Date.now() - extractChangedFiles
 for (const [f, entry] of Object.entries(nextCache.entries)) {
   if (!changed.includes(f) && entry?.parseError) parseErrors++;
 }
+phaseTimer.setCounter('extractedFiles', extractedFiles);
+phaseTimer.setCounter('extractedJsFiles', extractedJsFiles);
+phaseTimer.setCounter('extractedPythonFiles', extractedPythonFiles);
+phaseTimer.setCounter('extractedGoFiles', extractedGoFiles);
+phaseTimer.setCounter('parseErrorCount', parseErrors);
 
 const assembleSymbolGraphStarted = Date.now();
+const assembleFileDataStarted = Date.now();
 const fileData = new Map();
+let definitionCount = 0;
+let useCount = 0;
+let reExportCount = 0;
+let typeEscapeCount = 0;
+let dynamicImportOpacityCount = 0;
+let cjsRequireOpacityCount = 0;
 for (const [f, entry] of Object.entries(nextCache.entries)) {
   if (entry.parseError || entry.defs === undefined) continue;
+  definitionCount += (entry.defs ?? []).length;
+  useCount += (entry.uses ?? []).length;
+  reExportCount += (entry.reExports ?? []).length;
+  typeEscapeCount += (entry.typeEscapes ?? []).length;
+  dynamicImportOpacityCount += (entry.dynamicImportOpacity ?? []).length;
+  cjsRequireOpacityCount += (entry.cjsRequireOpacity ?? []).length;
   fileData.set(f, {
     filePath: f,
     defs: entry.defs ?? [],
@@ -382,10 +438,19 @@ for (const [f, entry] of Object.entries(nextCache.entries)) {
 }
 
 if (incrementalEnabled) saveProducerCache(cacheStore, PRODUCER_ID, nextProducerCache);
+phaseTimer.setCounter('fileDataFiles', fileData.size);
+phaseTimer.setCounter('definitionCount', definitionCount);
+phaseTimer.setCounter('useCount', useCount);
+phaseTimer.setCounter('reExportCount', reExportCount);
+phaseTimer.setCounter('typeEscapeCount', typeEscapeCount);
+phaseTimer.setCounter('dynamicImportOpacityCount', dynamicImportOpacityCount);
+phaseTimer.setCounter('cjsRequireOpacityCount', cjsRequireOpacityCount);
+phaseTimer.recordPhase('assemble-file-data', Date.now() - assembleFileDataStarted);
 console.log(`[parse] errors: ${parseErrors}`);
 
 // ─── 심볼 그래프 구축 ─────────────────────────────────────
 // defIndex: Map<filePath, Map<symbolName, defInfo>>
+const assembleDefIndexStarted = Date.now();
 const defIndex = new Map();
 for (const [f, info] of fileData) {
   const m = new Map();
@@ -394,6 +459,7 @@ for (const [f, info] of fileData) {
   }
   defIndex.set(f, m);
 }
+phaseTimer.recordPhase('assemble-def-index', Date.now() - assembleDefIndexStarted);
 
 // consumers: Map<filePath, Map<symbolName, Set<consumerFile>>>
 const consumers = new Map();
@@ -633,6 +699,7 @@ function addNamespaceReExportDiagnostic(consumerFile, importFile, use, reExport)
   });
 }
 
+const assembleNamespaceReExportsStarted = Date.now();
 for (const [barrelFile, info] of fileData) {
   for (const use of info.uses ?? []) {
     if (use?.kind !== 'reExportNamespace' && use?.kind !== 'reExport') continue;
@@ -647,6 +714,11 @@ for (const [barrelFile, info] of fileData) {
     }
   }
 }
+phaseTimer.setCounter('namespaceReExportFileCount', namespaceReExportsByFile.size);
+phaseTimer.setCounter('namespaceReExportEntryCount', countNestedMapEntries(namespaceReExportsByFile));
+phaseTimer.setCounter('namedReExportFileCount', namedReExportsByFile.size);
+phaseTimer.setCounter('namedReExportEntryCount', countNestedMapEntries(namedReExportsByFile));
+phaseTimer.recordPhase('assemble-namespace-reexports', Date.now() - assembleNamespaceReExportsStarted);
 
 function packageRootFromSpec(spec) {
   if (typeof spec !== 'string' || spec.length === 0) return null;
@@ -676,24 +748,82 @@ function addDependencyImportConsumer(consumerFile, use, source) {
   dependencyImportConsumers.push(rec);
 }
 
+const assembleSourceUsesStarted = Date.now();
+const sourceUseTimings = {
+  resolve: 0,
+  external: 0,
+  asset: 0,
+  unresolved: 0,
+  generatedVirtual: 0,
+  namespaceReExport: 0,
+  resolvedInternal: 0,
+};
+const sourceUseBranchCounts = {
+  external: 0,
+  asset: 0,
+  unresolved: 0,
+  generatedVirtual: 0,
+  namespaceReExport: 0,
+  resolvedInternal: 0,
+  skippedNamespaceAlias: 0,
+  generatedVirtualUnresolved: 0,
+  namespaceReExportMiss: 0,
+  namespaceReExportEscape: 0,
+  namespaceReExportMember: 0,
+  sideEffectOnly: 0,
+  reExportNamespaceSkip: 0,
+  broadNamespace: 0,
+  directConsumer: 0,
+};
+const sourceUseResolverStatsBefore =
+  typeof _resolveRaw.memoStats === 'function' ? _resolveRaw.memoStats() : null;
+const sourceUseResolverStageStatsBefore =
+  typeof _resolveRaw.stageStats === 'function' ? _resolveRaw.stageStats() : null;
+
+function addSourceUseTiming(name, started) {
+  sourceUseTimings[name] += performance.now() - started;
+}
+
+function incrementSourceUseBranch(name) {
+  sourceUseBranchCounts[name] = (sourceUseBranchCounts[name] ?? 0) + 1;
+}
+
 for (const [consumerFile, info] of fileData) {
   for (const u of info.uses) {
+    const resolveStarted = performance.now();
     const target = resolveSpecifier(consumerFile, u);
+    addSourceUseTiming('resolve', resolveStarted);
     if (target === 'EXTERNAL') {
-      if (isImportedNamespaceAliasUse(u)) continue;
+      const branchStarted = performance.now();
+      incrementSourceUseBranch('external');
+      if (isImportedNamespaceAliasUse(u)) {
+        incrementSourceUseBranch('skippedNamespaceAlias');
+        addSourceUseTiming('external', branchStarted);
+        continue;
+      }
       // External npm package. NOT a blind spot for dead-export
       // analysis — external packages don't consume internal exports.
       externalUses++;
       addDependencyImportConsumer(consumerFile, u, 'source-import');
       unresolvedUses++; // legacy counter for backward-compat
+      addSourceUseTiming('external', branchStarted);
       continue;
     }
     if (isNonSourceAssetResolution(target)) {
+      const branchStarted = performance.now();
+      incrementSourceUseBranch('asset');
       nonSourceAssetUses++;
+      addSourceUseTiming('asset', branchStarted);
       continue;
     }
     if (target === 'UNRESOLVED_INTERNAL') {
-      if (isImportedNamespaceAliasUse(u)) continue;
+      const branchStarted = performance.now();
+      incrementSourceUseBranch('unresolved');
+      if (isImportedNamespaceAliasUse(u)) {
+        incrementSourceUseBranch('skippedNamespaceAlias');
+        addSourceUseTiming('unresolved', branchStarted);
+        continue;
+      }
       // Local alias matched (e.g. `@/*` from tsconfig paths) but no
       // target file. THIS is a real blind spot — we probably missed
       // a legitimate consumer.
@@ -704,26 +834,42 @@ for (const [consumerFile, info] of fileData) {
       unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
       if (!prefixExamples.has(p)) prefixExamples.set(p, spec);
       recordUnresolvedInternalSpecifier(consumerFile, u);
+      addSourceUseTiming('unresolved', branchStarted);
       continue;
     }
     if (isGeneratedVirtualResolution(target)) {
-      if (isImportedNamespaceAliasUse(u)) continue;
+      const branchStarted = performance.now();
+      incrementSourceUseBranch('generatedVirtual');
+      if (isImportedNamespaceAliasUse(u)) {
+        incrementSourceUseBranch('skippedNamespaceAlias');
+        addSourceUseTiming('generatedVirtual', branchStarted);
+        continue;
+      }
       generatedVirtualSurfaces.set(target.id, target);
       const exported = generatedVirtualExportForUse(target, u);
       if (!exported) {
+        incrementSourceUseBranch('generatedVirtualUnresolved');
         unresolvedInternalUses++;
         unresolvedUses++;
         recordUnresolvedInternalSpecifier(consumerFile, u);
+        addSourceUseTiming('generatedVirtual', branchStarted);
         continue;
       }
       totalUses++;
       resolvedInternalUses++;
       resolvedGeneratedVirtualUses++;
       addGeneratedVirtualConsumer(consumerFile, u, target, exported);
+      addSourceUseTiming('generatedVirtual', branchStarted);
       continue;
     }
     if (!target) {
-      if (isImportedNamespaceAliasUse(u)) continue;
+      const branchStarted = performance.now();
+      incrementSourceUseBranch('unresolved');
+      if (isImportedNamespaceAliasUse(u)) {
+        incrementSourceUseBranch('skippedNamespaceAlias');
+        addSourceUseTiming('unresolved', branchStarted);
+        continue;
+      }
       // null — relative path that didn't resolve, or malformed spec.
       // Treat conservatively as internal: a relative path that
       // doesn't find a file is more likely a scanner/parse issue than
@@ -731,26 +877,38 @@ for (const [consumerFile, info] of fileData) {
       unresolvedInternalUses++;
       unresolvedUses++;
       recordUnresolvedInternalSpecifier(consumerFile, u);
+      addSourceUseTiming('unresolved', branchStarted);
       continue;
     }
     if (u.kind === 'imported-namespace-member' || u.kind === 'imported-namespace-escape') {
+      const branchStarted = performance.now();
+      incrementSourceUseBranch('namespaceReExport');
       const reExport = resolveNamespaceReExport(target, u.name);
-      if (!reExport) continue;
+      if (!reExport) {
+        incrementSourceUseBranch('namespaceReExportMiss');
+        addSourceUseTiming('namespaceReExport', branchStarted);
+        continue;
+      }
       totalUses++;
       resolvedInternalUses++;
       addResolvedInternalEdge(consumerFile, reExport.targetFile, u);
       if (u.kind === 'imported-namespace-escape') {
+        incrementSourceUseBranch('namespaceReExportEscape');
         addNamespaceReExportDiagnostic(consumerFile, target, u, reExport);
         if (!namespaceUsers.has(reExport.targetFile)) namespaceUsers.set(reExport.targetFile, new Set());
         namespaceUsers.get(reExport.targetFile).add(consumerFile);
       } else if (u.memberName) {
+        incrementSourceUseBranch('namespaceReExportMember');
         addConsumer(reExport.targetFile, u.memberName, consumerFile, {
           ...u,
           name: u.memberName,
         });
       }
+      addSourceUseTiming('namespaceReExport', branchStarted);
       continue;
     }
+    const branchStarted = performance.now();
+    incrementSourceUseBranch('resolvedInternal');
     totalUses++;
     resolvedInternalUses++;
     addResolvedInternalEdge(consumerFile, target, u);
@@ -759,9 +917,13 @@ for (const [consumerFile, info] of fileData) {
     // PCEF P0: CJS side-effect-only imports evaluate the file but do not
     // consume named exports, while CJS namespace escapes/re-exports are broad.
     if (u.kind === 'cjs-side-effect-only' || u.kind === 'import-side-effect') {
+      incrementSourceUseBranch('sideEffectOnly');
+      addSourceUseTiming('resolvedInternal', branchStarted);
       continue;
     }
     if (u.kind === 'reExportNamespace') {
+      incrementSourceUseBranch('reExportNamespaceSkip');
+      addSourceUseTiming('resolvedInternal', branchStarted);
       continue;
     }
     if (u.kind === 'namespace' ||
@@ -769,19 +931,82 @@ for (const [consumerFile, info] of fileData) {
         u.kind === 'dynamic' ||
         u.kind === 'cjs-namespace-escape' ||
         u.kind === 'cjs-reexport-broad') {
+      incrementSourceUseBranch('broadNamespace');
       if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
       namespaceUsers.get(target).add(consumerFile);
     } else {
+      incrementSourceUseBranch('directConsumer');
       addConsumer(target, u.name, consumerFile, u);
     }
+    addSourceUseTiming('resolvedInternal', branchStarted);
   }
 }
+const sourceUseResolverStatsAfter =
+  typeof _resolveRaw.memoStats === 'function' ? _resolveRaw.memoStats() : null;
+const sourceUseResolverStageStatsAfter =
+  typeof _resolveRaw.stageStats === 'function' ? _resolveRaw.stageStats() : null;
+phaseTimer.recordPhase('assemble-source-use-resolve', sourceUseTimings.resolve);
+phaseTimer.recordPhase('assemble-source-use-external', sourceUseTimings.external);
+phaseTimer.recordPhase('assemble-source-use-asset', sourceUseTimings.asset);
+phaseTimer.recordPhase('assemble-source-use-unresolved', sourceUseTimings.unresolved);
+phaseTimer.recordPhase('assemble-source-use-generated-virtual', sourceUseTimings.generatedVirtual);
+phaseTimer.recordPhase('assemble-source-use-namespace-reexport', sourceUseTimings.namespaceReExport);
+phaseTimer.recordPhase('assemble-source-use-resolved-internal', sourceUseTimings.resolvedInternal);
+phaseTimer.setCounter('sourceUseResolveMs', sourceUseTimings.resolve);
+phaseTimer.setCounter('sourceUseExternalMs', sourceUseTimings.external);
+phaseTimer.setCounter('sourceUseAssetMs', sourceUseTimings.asset);
+phaseTimer.setCounter('sourceUseUnresolvedMs', sourceUseTimings.unresolved);
+phaseTimer.setCounter('sourceUseGeneratedVirtualMs', sourceUseTimings.generatedVirtual);
+phaseTimer.setCounter('sourceUseNamespaceReExportMs', sourceUseTimings.namespaceReExport);
+phaseTimer.setCounter('sourceUseResolvedInternalMs', sourceUseTimings.resolvedInternal);
+for (const [name, count] of Object.entries(sourceUseBranchCounts)) {
+  phaseTimer.setCounter(`sourceUse${name[0].toUpperCase()}${name.slice(1)}BranchCount`, count);
+}
+if (sourceUseResolverStatsBefore && sourceUseResolverStatsAfter) {
+  phaseTimer.setCounter(
+    'sourceUseResolverMemoHits',
+    sourceUseResolverStatsAfter.hits - sourceUseResolverStatsBefore.hits);
+  phaseTimer.setCounter(
+    'sourceUseResolverMemoMisses',
+    sourceUseResolverStatsAfter.misses - sourceUseResolverStatsBefore.misses);
+  phaseTimer.setCounter('sourceUseResolverMemoSize', sourceUseResolverStatsAfter.size);
+  phaseTimer.setCounter('symbolResolverMemoHits', sourceUseResolverStatsAfter.hits);
+  phaseTimer.setCounter('symbolResolverMemoMisses', sourceUseResolverStatsAfter.misses);
+  phaseTimer.setCounter('symbolResolverMemoSize', sourceUseResolverStatsAfter.size);
+}
+if (sourceUseResolverStageStatsBefore && sourceUseResolverStageStatsAfter) {
+  for (const [stageName, after] of Object.entries(sourceUseResolverStageStatsAfter)) {
+    const before = sourceUseResolverStageStatsBefore[stageName] ?? {};
+    const stem = `${stageName[0].toUpperCase()}${stageName.slice(1)}`;
+    phaseTimer.setCounter(
+      `sourceUseResolverStage${stem}Attempts`,
+      (after.attempts ?? 0) - (before.attempts ?? 0));
+    phaseTimer.setCounter(
+      `sourceUseResolverStage${stem}Results`,
+      (after.terminalResults ?? 0) - (before.terminalResults ?? 0));
+    phaseTimer.setCounter(
+      `sourceUseResolverStage${stem}Count`,
+      (after.count ?? 0) - (before.count ?? 0));
+    phaseTimer.setCounter(
+      `sourceUseResolverStage${stem}CacheHits`,
+      (after.cacheHits ?? 0) - (before.cacheHits ?? 0));
+    phaseTimer.setCounter(
+      `sourceUseResolverStage${stem}Ms`,
+      (after.wallMs ?? 0) - (before.wallMs ?? 0));
+  }
+}
+phaseTimer.setCounter('sourceUseFilesProcessed', fileData.size);
+phaseTimer.setCounter('sourceUseRecordsProcessed', useCount);
+phaseTimer.recordPhase('assemble-source-uses', Date.now() - assembleSourceUsesStarted);
 
-for (const u of collectMdxImportConsumers({
+const assembleMdxUsesStarted = Date.now();
+const mdxImportConsumers = collectMdxImportConsumers({
   root: ROOT,
   includeTests: cli.includeTests,
   exclude: cli.exclude,
-})) {
+});
+phaseTimer.setCounter('mdxImportConsumerCandidateCount', mdxImportConsumers.length);
+for (const u of mdxImportConsumers) {
   const target = resolveSpecifier(u.consumerFile, u);
   if (target === 'EXTERNAL') {
     externalUses++;
@@ -834,11 +1059,27 @@ for (const u of collectMdxImportConsumers({
     addConsumer(target, u.name, u.consumerFile, u);
   }
 }
+phaseTimer.recordPhase('assemble-mdx-uses', Date.now() - assembleMdxUsesStarted);
 
 console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
 console.log(`[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`);
 console.log(`[defs] total symbols: ${[...defIndex.values()].reduce((a, m) => a + m.size, 0)}`);
+phaseTimer.setCounter('totalUses', totalUses);
+phaseTimer.setCounter('unresolvedUses', unresolvedUses);
+phaseTimer.setCounter('resolvedInternalUses', resolvedInternalUses);
+phaseTimer.setCounter('resolvedGeneratedVirtualUses', resolvedGeneratedVirtualUses);
+phaseTimer.setCounter('nonSourceAssetUses', nonSourceAssetUses);
+phaseTimer.setCounter('externalUses', externalUses);
+phaseTimer.setCounter('unresolvedInternalUses', unresolvedInternalUses);
+phaseTimer.setCounter('mdxConsumerUses', mdxConsumerUses);
+phaseTimer.setCounter('dependencyImportConsumerCount', dependencyImportConsumers.length);
+phaseTimer.setCounter('resolvedInternalEdgeCount', resolvedInternalEdges.length);
+phaseTimer.setCounter('unresolvedInternalSpecifierCount', unresolvedInternalSpecifiers.size);
+phaseTimer.setCounter('unresolvedInternalSpecifierRecordCount', unresolvedInternalSpecifierRecords.length);
+phaseTimer.setCounter('generatedVirtualSurfaceCount', generatedVirtualSurfaces.size);
+phaseTimer.setCounter('generatedVirtualImportConsumerCount', generatedVirtualImportConsumers.length);
 
+const assembleGeneratedBlindZonesStarted = Date.now();
 const generatedConsumerBlindZones = buildGeneratedConsumerBlindZones({
   unresolvedInternalSpecifierRecords,
 }, {
@@ -847,6 +1088,7 @@ const generatedConsumerBlindZones = buildGeneratedConsumerBlindZones({
   exclude: cli.exclude,
   mode: GENERATED_ARTIFACTS_MODE,
 });
+phaseTimer.recordPhase('assemble-generated-blind-zones', Date.now() - assembleGeneratedBlindZonesStarted);
 
 // ─── Dead export 탐지 ─────────────────────────────────────
 // Barrel files (workspace package main entries) are skipped —
@@ -854,7 +1096,9 @@ const generatedConsumerBlindZones = buildGeneratedConsumerBlindZones({
 // lives in `_lib/alias-map.mjs::detectBarrelFiles` since v1.10.1 so
 // it can share `mapOutputToSource` with the resolver (keeps the
 // `.dist/index.mjs → src/index.ts` mapping consistent, FP-40 class).
+const assembleDeadCandidatesStarted = Date.now();
 const BARREL_FILES = detectBarrelFiles(ROOT, repoMode);
+phaseTimer.setCounter('barrelFileCount', BARREL_FILES.size);
 
 const dead = [];
 for (const [defFile, defs] of defIndex) {
@@ -895,8 +1139,10 @@ for (const [defFile, defs] of defIndex) {
     });
   }
 }
+phaseTimer.recordPhase('assemble-dead-candidates', Date.now() - assembleDeadCandidatesStarted);
 
 // ─── Symbol fan-in Top-N ─────────────────────────────────
+const assembleFanInStarted = Date.now();
 const symbolFanIn = []; // { defFile, symbol, consumerCount, kind }
 // P1-0 preparatory: full identity-keyed fan-in map. `topSymbolFanIn` is a
 // Top-50 display slice; `fanInByIdentity` is the complete `ownerFile::
@@ -950,12 +1196,15 @@ for (const [defFile, broadConsumers] of namespaceUsers) {
   }
 }
 symbolFanIn.sort((a, b) => b.count - a.count);
+phaseTimer.recordPhase('assemble-fan-in', Date.now() - assembleFanInStarted);
 
+const assembleAnyContaminationStarted = Date.now();
 const anyContaminationFacts = buildAnyContaminationFacts({
   root: ROOT,
   defIndex,
   fileData,
 });
+phaseTimer.recordPhase('assemble-any-contamination', Date.now() - assembleAnyContaminationStarted);
 
 // ─── 리포트 ───────────────────────────────────────────────
 console.log(`\n\n════════ 1. Top 25 심볼 fan-in ════════`);
@@ -996,6 +1245,16 @@ console.log(`\n  ─ production dead 샘플 (최대 25) ─`);
 for (const d of deadInProd.slice(0, 25)) {
   console.log(`    ${d.file}:${d.line}  ${d.symbol}  (${d.kind})`);
 }
+phaseTimer.setCounter('deadCandidateCount', dead.length);
+phaseTimer.setCounter('trulyDeadCount', trulyDead.length);
+phaseTimer.setCounter('namespaceShadowedDeadCount', namespaceShadowed.length);
+phaseTimer.setCounter('deadProductionCount', deadInProd.length);
+phaseTimer.setCounter('deadTestCount', deadInTest.length);
+phaseTimer.setCounter('symbolFanInCount', symbolFanIn.length);
+phaseTimer.setCounter('fanInIdentityCount', Object.keys(fanInByIdentity).length);
+phaseTimer.setCounter('fanInIdentitySpaceCount', Object.keys(fanInByIdentitySpace).length);
+phaseTimer.setCounter('namespaceReExportDiagnosticCount', namespaceReExportDiagnostics.length);
+phaseTimer.setCounter('generatedConsumerBlindZoneCount', generatedConsumerBlindZones.length);
 phaseTimer.recordPhase('assemble-symbol-graph', Date.now() - assembleSymbolGraphStarted);
 
 // ─── 저장 ─────────────────────────────────────────────────
@@ -1048,7 +1307,9 @@ const artifact = buildSymbolsArtifact({
   },
 });
 const writeArtifactStarted = Date.now();
-writeFileSync(outPath, JSON.stringify(artifact, null, 2));
+const artifactJson = JSON.stringify(artifact, null, 2);
+phaseTimer.setCounter('symbolsJsonBytes', Buffer.byteLength(artifactJson, 'utf8'));
+writeFileSync(outPath, artifactJson);
 phaseTimer.recordPhase('write-artifact', Date.now() - writeArtifactStarted);
 phaseTimer.write();
 console.log(`[symbols] ${files.length} files, dead production candidates: ${deadInProd.length}`);

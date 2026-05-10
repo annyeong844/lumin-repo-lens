@@ -420,14 +420,15 @@ export function buildManifestEvidence({
   excludes = [],
   autoExcludes = [],
   generatedArtifactsMode = 'default',
+  onArtifactRead,
 }) {
-  const triage = loadArtifact(outDir, 'triage.json');
-  const symbols = loadArtifact(outDir, 'symbols.json');
-  const resolverCapabilities = loadArtifact(outDir, 'resolver-capabilities.json');
-  const resolverDiagnostics = loadArtifact(outDir, 'resolver-diagnostics.json');
-  const frameworkResourceSurfaces = loadArtifact(outDir, 'framework-resource-surfaces.json');
-  const entrySurface = loadArtifact(outDir, 'entry-surface.json');
-  const deadClassify = loadArtifact(outDir, 'dead-classify.json');
+  const triage = loadArtifact(outDir, 'triage.json', { onRead: onArtifactRead });
+  const symbols = loadArtifact(outDir, 'symbols.json', { onRead: onArtifactRead });
+  const resolverCapabilities = loadArtifact(outDir, 'resolver-capabilities.json', { onRead: onArtifactRead });
+  const resolverDiagnostics = loadArtifact(outDir, 'resolver-diagnostics.json', { onRead: onArtifactRead });
+  const frameworkResourceSurfaces = loadArtifact(outDir, 'framework-resource-surfaces.json', { onRead: onArtifactRead });
+  const entrySurface = loadArtifact(outDir, 'entry-surface.json', { onRead: onArtifactRead });
+  const deadClassify = loadArtifact(outDir, 'dead-classify.json', { onRead: onArtifactRead });
 
   const parseErrors = (() => {
     const w = (symbols?.meta?.warnings ?? []).find((x) =>

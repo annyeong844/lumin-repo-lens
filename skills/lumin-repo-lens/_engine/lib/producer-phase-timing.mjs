@@ -23,6 +23,7 @@ export function clearProducerPhaseTiming(output, producer) {
 
 export function createProducerPhaseTimer({ producer, output }) {
   const phases = [];
+  const counters = {};
 
   function recordPhase(name, wallMs) {
     const numericWallMs = Number.isFinite(wallMs) ? Math.max(0, wallMs) : 0;
@@ -41,6 +42,19 @@ export function createProducerPhaseTimer({ producer, output }) {
     }
   }
 
+  function setCounter(name, value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return;
+    counters[String(name)] = Math.max(0, Math.round(numericValue));
+  }
+
+  function incrementCounter(name, by = 1) {
+    const numericBy = Number(by);
+    if (!Number.isFinite(numericBy)) return;
+    const key = String(name);
+    counters[key] = Math.max(0, Math.round((counters[key] ?? 0) + numericBy));
+  }
+
   function write() {
     if (!output) return;
     const artifactPath = producerPhaseTimingPath(output, producer);
@@ -49,20 +63,39 @@ export function createProducerPhaseTimer({ producer, output }) {
       schemaVersion: PRODUCER_PHASE_TIMING_SCHEMA_VERSION,
       producer,
       phases,
+      ...(Object.keys(counters).length > 0 ? { counters } : {}),
     }, null, 2));
   }
 
   return {
+    counters,
     phases,
+    incrementCounter,
     recordPhase,
     runPhase,
+    setCounter,
     write,
   };
 }
 
-export function readProducerPhaseTiming(output, producer) {
+export function readProducerPhaseTiming(output, producer, { onRead } = {}) {
+  const artifactPath = producerPhaseTimingPath(output, producer);
+  let raw = '';
+  let readMs = 0;
   try {
-    const parsed = JSON.parse(readFileSync(producerPhaseTimingPath(output, producer), 'utf8'));
+    const readStarted = Date.now();
+    raw = readFileSync(artifactPath, 'utf8');
+    readMs = Date.now() - readStarted;
+    const parseStarted = Date.now();
+    const parsed = JSON.parse(raw);
+    const jsonParseMs = Date.now() - parseStarted;
+    onRead?.({
+      filePath: artifactPath,
+      bytes: Buffer.byteLength(raw, 'utf8'),
+      readMs,
+      jsonParseMs,
+      ok: true,
+    });
     if (parsed?.schemaVersion !== PRODUCER_PHASE_TIMING_SCHEMA_VERSION) return null;
     const phases = Array.isArray(parsed.phases)
       ? parsed.phases
@@ -75,12 +108,27 @@ export function readProducerPhaseTiming(output, producer) {
             wallMs: Math.max(0, Math.round(phase.wallMs)),
           }))
       : [];
+    const counters = parsed.counters && typeof parsed.counters === 'object'
+      ? Object.fromEntries(Object.entries(parsed.counters)
+          .filter(([, value]) => typeof value === 'number' && Number.isFinite(value))
+          .map(([name, value]) => [name, Math.max(0, Math.round(value))]))
+      : {};
     return {
       schemaVersion: parsed.schemaVersion,
       producer: parsed.producer ?? producer,
       phases,
+      ...(Object.keys(counters).length > 0 ? { counters } : {}),
     };
   } catch {
+    if (raw) {
+      onRead?.({
+        filePath: artifactPath,
+        bytes: Buffer.byteLength(raw, 'utf8'),
+        readMs,
+        jsonParseMs: 0,
+        ok: false,
+      });
+    }
     return null;
   }
 }

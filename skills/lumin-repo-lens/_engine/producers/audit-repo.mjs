@@ -51,7 +51,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { formatBlindZonesSummary } from '../lib/blind-zones.mjs';
-import { loadIfExists as loadArtifact } from '../lib/artifacts.mjs';
+import {
+  createArtifactReadMetrics,
+  loadIfExists as loadArtifact,
+} from '../lib/artifacts.mjs';
 import { atomicWrite } from '../lib/atomic-write.mjs';
 import { normalizeIncludeTests } from '../lib/cli.mjs';
 import { renderAuditSummary } from '../lib/audit-summary.mjs';
@@ -304,7 +307,10 @@ const INCREMENTAL_PRODUCER_STEPS = new Set([
   'build-function-clone-index.mjs',
 ]);
 
-const loadIfExists = (name) => loadArtifact(OUT, name);
+const artifactReadMetrics = createArtifactReadMetrics({ rootDir: OUT });
+const loadIfExists = (name) => loadArtifact(OUT, name, {
+  onRead: artifactReadMetrics.observeRead,
+});
 
 function forwardedScanArgs() {
   const args = [];
@@ -335,6 +341,7 @@ function manifestEvidenceOptions() {
     excludes: EFFECTIVE_EXCLUDES,
     autoExcludes: AUTO_EXCLUDES,
     generatedArtifactsMode: GENERATED_ARTIFACTS_MODE,
+    onArtifactRead: artifactReadMetrics.observeRead,
   };
 }
 
@@ -417,13 +424,16 @@ function collectArtifactSizeSummary() {
 function buildProducerPerformanceArtifact(generated) {
   let phaseSupportCount = 0;
   const producers = commandsRun.map((entry) => {
-    const phaseTiming = readProducerPhaseTiming(OUT, entry.step);
+    const phaseTiming = readProducerPhaseTiming(OUT, entry.step, {
+      onRead: artifactReadMetrics.observeRead,
+    });
     if (phaseTiming?.phases?.length > 0) phaseSupportCount++;
     return {
       name: entry.step,
       status: entry.status,
       wallMs: typeof entry.ms === 'number' ? entry.ms : null,
       ...(phaseTiming?.phases?.length > 0 ? { phases: phaseTiming.phases } : {}),
+      ...(phaseTiming?.counters ? { counters: phaseTiming.counters } : {}),
       ...(entry.memory ? { memory: entry.memory } : {}),
       ...(entry.stderr ? { stderrSnippet: entry.stderr } : {}),
     };
@@ -435,6 +445,7 @@ function buildProducerPerformanceArtifact(generated) {
   }));
   const totalWallMs = sumCommandWallMs(commandsRun);
   const artifacts = collectArtifactSizeSummary();
+  const artifactReads = artifactReadMetrics.summary();
   const maxObservedOrchestratorRssBytes = maxObservedRss(commandsRun);
 
   return {
@@ -465,6 +476,9 @@ function buildProducerPerformanceArtifact(generated) {
       totalWallMs,
       artifactCount: artifacts.producedCount,
       totalArtifactBytes: artifacts.totalBytes,
+      artifactReadCount: artifactReads.totalReadCount,
+      totalArtifactReadBytes: artifactReads.totalReadBytes,
+      totalJsonParseMs: artifactReads.totalJsonParseMs,
       maxObservedOrchestratorRssBytes,
       phaseSupportCount,
     },
@@ -474,6 +488,7 @@ function buildProducerPerformanceArtifact(generated) {
       note: 'Memory snapshots are measured in the audit-repo orchestrator before and after each child producer; they do not measure child process peak RSS.',
     },
     artifacts,
+    artifactReads,
     producers,
     skipped: skippedEntries,
   };
@@ -490,6 +505,9 @@ function summarizeProducerPerformance(performanceArtifact) {
     totalWallMs: performanceArtifact.summary?.totalWallMs ?? 0,
     artifactCount: performanceArtifact.summary?.artifactCount ?? 0,
     totalArtifactBytes: performanceArtifact.summary?.totalArtifactBytes ?? 0,
+    artifactReadCount: performanceArtifact.summary?.artifactReadCount ?? 0,
+    totalArtifactReadBytes: performanceArtifact.summary?.totalArtifactReadBytes ?? 0,
+    totalJsonParseMs: performanceArtifact.summary?.totalJsonParseMs ?? 0,
     phaseSupportCount: performanceArtifact.summary?.phaseSupportCount ?? 0,
     largestArtifacts: performanceArtifact.artifacts?.largest ?? [],
     maxObservedOrchestratorRssBytes:
@@ -962,12 +980,6 @@ if (values['strict-post-write-confidence'] && postWriteConfidenceLimited(postWri
 }
 
 refreshManifestEvidence(manifest, manifestEvidenceOptions());
-const producerPerformance = buildProducerPerformanceArtifact(manifest.meta.generated);
-atomicWrite(
-  path.join(OUT, 'producer-performance.json'),
-  JSON.stringify(producerPerformance, null, 2)
-);
-manifest.performance = summarizeProducerPerformance(producerPerformance);
 const topologyArtifact = loadIfExists('topology.json');
 if (topologyArtifact) {
   const topologyMermaidPath = path.join(OUT, 'topology.mermaid.md');
@@ -1028,6 +1040,12 @@ if (RUN_BASE_PIPELINE && PROFILE !== 'quick') {
     use: 'main assistant reads lanes as artifact briefs; if using built-in reviewer subagents, translate lanes into focused codebase-reading tasks with file:line evidence; the engine never calls external APIs',
   };
 }
+const producerPerformance = buildProducerPerformanceArtifact(manifest.meta.generated);
+atomicWrite(
+  path.join(OUT, 'producer-performance.json'),
+  JSON.stringify(producerPerformance, null, 2)
+);
+manifest.performance = summarizeProducerPerformance(producerPerformance);
 manifest.artifactsProduced = collectProducedArtifacts(OUT);
 
 const manifestPath = path.join(OUT, 'manifest.json');

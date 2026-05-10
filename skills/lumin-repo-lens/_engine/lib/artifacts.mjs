@@ -7,14 +7,98 @@
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
+export const ARTIFACT_READ_METRICS_SCHEMA_VERSION = 'artifact-read-metrics.v1';
+
+function toMetricName(rootDir, filePath) {
+  if (!rootDir) return path.basename(filePath);
+  const rel = path.relative(path.resolve(rootDir), path.resolve(filePath));
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return path.basename(filePath);
+  return rel.split(path.sep).join('/');
+}
+
+export function createArtifactReadMetrics({ rootDir, largestLimit = 10 } = {}) {
+  const byName = new Map();
+  let totalReadCount = 0;
+  let totalReadBytes = 0;
+  let totalReadMs = 0;
+  let totalJsonParseMs = 0;
+  let parseFailureCount = 0;
+
+  function observeRead(record) {
+    const bytes = Math.max(0, Math.round(Number(record?.bytes) || 0));
+    const readMs = Math.max(0, Math.round(Number(record?.readMs) || 0));
+    const jsonParseMs = Math.max(0, Math.round(Number(record?.jsonParseMs) || 0));
+    const name = toMetricName(rootDir, record?.filePath ?? 'unknown');
+    if (!byName.has(name)) {
+      byName.set(name, {
+        readCount: 0,
+        totalBytes: 0,
+        totalReadMs: 0,
+        totalJsonParseMs: 0,
+        parseFailureCount: 0,
+      });
+    }
+    const entry = byName.get(name);
+    entry.readCount++;
+    entry.totalBytes += bytes;
+    entry.totalReadMs += readMs;
+    entry.totalJsonParseMs += jsonParseMs;
+    if (record?.ok === false) entry.parseFailureCount++;
+
+    totalReadCount++;
+    totalReadBytes += bytes;
+    totalReadMs += readMs;
+    totalJsonParseMs += jsonParseMs;
+    if (record?.ok === false) parseFailureCount++;
+  }
+
+  function sortedEntries() {
+    return [...byName.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }
+
+  function summary() {
+    const largestReads = sortedEntries()
+      .map(([name, entry]) => ({ name, bytes: entry.totalBytes, readCount: entry.readCount }))
+      .sort((a, b) => b.bytes - a.bytes || a.name.localeCompare(b.name))
+      .slice(0, largestLimit);
+    const slowestJsonParses = sortedEntries()
+      .map(([name, entry]) => ({
+        name,
+        jsonParseMs: entry.totalJsonParseMs,
+        readCount: entry.readCount,
+      }))
+      .filter((entry) => entry.jsonParseMs > 0)
+      .sort((a, b) => b.jsonParseMs - a.jsonParseMs || a.name.localeCompare(b.name))
+      .slice(0, largestLimit);
+
+    return {
+      schemaVersion: ARTIFACT_READ_METRICS_SCHEMA_VERSION,
+      measurement: 'audit-repo-orchestrator-json-reads',
+      totalReadCount,
+      totalReadBytes,
+      totalReadMs,
+      totalJsonParseMs,
+      parseFailureCount,
+      largestReads,
+      slowestJsonParses,
+      byName: Object.fromEntries(sortedEntries()),
+    };
+  }
+
+  return {
+    observeRead,
+    summary,
+  };
+}
+
 // Load a JSON artifact by name from `dir`. Returns `null` when the file
 // doesn't exist OR when parsing fails. Pass `{ tag: '<script>' }` to have
 // parse failures logged to stderr as `[<script>] failed to parse <path>:
 // <message>`; omit `tag` to keep parse failures silent (matches the
 // pre-consolidation behavior of audit-repo / emit-sarif).
-export function loadIfExists(dir, name, { tag } = {}) {
+export function loadIfExists(dir, name, options = {}) {
   const filePath = path.isAbsolute(name) ? name : path.join(dir, name);
-  return readJsonFile(filePath, { tag });
+  return readJsonFile(filePath, options);
 }
 
 // Read and parse a JSON file at `filePath`.
@@ -37,13 +121,35 @@ export function loadIfExists(dir, name, { tag } = {}) {
 //   log prefix.
 //
 // Shared by `loadIfExists` (artifact reads) and package.json readers.
-export function readJsonFile(filePath, { tag, bomStrip = true, strict = false } = {}) {
+export function readJsonFile(filePath, options = {}) {
+  const { tag, bomStrip = true, strict = false, onRead } = options;
   if (!existsSync(filePath)) return null;
+  let raw = '';
+  let readMs = 0;
   try {
-    let raw = readFileSync(filePath, 'utf8');
+    const readStarted = Date.now();
+    raw = readFileSync(filePath, 'utf8');
+    readMs = Date.now() - readStarted;
     if (bomStrip) raw = raw.replace(/^\uFEFF/, '');
-    return JSON.parse(raw);
+    const parseStarted = Date.now();
+    const parsed = JSON.parse(raw);
+    const jsonParseMs = Date.now() - parseStarted;
+    onRead?.({
+      filePath,
+      bytes: Buffer.byteLength(raw, 'utf8'),
+      readMs,
+      jsonParseMs,
+      ok: true,
+    });
+    return parsed;
   } catch (e) {
+    onRead?.({
+      filePath,
+      bytes: Buffer.byteLength(raw, 'utf8'),
+      readMs,
+      jsonParseMs: 0,
+      ok: false,
+    });
     const prefix = tag ? `[${tag}] ` : '[readJsonFile] ';
     console.error(`${prefix}failed to parse ${filePath}: ${e.message}`);
     if (strict) {
