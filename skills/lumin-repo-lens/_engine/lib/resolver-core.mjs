@@ -481,7 +481,21 @@ function explainExactAlias(root, spec, aliasMap) {
 // `matchPrefix` (most-specific match, per Node.js exports resolution
 // semantics).
 
-function resolveWildcard(spec, aliasMap) {
+const WILDCARD_ALIAS_NO_MATCH = Symbol('wildcard-alias-no-match');
+
+function wildcardAliasProbeCacheKey(spec) {
+  return spec;
+}
+
+function resolveWildcard(spec, aliasMap, probeCache, stageStats) {
+  const cacheKey = wildcardAliasProbeCacheKey(spec);
+  if (probeCache?.has(cacheKey)) {
+    if (stageStats) stageStats.cacheHits++;
+    const cached = probeCache.get(cacheKey);
+    return cached === WILDCARD_ALIAS_NO_MATCH ? undefined : cached;
+  }
+  if (probeCache && stageStats) stageStats.cacheMisses++;
+
   let bestWildcard = null;
   for (const [, entry] of aliasMap) {
     if (entry.type !== 'wildcard') continue;
@@ -494,7 +508,10 @@ function resolveWildcard(spec, aliasMap) {
       bestWildcard = { entry, star };
     }
   }
-  if (!bestWildcard) return undefined;
+  if (!bestWildcard) {
+    probeCache?.set(cacheKey, WILDCARD_ALIAS_NO_MATCH);
+    return undefined;
+  }
 
   const { entry, star } = bestWildcard;
   const substituted = entry.targetPattern.replace('*', star);
@@ -505,22 +522,35 @@ function resolveWildcard(spec, aliasMap) {
   // relative and baseUrl resolution instead of assuming the last dot is a
   // real file extension.
   const literalHit = probeTarget(literal);
-  if (literalHit) return literalHit;
+  if (literalHit) {
+    probeCache?.set(cacheKey, literalHit);
+    return literalHit;
+  }
   const remapped = mapOutputToSource(entry.pkgDir, substituted);
-  if (fileExists(remapped)) return remapped;
+  if (fileExists(remapped)) {
+    probeCache?.set(cacheKey, remapped);
+    return remapped;
+  }
   const strippedLit = literal.replace(/\.(ts|tsx|mjs|cjs|js|jsx|mts|cts)$/, '');
   for (const idx of RESOLVE_INDEX_EXTS) {
-    if (fileExists(strippedLit + idx)) return strippedLit + idx;
+    if (fileExists(strippedLit + idx)) {
+      const hit = strippedLit + idx;
+      probeCache?.set(cacheKey, hit);
+      return hit;
+    }
   }
   const virtualSurface = generatedVirtualSurfaceForSubpath(entry, star);
   if (virtualSurface) {
-    return {
+    const result = Object.freeze({
       ...virtualSurface,
       resolverStage: 'wildcard-alias',
       matchedPattern: entry.legacySubpath ? `${entry.pkgName}/*` : `${entry.matchPrefix}*${entry.matchSuffix ?? ''}`,
       aliasSource: entry.source,
-    };
+    });
+    probeCache?.set(cacheKey, result);
+    return result;
   }
+  probeCache?.set(cacheKey, 'UNRESOLVED_INTERNAL');
   return 'UNRESOLVED_INTERNAL';
 }
 
@@ -720,6 +750,7 @@ export function makeResolver(root, aliasMap) {
   const stageStats = createResolverStageStats();
   const scopedTsconfigProbeCache = new Map();
   const scopedBaseUrlProbeCache = new Map();
+  const wildcardAliasProbeCache = new Map();
 
   function recordInstantStage(name) {
     const stage = stageStats[name];
@@ -768,7 +799,8 @@ export function makeResolver(root, aliasMap) {
     if (hit !== undefined) return hit;
     hit = runResolverStage('exactAlias', () => resolveExactAlias(spec, aliasMap));
     if (hit !== undefined) return hit;
-    hit = runResolverStage('wildcardAlias', () => resolveWildcard(spec, aliasMap));
+    hit = runResolverStage('wildcardAlias', () =>
+      resolveWildcard(spec, aliasMap, wildcardAliasProbeCache, stageStats.wildcardAlias));
     if (hit !== undefined) return hit;
     hit = runResolverStage('hashWildcard', () => resolveHashWildcard(spec, aliasMap));
     if (hit !== undefined) return hit;
