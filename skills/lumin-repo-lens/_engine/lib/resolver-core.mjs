@@ -143,6 +143,11 @@ function createResolverStageStats() {
     count: 0,
     cacheHits: 0,
     cacheMisses: 0,
+    patternMatches: 0,
+    probeHits: 0,
+    probeMisses: 0,
+    fallbackHits: 0,
+    unresolvedInternalResults: 0,
     wallMs: 0,
   }]));
 }
@@ -156,6 +161,11 @@ function cloneResolverStageStats(stats) {
       count: Math.max(0, Math.round(stage.count ?? 0)),
       cacheHits: Math.max(0, Math.round(stage.cacheHits ?? 0)),
       cacheMisses: Math.max(0, Math.round(stage.cacheMisses ?? 0)),
+      patternMatches: Math.max(0, Math.round(stage.patternMatches ?? 0)),
+      probeHits: Math.max(0, Math.round(stage.probeHits ?? 0)),
+      probeMisses: Math.max(0, Math.round(stage.probeMisses ?? 0)),
+      fallbackHits: Math.max(0, Math.round(stage.fallbackHits ?? 0)),
+      unresolvedInternalResults: Math.max(0, Math.round(stage.unresolvedInternalResults ?? 0)),
       wallMs: Math.max(0, Math.round(stage.wallMs ?? 0)),
     }];
   }));
@@ -264,11 +274,32 @@ function resolveAliasFallbackAfterTsconfigMiss(spec, aliasMap) {
   return null;
 }
 
-function resolveScopedTsconfig(fromFile, spec, scoped, aliasMap) {
+function scopedTsconfigProbeCacheKey(entry, star, spec) {
+  return [
+    entry.configPath ?? '',
+    entry.scopeDir ?? '',
+    entry.baseUrlDir ?? '',
+    entry.key ?? '',
+    entry.matchPrefix ?? '',
+    entry.wildcard ? 'wildcard' : 'exact',
+    star ?? '',
+    spec,
+    ...(entry.targets ?? []),
+  ].join('\0');
+}
+
+function resolveScopedTsconfig(fromFile, spec, scoped, aliasMap, probeCache, stageStats) {
   for (const entry of scoped) {
     if (!fileIsInsideScope(fromFile, entry.scopeDir)) continue;
     const star = matchSpec(spec, entry);
     if (star === null) continue;
+    if (stageStats) stageStats.patternMatches++;
+    const cacheKey = scopedTsconfigProbeCacheKey(entry, star, spec);
+    if (probeCache?.has(cacheKey)) {
+      if (stageStats) stageStats.cacheHits++;
+      return probeCache.get(cacheKey);
+    }
+    if (probeCache && stageStats) stageStats.cacheMisses++;
     // Match found. Attempt every target in order.
     for (const target of entry.targets) {
       const substituted = entry.wildcard
@@ -276,12 +307,23 @@ function resolveScopedTsconfig(fromFile, spec, scoped, aliasMap) {
         : target;
       const literal = path.resolve(entry.baseUrlDir, substituted);
       const hit = probeTarget(literal);
-      if (hit) return hit;
+      if (hit) {
+        if (stageStats) stageStats.probeHits++;
+        probeCache?.set(cacheKey, hit);
+        return hit;
+      }
+      if (stageStats) stageStats.probeMisses++;
     }
     const fallback = resolveAliasFallbackAfterTsconfigMiss(spec, aliasMap);
-    if (fallback) return fallback;
+    if (fallback) {
+      if (stageStats) stageStats.fallbackHits++;
+      probeCache?.set(cacheKey, fallback);
+      return fallback;
+    }
     // Pattern matched but neither the tsconfig target nor a concrete package
     // fallback exists — scanner blind spot. Do NOT fall through to EXTERNAL.
+    if (stageStats) stageStats.unresolvedInternalResults++;
+    probeCache?.set(cacheKey, 'UNRESOLVED_INTERNAL');
     return 'UNRESOLVED_INTERNAL';
   }
   return undefined;
@@ -676,6 +718,7 @@ export function makeResolver(root, aliasMap) {
     : [];
 
   const stageStats = createResolverStageStats();
+  const scopedTsconfigProbeCache = new Map();
   const scopedBaseUrlProbeCache = new Map();
 
   function recordInstantStage(name) {
@@ -712,7 +755,13 @@ export function makeResolver(root, aliasMap) {
 
     let hit;
     hit = runResolverStage('scopedTsconfig', () =>
-      resolveScopedTsconfig(fromFile, spec, scoped, aliasMap));
+      resolveScopedTsconfig(
+        fromFile,
+        spec,
+        scoped,
+        aliasMap,
+        scopedTsconfigProbeCache,
+        stageStats.scopedTsconfig));
     if (hit !== undefined) return hit;
     hit = runResolverStage('scopedBaseUrl', () =>
       resolveScopedBaseUrl(fromFile, spec, scopedBaseUrls, scopedBaseUrlProbeCache, stageStats.scopedBaseUrl));

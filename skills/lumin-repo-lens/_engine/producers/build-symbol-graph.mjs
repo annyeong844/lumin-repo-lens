@@ -975,6 +975,13 @@ if (sourceUseResolverStatsBefore && sourceUseResolverStatsAfter) {
   phaseTimer.setCounter('symbolResolverMemoSize', sourceUseResolverStatsAfter.size);
 }
 if (sourceUseResolverStageStatsBefore && sourceUseResolverStageStatsAfter) {
+  const extraStageCounterFields = [
+    ['PatternMatches', 'patternMatches'],
+    ['ProbeHits', 'probeHits'],
+    ['ProbeMisses', 'probeMisses'],
+    ['FallbackHits', 'fallbackHits'],
+    ['UnresolvedInternalResults', 'unresolvedInternalResults'],
+  ];
   for (const [stageName, after] of Object.entries(sourceUseResolverStageStatsAfter)) {
     const before = sourceUseResolverStageStatsBefore[stageName] ?? {};
     const stem = `${stageName[0].toUpperCase()}${stageName.slice(1)}`;
@@ -993,6 +1000,11 @@ if (sourceUseResolverStageStatsBefore && sourceUseResolverStageStatsAfter) {
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}CacheMisses`,
       (after.cacheMisses ?? 0) - (before.cacheMisses ?? 0));
+    for (const [suffix, key] of extraStageCounterFields) {
+      phaseTimer.setCounter(
+        `sourceUseResolverStage${stem}${suffix}`,
+        (after[key] ?? 0) - (before[key] ?? 0));
+    }
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}Ms`,
       (after.wallMs ?? 0) - (before.wallMs ?? 0));
