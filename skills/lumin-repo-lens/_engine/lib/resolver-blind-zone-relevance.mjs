@@ -58,6 +58,13 @@ function fileStemMatchesCandidate(file, candidate) {
 
 function familyForRecord(record) {
   if (record?.family) return record.family;
+  if (record?.resolverStage === 'import-meta-glob' || record?.unsupportedFamily === 'dynamic-modules') {
+    return 'dynamic-modules';
+  }
+  if (record?.unsupportedFamily === 'output-to-source-mapping' ||
+      record?.reason === 'output-source-layout-unsupported') {
+    return 'output-to-source-mapping';
+  }
   if (record?.resolverStage === 'hash-imports' || String(record?.specifier ?? '').startsWith('#')) {
     return 'node-imports';
   }

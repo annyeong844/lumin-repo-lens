@@ -70,6 +70,29 @@ function opaqueDynamicImportHint(node) {
   return { kind: 'nonliteral' };
 }
 
+function importMetaGlobPattern(node) {
+  if (node?.type !== 'CallExpression') return null;
+  const callee = node.callee;
+  if (callee?.type !== 'MemberExpression' || callee.computed) return null;
+  if (memberPropertyName(callee) !== 'glob') return null;
+  const object = callee.object;
+  if (object?.type !== 'MetaProperty') return null;
+  if (object.meta?.name !== 'import' || object.property?.name !== 'meta') return null;
+  return literalStringValue(node.arguments?.[0]);
+}
+
+function affectedDirFromGlobPattern(pattern) {
+  if (typeof pattern !== 'string') return null;
+  const normalized = pattern.replace(/\\/g, '/');
+  if (!normalized.startsWith('./') && !normalized.startsWith('../')) return null;
+  const firstDynamic = normalized.search(/[*?[{]/);
+  if (firstDynamic < 0) return null;
+  const staticPrefix = normalized.slice(0, firstDynamic);
+  const slash = staticPrefix.lastIndexOf('/');
+  if (slash < 0) return null;
+  return staticPrefix.slice(0, slash) || '.';
+}
+
 function opaqueCjsRequireHint(node) {
   if (!isRequireCall(node) || literalRequireSource(node)) return null;
   if (isStaticJsonRequireArgument(node.arguments?.[0])) return null;
@@ -579,6 +602,7 @@ function createMemberPrecisionState() {
     namespaceRecords: [],
     namedImportRecords: [],
     dynamicRecords: [],
+    importMetaGlobUses: [],
     cjsRecords: [],
     cjsDirectUses: [],
     cjsFallbackUses: [],
@@ -682,6 +706,7 @@ function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key
   if (handleCjsReexportAssignment(node, state, getNodeLine)) return;
   if (handleThenDynamicImport(node, scope, state, getNodeLine)) return;
   if (handleDirectRequireMemberExpression(node, state, getNodeLine)) return;
+  if (handleImportMetaGlobExpression(node, state, getNodeLine)) return;
   if (handleTrackedMemberExpression(node, scope, parent, key, getNodeLine)) return;
   if (handleFallbackImportExpression(node, state, getNodeLine)) return;
   if (handleFallbackRequireExpression(node, state, getNodeLine, parent)) return;
@@ -964,6 +989,27 @@ function handleFallbackImportExpression(node, state, getNodeLine) {
   return true;
 }
 
+function handleImportMetaGlobExpression(node, state, getNodeLine) {
+  const pattern = importMetaGlobPattern(node);
+  if (!pattern) return false;
+  state.importMetaGlobUses.push({
+    fromSpec: pattern,
+    name: '*',
+    kind: 'import-meta-glob',
+    typeOnly: false,
+    line: getNodeLine(node),
+    dynamic: true,
+    degraded: true,
+    reason: 'import-meta-glob-unsupported',
+    resolverStage: 'import-meta-glob',
+    outputLevel: 'unsupported',
+    unsupportedFamily: 'dynamic-modules',
+    hint: 'dynamic-module-surface',
+    affectedDir: affectedDirFromGlobPattern(pattern),
+  });
+  return true;
+}
+
 function handleFallbackRequireExpression(node, state, getNodeLine, parent) {
   const fromSpec = literalRequireSource(node);
   if (!fromSpec || state.handledCjsRequires.has(node)) return false;
@@ -1028,6 +1074,7 @@ function emitMemberPrecisionUses(state) {
   return [
     ...emitNamespaceRecordUses(state.namespaceRecords),
     ...emitNamedImportRecordUses(state.namedImportRecords),
+    ...(state.importMetaGlobUses ?? []),
     ...emitDynamicRecordUses(state),
     ...emitFallbackDynamicUses(state),
     ...emitCjsUses(state),

@@ -73,6 +73,13 @@ function familyForRecord(record) {
     record?.generatedArtifact
   ) return 'generated-artifacts';
 
+  if (stage === 'import-meta-glob' || record?.unsupportedFamily === 'dynamic-modules') {
+    return 'dynamic-modules';
+  }
+  if (record?.unsupportedFamily === 'output-to-source-mapping' ||
+      reason === 'output-source-layout-unsupported') {
+    return 'output-to-source-mapping';
+  }
   if (stage === 'hash-imports' || String(specifier ?? '').startsWith('#')) return 'node-imports';
   if (stage === 'relative') return 'relative-paths';
   if (stage === 'tsconfig-baseurl' || reason === 'baseurl-target-missing') return 'absolute-project-paths';
@@ -85,6 +92,7 @@ function familyForRecord(record) {
 }
 
 function affectedPackageScopeForRecord(record) {
+  if (typeof record?.affectedPackageScope === 'string') return record.affectedPackageScope;
   const artifact = record?.generatedArtifact ?? {};
   if (typeof artifact.packageRoot === 'string') return artifact.packageRoot;
   if (typeof artifact.packageDir === 'string') return artifact.packageDir;
@@ -241,10 +249,19 @@ export function buildResolverCapabilitiesArtifact() {
         family: 'package-json-exports',
         status: 'partial',
         supportedCases: ['string targets', 'subpath wildcard targets', 'source remapping for dist outputs'],
-        unsupportedCases: ['ambiguous conditional maps without configured condition profile', 'array fallback ordering beyond supported source probes'],
-        reasonCodes: ['workspace-package-subpath-target-missing', 'condition-profile-ambiguous'],
+        unsupportedCases: ['ambiguous conditional maps without configured condition profile', 'array fallback ordering beyond supported source probes', 'non-standard output-to-source layouts without explicit source metadata'],
+        reasonCodes: ['workspace-package-subpath-target-missing', 'condition-profile-ambiguous', 'output-source-layout-unsupported'],
         absenceClaimPolicy: 'fail-closed-when-relevant',
         fixtureRefs: ['resolver-package-json-exports'],
+      },
+      {
+        family: 'output-to-source-mapping',
+        status: 'partial',
+        supportedCases: ['dist/build/out/es/esm/distribution output directories mapped to source conventions'],
+        unsupportedCases: ['workspace package exports pointing at non-standard compiled output directories without an explicit source condition'],
+        reasonCodes: ['output-source-layout-unsupported'],
+        absenceClaimPolicy: 'fail-closed-when-relevant',
+        fixtureRefs: ['resolver-output-source-layout-unsupported'],
       },
       {
         family: 'package-json-entry-fields',
@@ -281,6 +298,15 @@ export function buildResolverCapabilitiesArtifact() {
         reasonCodes: ['workspace-generated-artifact-missing', 'generated-consumer-blind-zone'],
         absenceClaimPolicy: 'fail-closed-when-relevant',
         fixtureRefs: ['resolver-generated-artifact-missing'],
+      },
+      {
+        family: 'dynamic-modules',
+        status: 'partial',
+        supportedCases: ['literal dynamic import() member precision'],
+        unsupportedCases: ['import.meta.glob expansion and non-literal dynamic module discovery'],
+        reasonCodes: ['import-meta-glob-unsupported'],
+        absenceClaimPolicy: 'fail-closed-when-relevant',
+        fixtureRefs: ['resolver-import-meta-glob-unsupported'],
       },
       {
         family: 'conditional-exports',

@@ -38,7 +38,7 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { mapOutputToSource } from './alias-map.mjs';
+import { mapOutputToSource, unsupportedOutputSourceLayoutForTarget } from './alias-map.mjs';
 import { fileExists, dirExists, relPath } from './paths.mjs';
 import { fileIsInsideScope, matchSpec } from './tsconfig-paths.mjs';
 import {
@@ -69,6 +69,9 @@ export const NON_SOURCE_ASSET_RESOLUTION = 'NON_SOURCE_ASSET';
 const NODE_IMPORTS_UNSUPPORTED_REASON = 'hash-imports-unsupported';
 const NODE_IMPORTS_UNSUPPORTED_HINT = 'node-imports-unsupported';
 const CONDITION_PROFILE_AMBIGUOUS_HINT = 'condition-profile-ambiguous';
+const OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_REASON = 'output-source-layout-unsupported';
+const OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_HINT = 'output-to-source-mapping-unsupported';
+const OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_FAMILY = 'output-to-source-mapping';
 
 const JS_SOURCE_EXT_RE = /\.(d\.)?(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/i;
 
@@ -469,7 +472,12 @@ function explainExactAlias(root, spec, aliasMap) {
   if (entry.type !== 'exact') return null;
   const generatedArtifact =
     entry.generatedArtifact ?? generatedArtifactForTargetCandidates(root, [entry.path]);
-  const reason = isStrongGeneratedArtifact(generatedArtifact)
+  const outputLayout = generatedArtifact
+    ? null
+    : unsupportedOutputSourceLayoutForTarget(entry.target, { source: entry.source });
+  const reason = outputLayout
+    ? OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_REASON
+    : isStrongGeneratedArtifact(generatedArtifact)
     ? GENERATED_ARTIFACT_MISSING_REASON
     : 'exact-alias-target-missing';
   return unresolvedRecord(root, reason, {
@@ -477,7 +485,17 @@ function explainExactAlias(root, spec, aliasMap) {
     matchedPattern: spec,
     source: entry.source,
     targetCandidates: [entry.path],
-    hint: generatedArtifact ? GENERATED_ARTIFACT_MISSING_HINT : unresolvedGeneratedArtifactHintForCandidates([entry.path]),
+    ...(outputLayout
+      ? {
+          outputLevel: 'unsupported',
+          unsupportedFamily: OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_FAMILY,
+          hint: OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_HINT,
+        }
+      : {
+          hint: generatedArtifact
+            ? GENERATED_ARTIFACT_MISSING_HINT
+            : unresolvedGeneratedArtifactHintForCandidates([entry.path]),
+        }),
     ...(generatedArtifact ? { generatedArtifact } : {}),
   });
 }
@@ -586,8 +604,13 @@ function explainWildcard(root, spec, aliasMap) {
   const remapped = mapOutputToSource(entry.pkgDir, substituted);
   const targetCandidates = [literal, remapped];
   const generatedArtifact = generatedWorkspaceSubpathEvidence(entry, star);
+  const outputLayout = generatedArtifact
+    ? null
+    : unsupportedOutputSourceLayoutForTarget(substituted, { source: entry.source });
   const generatedHint = generatedArtifact ? GENERATED_ARTIFACT_MISSING_HINT : undefined;
-  const reason = entry.legacySubpath
+  const reason = outputLayout
+    ? OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_REASON
+    : entry.legacySubpath
     ? (generatedHint ? GENERATED_ARTIFACT_MISSING_REASON : 'workspace-package-subpath-target-missing')
     : 'wildcard-alias-target-missing';
   return unresolvedRecord(root, reason, {
@@ -595,7 +618,15 @@ function explainWildcard(root, spec, aliasMap) {
       matchedPattern: entry.legacySubpath ? `${entry.pkgName}/*` : `${entry.matchPrefix}*${entry.matchSuffix ?? ''}`,
       source: entry.source,
       targetCandidates,
-      hint: generatedHint ?? unresolvedGeneratedArtifactHintForCandidates(targetCandidates),
+      ...(outputLayout
+        ? {
+            outputLevel: 'unsupported',
+            unsupportedFamily: OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_FAMILY,
+            hint: OUTPUT_SOURCE_LAYOUT_UNSUPPORTED_HINT,
+          }
+        : {
+            hint: generatedHint ?? unresolvedGeneratedArtifactHintForCandidates(targetCandidates),
+          }),
       ...(generatedArtifact
         ? {
             generatedArtifact: {

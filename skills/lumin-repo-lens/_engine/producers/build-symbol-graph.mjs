@@ -560,6 +560,18 @@ function recordUnresolvedInternalSpecifier(consumerFile, use) {
   const spec = typeof use === 'string' ? use : use.fromSpec;
   if (typeof spec !== 'string' || spec.length === 0) return;
   const explanation = explainUnresolvedSpecifier(ROOT, aliasMap, consumerFile, spec) ?? {};
+  const diagnostic = typeof use === 'object' ? {
+    ...(use.reason ? { reason: use.reason } : {}),
+    ...(use.resolverStage ? { resolverStage: use.resolverStage } : {}),
+    ...(use.outputLevel ? { outputLevel: use.outputLevel } : {}),
+    ...(use.unsupportedFamily ? { unsupportedFamily: use.unsupportedFamily } : {}),
+    ...(use.hint ? { hint: use.hint } : {}),
+    ...(Array.isArray(use.targetCandidates) ? { targetCandidates: use.targetCandidates } : {}),
+    ...(use.affectedPackageScope ? { affectedPackageScope: use.affectedPackageScope } : {}),
+    ...(use.affectedDir
+      ? { affectedPackageScope: relPath(ROOT, path.resolve(path.dirname(consumerFile), use.affectedDir)) }
+      : {}),
+  } : {};
   unresolvedInternalSpecifiers.add(spec);
   unresolvedInternalSpecifierRecords.push({
     specifier: spec,
@@ -570,6 +582,7 @@ function recordUnresolvedInternalSpecifier(consumerFile, use) {
       ? { typeOnly: use.typeOnly }
       : {}),
     ...explanation,
+    ...diagnostic,
   });
 }
 

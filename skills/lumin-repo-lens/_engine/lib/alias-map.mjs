@@ -165,6 +165,28 @@ const OUT_SRC_PAIRS = [
   ['esm', 'src'],
 ];
 const OUTPUT_ARTIFACT_DIRS = new Set(OUT_SRC_PAIRS.map(([out]) => out));
+const SOURCE_DIRECT_DIRS = new Set(['src', 'source', 'lib']);
+const OUTPUT_ARTIFACT_EXT_RE = /\.(?:mjs|cjs|js|jsx|d\.[cm]?ts)$/i;
+
+export function unsupportedOutputSourceLayoutForTarget(target, { source } = {}) {
+  if (source !== 'exports') return null;
+  const stripped = String(target ?? '').replace(/\\/g, '/').replace(/^\.\//, '');
+  const segments = stripped.split('/');
+  const firstSegment = segments[0];
+  if (!firstSegment || !stripped.includes('/')) return null;
+  if (!OUTPUT_ARTIFACT_EXT_RE.test(stripped)) return null;
+  if (segments.some((segment) => /^(generated|__generated__|gen)$/i.test(segment))) {
+    return null;
+  }
+  if (OUTPUT_ARTIFACT_DIRS.has(firstSegment) || SOURCE_DIRECT_DIRS.has(firstSegment)) {
+    return null;
+  }
+  return {
+    outputDir: firstSegment,
+    target: stripped,
+    supportedOutputDirs: [...OUTPUT_ARTIFACT_DIRS].sort(),
+  };
+}
 
 export function listPackageDirs(root, repoMode) {
   const dirs = [];
@@ -372,6 +394,8 @@ function addExportsEntries(map, pkgDir, pkgJson) {
       map.set(spec, {
         type: 'exact',
         source: 'exports',
+        pkgDir,
+        target: t,
         path: resolvedTarget,
         ...(generatedArtifact ? { generatedArtifact } : {}),
       });
