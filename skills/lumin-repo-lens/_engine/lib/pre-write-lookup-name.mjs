@@ -263,106 +263,156 @@ function demoteResolverConfidence(ownerFile, { unresolvedInternalSpecifiers, fil
 
 // ── Near-name hints (NOT_OBSERVED only) ──────────────────────
 
-function computeNearNames(intentName, defIndex) {
-  const candidates = [];
-
+function enumerateSearchCandidates(defIndex, classMethodIndex) {
+  const out = [];
   for (const [file, namesObj] of Object.entries(defIndex ?? {})) {
-    for (const name of Object.keys(namesObj ?? {})) {
-      if (name === intentName) continue;
-      if (hasOnlyWeakCommonTokens(intentName, name)) continue;
-
-      // Cheap filter A (prefix): shared prefix ≥ 4 qualifies on a
-      // relaxed length budget — `formatTimestamp` (15) vs `formatDate`
-      // (10) is a legitimate hint despite delta 5. But `formatLongerName`
-      // (16) vs `formatX` (7) is too divergent; cap the prefix-path
-      // delta at intentName.length so the candidate is at most ~2× the
-      // intent. Keeps "useful sibling hints" while rejecting extreme
-      // length mismatches.
-      const prefix = sharedPrefix(name, intentName);
-      if (prefix >= NEAR_NAME_SHARED_PREFIX_MIN &&
-          Math.abs(name.length - intentName.length) <= intentName.length) {
-        const approxDist = levenshteinCapped(name, intentName, NEAR_NAME_MAX_DISTANCE * 4);
-        candidates.push({ name, ownerFile: file, distance: approxDist });
-        continue;
-      }
-
-      // Cheap filter B (length delta): without a shared prefix, Lev ≥ 3
-      // is guaranteed when length delta ≥ 3. Skip without computing.
-      if (Math.abs(name.length - intentName.length) > NEAR_NAME_MAX_LENGTH_DELTA) continue;
-
-      const dist = levenshteinCapped(name, intentName, NEAR_NAME_MAX_DISTANCE);
-      if (dist <= NEAR_NAME_MAX_DISTANCE) {
-        candidates.push({ name, ownerFile: file, distance: dist });
+    for (const [name, defInfo] of Object.entries(namesObj ?? {})) {
+      out.push({
+        name,
+        ownerFile: file,
+        matchedField: 'defIndex',
+        defInfo,
+      });
+    }
+  }
+  for (const [file, methodsByName] of Object.entries(classMethodIndex ?? {})) {
+    for (const [name, records] of Object.entries(methodsByName ?? {})) {
+      const list = Array.isArray(records) ? records : [records];
+      for (const record of list) {
+        if (!record || typeof record !== 'object') continue;
+        out.push({
+          name: record.name ?? record.methodName ?? name,
+          ownerFile: record.ownerFile ?? file,
+          matchedField: 'classMethodIndex',
+          identity: record.identity,
+          className: record.className,
+          memberKind: record.memberKind,
+          visibility: record.visibility,
+          static: record.static === true,
+          line: record.line,
+        });
       }
     }
   }
+  return out;
+}
 
-  candidates.sort((a, b) => a.distance - b.distance || a.name.localeCompare(b.name));
+function candidateHintFields(candidate) {
+  const out = {
+    name: candidate.name,
+    ownerFile: candidate.ownerFile,
+  };
+  if (candidate.matchedField) out.matchedField = candidate.matchedField;
+  if (candidate.identity) out.identity = candidate.identity;
+  if (candidate.matchedField === 'classMethodIndex') out.exportedName = candidate.name;
+  if (candidate.className) out.className = candidate.className;
+  if (candidate.memberKind) out.memberKind = candidate.memberKind;
+  if (candidate.visibility) out.visibility = candidate.visibility;
+  if (candidate.static) out.static = true;
+  if (candidate.line) out.line = candidate.line;
+  return out;
+}
+
+function computeNearNames(intentName, defIndex, classMethodIndex) {
+  const candidates = [];
+
+  for (const candidate of enumerateSearchCandidates(defIndex, classMethodIndex)) {
+    const { name } = candidate;
+    if (name === intentName && candidate.matchedField !== 'classMethodIndex') continue;
+    if (hasOnlyWeakCommonTokens(intentName, name)) continue;
+
+    // Cheap filter A (prefix): shared prefix ≥ 4 qualifies on a
+    // relaxed length budget — `formatTimestamp` (15) vs `formatDate`
+    // (10) is a legitimate hint despite delta 5. But `formatLongerName`
+    // (16) vs `formatX` (7) is too divergent; cap the prefix-path
+    // delta at intentName.length so the candidate is at most ~2× the
+    // intent. Keeps "useful sibling hints" while rejecting extreme
+    // length mismatches.
+    const prefix = sharedPrefix(name, intentName);
+    if (prefix >= NEAR_NAME_SHARED_PREFIX_MIN &&
+        Math.abs(name.length - intentName.length) <= intentName.length) {
+      const approxDist = levenshteinCapped(name, intentName, NEAR_NAME_MAX_DISTANCE * 4);
+      candidates.push({ ...candidateHintFields(candidate), distance: approxDist });
+      continue;
+    }
+
+    // Cheap filter B (length delta): without a shared prefix, Lev ≥ 3
+    // is guaranteed when length delta ≥ 3. Skip without computing.
+    if (Math.abs(name.length - intentName.length) > NEAR_NAME_MAX_LENGTH_DELTA) continue;
+
+    const dist = levenshteinCapped(name, intentName, NEAR_NAME_MAX_DISTANCE);
+    if (dist <= NEAR_NAME_MAX_DISTANCE) {
+      candidates.push({ ...candidateHintFields(candidate), distance: dist });
+    }
+  }
+
+  candidates.sort((a, b) =>
+    a.distance - b.distance ||
+    (a.matchedField === 'classMethodIndex' ? 0 : 1) - (b.matchedField === 'classMethodIndex' ? 0 : 1) ||
+    a.name.localeCompare(b.name) ||
+    a.ownerFile.localeCompare(b.ownerFile)
+  );
   return candidates.slice(0, NEAR_NAME_MAX_RESULTS);
 }
 
-function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex) {
+function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, classMethodIndex) {
   const queryTokens = uniqueTokens(intentName, intentDeclaration?.kind, intentDeclaration?.why);
   if (queryTokens.length === 0) return { semanticHints: [], suppressedSemanticHints: [] };
   const querySet = new Set(queryTokens);
   const semanticHints = [];
   const suppressedSemanticHints = [];
 
-  for (const [file, namesObj] of Object.entries(defIndex ?? {})) {
-    for (const name of Object.keys(namesObj ?? {})) {
-      if (name === intentName) continue;
-      const fileStem = file.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? '';
-      const ownerDir = file.split(/[\\/]/).slice(0, -1).join(' ');
-      const candidateNameTokens = uniqueTokens(name);
-      const candidateSupportTokens = uniqueTokens(fileStem, ownerDir);
-      const candidateTokens = [...new Set([...candidateNameTokens, ...candidateSupportTokens])];
-      const matchedTokens = candidateTokens.filter((token) => querySet.has(token));
-      if (matchedTokens.length === 0) continue;
+  for (const candidate of enumerateSearchCandidates(defIndex, classMethodIndex)) {
+    const { name } = candidate;
+    if (name === intentName && candidate.matchedField !== 'classMethodIndex') continue;
+    const fileStem = candidate.ownerFile.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, '') ?? '';
+    const ownerDir = candidate.ownerFile.split(/[\\/]/).slice(0, -1).join(' ');
+    const candidateNameTokens = uniqueTokens(name);
+    const candidateSupportTokens = uniqueTokens(fileStem, ownerDir, candidate.className);
+    const candidateTokens = [...new Set([...candidateNameTokens, ...candidateSupportTokens])];
+    const matchedTokens = candidateTokens.filter((token) => querySet.has(token));
+    if (matchedTokens.length === 0) continue;
 
-      const score = matchedTokens.length;
-      if (score < SEMANTIC_HINT_MIN_SCORE) {
-        if (matchedTokens.length === 1 && matchedTokens.every(isWeakCommonToken)) {
-          suppressedSemanticHints.push({
-            name,
-            ownerFile: file,
-            matchedTokens,
-            score,
-            reason: 'weak-common-token-only',
-          });
-        }
-        continue;
-      }
-      const matchedNameTokens = candidateNameTokens.filter((token) => querySet.has(token));
-      const strongNameMatches = matchedNameTokens.filter((token) => !isWeakCommonToken(token));
-      const strongSupportMatches = candidateSupportTokens
-        .filter((token) =>
-          querySet.has(token) &&
-          !isWeakCommonToken(token) &&
-          !strongNameMatches.includes(token)
-        );
-      if (strongNameMatches.length < 2 && !(strongNameMatches.length === 1 && strongSupportMatches.length >= 1)) {
+    const score = matchedTokens.length;
+    if (score < SEMANTIC_HINT_MIN_SCORE) {
+      if (matchedTokens.length === 1 && matchedTokens.every(isWeakCommonToken)) {
         suppressedSemanticHints.push({
-          name,
-          ownerFile: file,
+          ...candidateHintFields(candidate),
           matchedTokens,
-          matchedNameTokens,
-          matchedSupportTokens: strongSupportMatches,
           score,
-          reason: matchedTokens.every(isWeakCommonToken)
-            ? 'weak-common-token-only'
-            : 'insufficient-non-weak-support',
+          reason: 'weak-common-token-only',
         });
-        continue;
       }
-      semanticHints.push({
-        name,
-        ownerFile: file,
+      continue;
+    }
+    const matchedNameTokens = candidateNameTokens.filter((token) => querySet.has(token));
+    const strongNameMatches = matchedNameTokens.filter((token) => !isWeakCommonToken(token));
+    const strongSupportMatches = candidateSupportTokens
+      .filter((token) =>
+        querySet.has(token) &&
+        !isWeakCommonToken(token) &&
+        !strongNameMatches.includes(token)
+      );
+    if (strongNameMatches.length < 2 && !(strongNameMatches.length === 1 && strongSupportMatches.length >= 1)) {
+      suppressedSemanticHints.push({
+        ...candidateHintFields(candidate),
         matchedTokens,
         matchedNameTokens,
         matchedSupportTokens: strongSupportMatches,
         score,
+        reason: matchedTokens.every(isWeakCommonToken)
+          ? 'weak-common-token-only'
+          : 'insufficient-non-weak-support',
       });
+      continue;
     }
+    semanticHints.push({
+      ...candidateHintFields(candidate),
+      matchedTokens,
+      matchedNameTokens,
+      matchedSupportTokens: strongSupportMatches,
+      score,
+    });
   }
 
   const sortHints = (arr) => arr.sort((a, b) =>
@@ -423,6 +473,7 @@ export function lookupName(intentName, ctx) {
 
   const supports = symbols?.meta?.supports ?? {};
   const defIndex = symbols?.defIndex ?? {};
+  const classMethodIndex = symbols?.classMethodIndex ?? {};
   const intentDeclaration = ctx?.intentDeclaration ?? null;
 
   // 1. Canonical-first lookup.
@@ -499,21 +550,24 @@ export function lookupName(intentName, ctx) {
 
   // 5. Near-name hints — only when no AST identity was found.
   const nearNames = identities.length === 0
-    ? computeNearNames(intentName, defIndex)
+    ? computeNearNames(intentName, defIndex, classMethodIndex)
     : [];
   const semanticCandidateResult = identities.length === 0
-    ? computeSemanticHintCandidates(intentName, intentDeclaration, defIndex)
+    ? computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, classMethodIndex)
     : { semanticHints: [], suppressedSemanticHints: [] };
   const semanticHints = semanticCandidateResult.semanticHints;
   const suppressedSemanticHints = semanticCandidateResult.suppressedSemanticHints;
   if (nearNames.length > 0) {
-    citations.push(`[degraded, fuzzy-name match; source: symbols.json.defIndex name scan — search hint only, NOT a grounded reuse claim]`);
+    citations.push(`[degraded, fuzzy-name match; source: symbols.json.defIndex/classMethodIndex name scan — search hint only, NOT a grounded reuse claim]`);
   }
   if (semanticHints.length > 0) {
-    citations.push(`[degraded, intent-token match; source: symbols.json.defIndex plus intent.name/intent.why tokens — search hint only, NOT a grounded reuse claim]`);
+    citations.push(`[degraded, intent-token match; source: symbols.json.defIndex/classMethodIndex plus intent.name/intent.why tokens — search hint only, NOT a grounded reuse claim]`);
+  }
+  if (identities.length === 0 && !supports.classMethodIndex) {
+    citations.push(`[확인 불가, reason: symbols.meta.supports.classMethodIndex is not true; class-method search unavailable]`);
   }
   if (nearNames.length === 0 && semanticHints.length === 0 && identities.length === 0 && !canonicalClaim) {
-    citations.push(`[확인 불가, scan range: symbols.json.defIndex does not contain '${intentName}'; no near-name or intent-token candidates either]`);
+    citations.push(`[확인 불가, scan range: symbols.json.defIndex/classMethodIndex does not contain '${intentName}'; no near-name or intent-token candidates either]`);
   }
 
   return {

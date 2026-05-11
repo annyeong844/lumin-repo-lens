@@ -143,29 +143,33 @@ function addNameLookup({ lookup, cardMap, suppressedCues }) {
   }
 
   for (const near of lookup.nearNames ?? []) {
-    const identity = `${near.ownerFile}::${near.name}`;
+    const identity = near.identity ?? `${near.ownerFile}::${near.name}`;
+    const isClassMethod = near.matchedField === 'classMethodIndex';
     addCue(cardMap, suppressedCues, candidateFromIdentity(identity, near), reviewCue({
-      lane: 'near-name',
-      claim: 'near exported name',
+      lane: isClassMethod ? 'class-method-name' : 'near-name',
+      claim: isClassMethod ? 'near class method name' : 'near exported name',
       evidence: [{
         artifact: 'symbols.json',
-        matchedField: 'defIndex',
+        matchedField: near.matchedField ?? 'defIndex',
         algorithmVersion: 'near-name.v1',
         distance: near.distance,
+        ...(near.identity ? { candidateIdentity: near.identity } : {}),
       }],
     }));
   }
 
   for (const hint of lookup.semanticHints ?? []) {
-    const identity = `${hint.ownerFile}::${hint.name}`;
+    const identity = hint.identity ?? `${hint.ownerFile}::${hint.name}`;
+    const isClassMethod = hint.matchedField === 'classMethodIndex';
     addCue(cardMap, suppressedCues, candidateFromIdentity(identity, hint), reviewCue({
-      lane: 'intent-token',
-      claim: 'supported intent-token overlap',
+      lane: isClassMethod ? 'class-method-name' : 'intent-token',
+      claim: isClassMethod ? 'class method intent-token overlap' : 'supported intent-token overlap',
       evidence: [{
         artifact: 'symbols.json',
-        matchedField: 'defIndex',
+        matchedField: hint.matchedField ?? 'defIndex',
         algorithmVersion: TOKEN_POLICY_VERSION,
         tokens: hint.matchedTokens ?? [],
+        ...(hint.identity ? { candidateIdentity: hint.identity } : {}),
       }],
     }));
   }
@@ -181,7 +185,8 @@ function addNameLookup({ lookup, cardMap, suppressedCues }) {
       tokenPolicyVersion: TOKEN_POLICY_VERSION,
       ownerFile: hint.ownerFile,
       exportedName: hint.name,
-      identity: `${hint.ownerFile}::${hint.name}`,
+      identity: hint.identity ?? `${hint.ownerFile}::${hint.name}`,
+      matchedField: hint.matchedField ?? 'defIndex',
     });
   }
 }

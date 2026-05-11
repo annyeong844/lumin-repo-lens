@@ -197,6 +197,43 @@ function buildPlainDefIndex({ root, defIndex }) {
   return out;
 }
 
+function sortClassMethodRecords(records = []) {
+  return [...records].sort((a, b) =>
+    `${a.className ?? ''}|${a.name ?? ''}|${String(a.line ?? '').padStart(6, '0')}|${a.identity ?? ''}`
+      .localeCompare(`${b.className ?? ''}|${b.name ?? ''}|${String(b.line ?? '').padStart(6, '0')}|${b.identity ?? ''}`));
+}
+
+function buildClassMethodIndex({ root, fileData }) {
+  const out = {};
+  for (const [absFile, info] of fileData) {
+    const methods = info.classMethods ?? [];
+    if (methods.length === 0) continue;
+    const rel = relPath(root, absFile);
+    const byName = {};
+    for (const method of sortClassMethodRecords(methods)) {
+      const name = method.name ?? method.methodName;
+      if (!name) continue;
+      if (!byName[name]) byName[name] = [];
+      byName[name].push({
+        identity: method.identity ?? `${rel}::${method.className}#${name}`,
+        ownerFile: method.ownerFile ?? rel,
+        className: method.className,
+        name,
+        methodName: method.methodName ?? name,
+        kind: method.kind ?? 'ClassMethod',
+        memberKind: method.memberKind ?? 'method',
+        visibility: method.visibility ?? 'public',
+        static: method.static === true,
+        computed: method.computed === true,
+        line: method.line,
+        ...(method.endLine ? { endLine: method.endLine } : {}),
+      });
+    }
+    if (Object.keys(byName).length > 0) out[rel] = byName;
+  }
+  return out;
+}
+
 function sortResolvedInternalEdges(edges) {
   return [...(edges ?? [])].sort((a, b) =>
     `${a.from ?? ''}|${a.to ?? ''}|${a.kind ?? ''}|${a.source ?? ''}|${a.typeOnly ? '1' : '0'}`
@@ -291,6 +328,7 @@ export function buildSymbolsArtifact({
         generatedVirtualSurfaces: true,
         nonSourceAssetImports: true,
         namespaceReExportDiagnostics: true,
+        classMethodIndex: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -298,6 +336,7 @@ export function buildSymbolsArtifact({
     },
     files: files.length,
     totalDefs: [...defIndex.values()].reduce((a, m) => a + m.size, 0),
+    totalClassMethods: [...fileData.values()].reduce((a, info) => a + (info.classMethods?.length ?? 0), 0),
     totalUsesResolved: totalUses,
     unresolvedUses,
     uses: {
@@ -344,6 +383,7 @@ export function buildSymbolsArtifact({
     helperOwnersByIdentity: anyContaminationFacts?.helperOwnersByIdentity ?? {},
     typeOwnersByIdentity: anyContaminationFacts?.typeOwnersByIdentity ?? {},
     defIndex: buildPlainDefIndex({ root, defIndex }),
+    classMethodIndex: buildClassMethodIndex({ root, fileData }),
     deadProdList: deadInProd,
     reExportsByFile: buildReExportsByFile({ root, fileData }),
   };

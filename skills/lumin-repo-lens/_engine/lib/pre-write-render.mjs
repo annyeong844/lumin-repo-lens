@@ -190,10 +190,14 @@ function renderLookupSearchHints(lookup) {
     out.push(`  [degraded, intent-token match; source: symbols.json.defIndex plus intent.name/intent.why tokens — search hint only, NOT a grounded reuse claim]`);
   }
   for (const hint of lookup.nearNames ?? []) {
-    out.push(`  - \`${hint.name}\` at \`${hint.ownerFile}\` (edit-distance ${hint.distance})`);
+    const location = hint.identity ?? hint.ownerFile;
+    const classLabel = hint.className ? `, class \`${hint.className}\`` : '';
+    out.push(`  - \`${hint.name}\` at \`${location}\` (edit-distance ${hint.distance}${classLabel})`);
   }
   for (const hint of lookup.semanticHints ?? []) {
-    out.push(`  - \`${hint.name}\` at \`${hint.ownerFile}\` (matched tokens: ${hint.matchedTokens.map((t) => `\`${t}\``).join(', ')})`);
+    const location = hint.identity ?? hint.ownerFile;
+    const classLabel = hint.className ? `, class \`${hint.className}\`` : '';
+    out.push(`  - \`${hint.name}\` at \`${location}\` (matched tokens: ${hint.matchedTokens.map((t) => `\`${t}\``).join(', ')}${classLabel})`);
   }
   return out;
 }
@@ -422,7 +426,7 @@ function cueCoveredIdentities(advisory) {
     const identity = card.candidate?.identity;
     if (!identity) continue;
     for (const cue of card.cues ?? []) {
-      if (['exact-symbol', 'near-name', 'intent-token', 'function-signature', 'shape-hash', 'exact-file'].includes(cue.evidenceLane)) {
+      if (['exact-symbol', 'near-name', 'intent-token', 'class-method-name', 'function-signature', 'shape-hash', 'exact-file'].includes(cue.evidenceLane)) {
         covered.add(identity);
       }
     }
@@ -442,10 +446,12 @@ function lookupCandidateIdentities(lookup) {
     if (identity.identity) out.push(identity.identity);
   }
   for (const near of lookup.nearNames ?? []) {
-    if (near.ownerFile && near.name) out.push(`${near.ownerFile}::${near.name}`);
+    if (near.identity) out.push(near.identity);
+    else if (near.ownerFile && near.name) out.push(`${near.ownerFile}::${near.name}`);
   }
   for (const hint of lookup.semanticHints ?? []) {
-    if (hint.ownerFile && hint.name) out.push(`${hint.ownerFile}::${hint.name}`);
+    if (hint.identity) out.push(hint.identity);
+    else if (hint.ownerFile && hint.name) out.push(`${hint.ownerFile}::${hint.name}`);
   }
   for (const match of lookup.matches ?? []) {
     if (match.identity) out.push(match.identity);

@@ -153,6 +153,7 @@ function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
   const namespaceImports = new Map();
   const namedImports = new Map();
   const cjsExportSurface = collectCjsExportSurface(program, getNodeLine);
+  const classMethods = collectClassMethodSurface(program, getNodeLine, artifactFilePath);
   const localDeclarations = collectTopLevelDeclarationTargets(program);
 
   for (const node of program.body) {
@@ -161,7 +162,101 @@ function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
     collectImports(node, uses, namespaceImports, namedImports, getNodeLine);
   }
 
-  return { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface };
+  return { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface, classMethods };
+}
+
+function classNameFromTopLevelNode(node) {
+  const declaration = node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration'
+    ? node.declaration
+    : node;
+
+  if (declaration?.type === 'ClassDeclaration' && declaration.id?.name) {
+    return { className: declaration.id.name, classNode: declaration };
+  }
+
+  if (declaration?.type === 'VariableDeclaration') {
+    const out = [];
+    for (const decl of declaration.declarations ?? []) {
+      if (decl.id?.type === 'Identifier' && decl.init?.type === 'ClassExpression') {
+        out.push({ className: decl.id.name, classNode: decl.init });
+      }
+    }
+    return out;
+  }
+
+  return null;
+}
+
+function methodNameFromClassKey(key, computed) {
+  if (!key) return null;
+  if (key.type === 'PrivateIdentifier' && typeof key.name === 'string') return `#${key.name}`;
+  if (!computed && typeof key.name === 'string') return key.name;
+  if (computed) return null;
+  if (typeof key.value === 'string') return key.value;
+  return null;
+}
+
+function classMemberRecord(member, className, getNodeLine, artifactFilePath) {
+  const memberType = member?.type;
+  const isMethod = memberType === 'MethodDefinition';
+  const isFunctionField =
+    memberType === 'PropertyDefinition' &&
+    (member.value?.type === 'ArrowFunctionExpression' ||
+      member.value?.type === 'FunctionExpression');
+  if (!isMethod && !isFunctionField) return null;
+
+  const methodName = methodNameFromClassKey(member.key, member.computed === true);
+  if (!methodName || methodName === 'constructor') return null;
+
+  const memberKind = isMethod ? (member.kind ?? 'method') : 'class-field-function';
+  if (memberKind === 'constructor') return null;
+
+  const visibility = methodName.startsWith('#')
+    ? 'private'
+    : member.accessibility ?? 'public';
+  const line = getNodeLine(member.key ?? member);
+  const endLine = getNodeLine(member.value ?? member);
+  const record = {
+    identity: `${artifactFilePath}::${className}#${methodName}`,
+    ownerFile: artifactFilePath,
+    className,
+    name: methodName,
+    methodName,
+    kind: 'ClassMethod',
+    memberKind,
+    visibility,
+    static: member.static === true,
+    computed: member.computed === true,
+    line,
+  };
+  if (endLine && endLine !== line) record.endLine = endLine;
+  return record;
+}
+
+function collectClassMethodsFromClass(classNode, className, getNodeLine, artifactFilePath) {
+  const out = [];
+  for (const member of classNode?.body?.body ?? []) {
+    const record = classMemberRecord(member, className, getNodeLine, artifactFilePath);
+    if (record) out.push(record);
+  }
+  return out;
+}
+
+function collectClassMethodSurface(program, getNodeLine, artifactFilePath) {
+  const out = [];
+  for (const node of program.body ?? []) {
+    const info = classNameFromTopLevelNode(node);
+    if (Array.isArray(info)) {
+      for (const entry of info) {
+        out.push(...collectClassMethodsFromClass(entry.classNode, entry.className, getNodeLine, artifactFilePath));
+      }
+      continue;
+    }
+    if (info) {
+      out.push(...collectClassMethodsFromClass(info.classNode, info.className, getNodeLine, artifactFilePath));
+    }
+  }
+  return out;
 }
 
 function collectTopLevelDeclarationTargets(program) {
@@ -1081,7 +1176,7 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
   const result = parseOxcOrThrow(filePath, src);
   const getNodeLine = makeLineGetter(src);
   const artifactFilePath = options.artifactFilePath ?? filePath;
-  const { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface } =
+  const { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface, classMethods } =
     collectTopLevelSymbols(result.program, getNodeLine, artifactFilePath);
   const memberPrecision = collectMemberPrecisionUses(result.program, namespaceImports, namedImports, getNodeLine);
   uses.push(...memberPrecision.uses);
@@ -1093,6 +1188,7 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
     defs,
     uses,
     reExports,
+    classMethods,
     typeEscapes: typeEscapeResult.typeEscapes ?? [],
     loc: src.split('\n').length,
     ...(cjsExportSurface ? { cjsExportSurface } : {}),

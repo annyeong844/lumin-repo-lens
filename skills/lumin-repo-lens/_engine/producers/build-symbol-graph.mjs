@@ -411,6 +411,7 @@ let reExportCount = 0;
 let typeEscapeCount = 0;
 let dynamicImportOpacityCount = 0;
 let cjsRequireOpacityCount = 0;
+let classMethodCount = 0;
 for (const [f, entry] of Object.entries(nextCache.entries)) {
   if (entry.parseError || entry.defs === undefined) continue;
   definitionCount += (entry.defs ?? []).length;
@@ -419,11 +420,13 @@ for (const [f, entry] of Object.entries(nextCache.entries)) {
   typeEscapeCount += (entry.typeEscapes ?? []).length;
   dynamicImportOpacityCount += (entry.dynamicImportOpacity ?? []).length;
   cjsRequireOpacityCount += (entry.cjsRequireOpacity ?? []).length;
+  classMethodCount += (entry.classMethods ?? []).length;
   fileData.set(f, {
     filePath: f,
     defs: entry.defs ?? [],
     uses: entry.uses ?? [],
     reExports: entry.reExports ?? [],
+    classMethods: entry.classMethods ?? [],
     typeEscapes: entry.typeEscapes ?? [],
     loc: entry.loc ?? 0,
     dynamicImportOpacity: entry.dynamicImportOpacity ?? [],
@@ -445,6 +448,7 @@ phaseTimer.setCounter('reExportCount', reExportCount);
 phaseTimer.setCounter('typeEscapeCount', typeEscapeCount);
 phaseTimer.setCounter('dynamicImportOpacityCount', dynamicImportOpacityCount);
 phaseTimer.setCounter('cjsRequireOpacityCount', cjsRequireOpacityCount);
+phaseTimer.setCounter('classMethodCount', classMethodCount);
 phaseTimer.recordPhase('assemble-file-data', Date.now() - assembleFileDataStarted);
 console.log(`[parse] errors: ${parseErrors}`);
 
