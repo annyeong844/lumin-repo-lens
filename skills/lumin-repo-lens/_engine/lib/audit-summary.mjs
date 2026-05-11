@@ -95,6 +95,13 @@ function formatFrameworkResourceSurfaceCounts(summary) {
   ].filter(Boolean).join('; ');
 }
 
+function formatUnreachableSccCue(moduleReachability) {
+  const groups = n(moduleReachability?.summary?.unreachableStronglyConnectedComponents, 0);
+  const files = n(moduleReachability?.summary?.unreachableStronglyConnectedFiles, 0);
+  if (groups <= 0 || files <= 0) return null;
+  return `Unreachable SCCs: ${groups} ${plural(groups, 'group')}, ${files} ${plural(files, 'file')}`;
+}
+
 function formatTopSpecifiers(specifiers, limit = 2) {
   if (!Array.isArray(specifiers) || specifiers.length === 0) return null;
   const parts = specifiers
@@ -243,7 +250,7 @@ function typeEscapeTotal(discipline) {
     n(totals['jsdoc-any']);
 }
 
-function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols }) {
+function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols, moduleReachability }) {
   const lines = [];
 
   if (topology?.summary || checklistFacts?.A6_circular_deps) {
@@ -289,6 +296,13 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
   if (fixPlan?.summary) {
     const s = fixPlan.summary;
     lines.push(`- Dead-export tiers: SAFE_FIX ${n(s.SAFE_FIX)}, REVIEW_FIX ${n(s.REVIEW_FIX)}, DEGRADED ${n(s.DEGRADED)}, MUTED ${n(s.MUTED)}. Read \`fix-plan.json\` plus FP context before recommending removal.`);
+  }
+
+  const unreachableSccCue = formatUnreachableSccCue(moduleReachability);
+  if (unreachableSccCue) {
+    lines.push(
+      `- ${unreachableSccCue}. Read \`module-reachability.json.unreachableStronglyConnectedComponents[]\` before treating intra-cycle imports as liveness. This is dead-file-group review evidence, not export SAFE_FIX proof.`
+    );
   }
 
   const generatedConsumerZoneCount = n(manifest?.generatedArtifacts?.generatedConsumerBlindZoneCount, 0);
@@ -361,7 +375,7 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     : ['- No measured cue lines were available from the provided artifacts. Read `manifest.json` and rerun the relevant profile before making structural claims.'];
 }
 
-function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols }) {
+function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols, moduleReachability }) {
   const produced = Array.isArray(manifest?.artifactsProduced) ? new Set(manifest.artifactsProduced) : new Set();
   const lines = [];
 
@@ -377,6 +391,9 @@ function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipl
   }
   if (topology || produced.has('topology.json')) {
     lines.push('- `topology.json`: cycles, cross-submodule edges, largest files, and topology details.');
+  }
+  if (moduleReachability || produced.has('module-reachability.json')) {
+    lines.push('- `module-reachability.json`: entry-rooted file reachability, unreachable files, and entry-unreachable SCC review cues.');
   }
   if (produced.has('topology.mermaid.md')) {
     lines.push('- `topology.mermaid.md`: capped Mermaid diagrams plus hub-file notes for topology review; visual aid only, not citation authority.');
@@ -436,6 +453,7 @@ export function renderAuditSummary({
   callGraph = null,
   functionClones = null,
   symbols = null,
+  moduleReachability = null,
 }) {
   const commandResult = summarizeLifecycleCommand(manifest);
   const lines = [
@@ -463,11 +481,11 @@ export function renderAuditSummary({
   lines.push('');
 
   lines.push('## Measured Cues (Unranked)', '');
-  lines.push(...measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols }));
+  lines.push(...measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols, moduleReachability }));
   lines.push('');
 
   lines.push('## Artifact Map', '');
-  lines.push(...artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols }));
+  lines.push(...artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipline, callGraph, functionClones, symbols, moduleReachability }));
   lines.push('');
 
   lines.push(...livingAuditLines(manifest));

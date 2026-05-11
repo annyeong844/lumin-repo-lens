@@ -85,6 +85,108 @@ function bfsReachable({ seeds, adjacency, maxFilesVisited, maxEdgesVisited }) {
   return { visited, boundedOutReason };
 }
 
+function buildReverseAdjacency(nodes, adjacency) {
+  const nodeSet = new Set(nodes);
+  const reverse = new Map(nodes.map((node) => [node, []]));
+  for (const from of nodes) {
+    for (const to of adjacency.get(from) ?? []) {
+      if (!nodeSet.has(to)) continue;
+      reverse.get(to).push(from);
+    }
+  }
+  for (const [node, targets] of reverse) {
+    reverse.set(node, [...new Set(targets)].sort((a, b) => a.localeCompare(b)));
+  }
+  return reverse;
+}
+
+function finishOrder(nodes, adjacency) {
+  const visited = new Set();
+  const order = [];
+
+  for (const start of nodes) {
+    if (visited.has(start)) continue;
+    visited.add(start);
+    const stack = [{ node: start, nextIndex: 0 }];
+
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1];
+      const targets = adjacency.get(frame.node) ?? [];
+      if (frame.nextIndex >= targets.length) {
+        order.push(frame.node);
+        stack.pop();
+        continue;
+      }
+
+      const next = targets[frame.nextIndex];
+      frame.nextIndex++;
+      if (visited.has(next)) continue;
+      visited.add(next);
+      stack.push({ node: next, nextIndex: 0 });
+    }
+  }
+
+  return order;
+}
+
+function stronglyConnectedComponents(nodesInput, adjacency) {
+  const nodes = sortedSet(nodesInput);
+  const nodeSet = new Set(nodes);
+  const normalizedAdjacency = new Map();
+  for (const node of nodes) {
+    normalizedAdjacency.set(
+      node,
+      (adjacency.get(node) ?? [])
+        .filter((target) => nodeSet.has(target))
+        .sort((a, b) => a.localeCompare(b))
+    );
+  }
+
+  const reverse = buildReverseAdjacency(nodes, normalizedAdjacency);
+  const order = finishOrder(nodes, normalizedAdjacency);
+  const assigned = new Set();
+  const components = [];
+
+  for (let i = order.length - 1; i >= 0; i--) {
+    const start = order[i];
+    if (assigned.has(start)) continue;
+    const component = [];
+    const stack = [start];
+    assigned.add(start);
+
+    while (stack.length > 0) {
+      const node = stack.pop();
+      component.push(node);
+      for (const next of reverse.get(node) ?? []) {
+        if (assigned.has(next)) continue;
+        assigned.add(next);
+        stack.push(next);
+      }
+    }
+
+    component.sort((a, b) => a.localeCompare(b));
+    components.push(component);
+  }
+
+  return components.sort((a, b) =>
+    b.length - a.length ||
+    (a[0] ?? '').localeCompare(b[0] ?? '')
+  );
+}
+
+function unreachableRuntimeSccs({ knownFiles, runtimeGraph, unreachableFiles, boundedOutReason }) {
+  if (boundedOutReason) return [];
+  return stronglyConnectedComponents(knownFiles, runtimeGraph)
+    .filter((files) => files.length > 1 && files.every((file) => unreachableFiles.has(file)))
+    .map((files) => ({
+      kind: 'entry-unreachable-scc',
+      graph: 'runtime',
+      size: files.length,
+      files,
+      note: 'Files import each other, but none are reachable from the recorded entry surface.',
+    }));
+}
+
 export function buildModuleReachabilityArtifact({
   root,
   symbolsData,
@@ -124,6 +226,15 @@ export function buildModuleReachabilityArtifact({
     else unreachableFiles.add(file);
   }
 
+  const unreachableStronglyConnectedComponents = unreachableRuntimeSccs({
+    knownFiles,
+    runtimeGraph,
+    unreachableFiles,
+    boundedOutReason,
+  });
+  const unreachableStronglyConnectedFiles = unreachableStronglyConnectedComponents
+    .reduce((sum, component) => sum + component.size, 0);
+
   return {
     meta: {
       ...producerMetaBase({ tool: 'build-module-reachability.mjs', root }),
@@ -139,6 +250,7 @@ export function buildModuleReachabilityArtifact({
         runtimeReachableFiles: true,
         typeReachableFiles: true,
         boundedOutFiles: true,
+        unreachableStronglyConnectedComponents: true,
       },
     },
     runtimeReachableFiles: sortedSet(runtimeReachableFiles),
@@ -146,12 +258,15 @@ export function buildModuleReachabilityArtifact({
     reachableFiles: sortedSet(reachableFiles),
     boundedOutFiles: sortedSet(boundedOutFiles),
     unreachableFiles: sortedSet(unreachableFiles),
+    unreachableStronglyConnectedComponents,
     summary: {
       runtimeReachable: runtimeReachableFiles.size,
       typeReachable: typeReachableFiles.size,
       reachable: reachableFiles.size,
       boundedOut: boundedOutFiles.size,
       unreachable: unreachableFiles.size,
+      unreachableStronglyConnectedComponents: unreachableStronglyConnectedComponents.length,
+      unreachableStronglyConnectedFiles,
       knownFiles: knownFiles.size,
     },
   };

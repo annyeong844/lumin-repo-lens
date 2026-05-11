@@ -981,6 +981,7 @@ if (values['strict-post-write-confidence'] && postWriteConfidenceLimited(postWri
 
 refreshManifestEvidence(manifest, manifestEvidenceOptions());
 const topologyArtifact = loadIfExists('topology.json');
+const moduleReachabilityArtifact = loadIfExists('module-reachability.json');
 if (topologyArtifact) {
   const topologyMermaidPath = path.join(OUT, 'topology.mermaid.md');
   atomicWrite(topologyMermaidPath, renderTopologyMermaid(topologyArtifact));
@@ -1010,6 +1011,7 @@ if (SHOULD_WRITE_SUMMARY) {
     callGraph: loadIfExists('call-graph.json'),
     functionClones: loadIfExists('function-clones.json'),
     symbols: loadIfExists('symbols.json'),
+    moduleReachability: moduleReachabilityArtifact,
   });
   writeFileSync(auditSummaryPath, summaryMarkdown);
   auditSummaryPreview = renderSummaryConsolePreview(summaryMarkdown);
@@ -1032,6 +1034,7 @@ if (RUN_BASE_PIPELINE && PROFILE !== 'quick') {
     shapeIndex: loadIfExists('shape-index.json'),
     deadClassify: loadIfExists('dead-classify.json'),
     symbols: loadIfExists('symbols.json'),
+    moduleReachability: moduleReachabilityArtifact,
   });
   writeFileSync(reviewPackPath, reviewPackMarkdown);
   manifest.reviewPack = {

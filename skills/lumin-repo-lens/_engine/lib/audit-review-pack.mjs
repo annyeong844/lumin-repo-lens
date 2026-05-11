@@ -25,6 +25,10 @@ function yesNo(value) {
   return value ? 'yes' : 'no';
 }
 
+function plural(count, singular, pluralValue = `${singular}s`) {
+  return count === 1 ? singular : pluralValue;
+}
+
 function formatCounterObject(counter) {
   if (!counter || typeof counter !== 'object' || Array.isArray(counter)) return null;
   const parts = Object.entries(counter)
@@ -39,6 +43,13 @@ function formatFrameworkResourceSurfaceCounts(summary) {
   if (total <= 0) return null;
   const laneText = formatCounterObject(summary?.byLane);
   return `Framework/resource surfaces: ${total} files${laneText ? `; lanes ${laneText}` : ''}. Read manifest.json.frameworkResourceSurfaces and framework-resource-surfaces.json before treating import absence as deadness.`;
+}
+
+function formatUnreachableSccReviewCheck(moduleReachability) {
+  const groups = n(moduleReachability?.summary?.unreachableStronglyConnectedComponents, 0);
+  const files = n(moduleReachability?.summary?.unreachableStronglyConnectedFiles, 0);
+  if (groups <= 0 || files <= 0) return null;
+  return `Unreachable SCCs: ${groups} ${plural(groups, 'group')}, ${files} ${plural(files, 'file')}. Read module-reachability.json.unreachableStronglyConnectedComponents[] before treating intra-cycle imports as liveness; use this as dead-file-group review evidence, not export SAFE_FIX proof.`;
 }
 
 function scanRange(manifest) {
@@ -129,7 +140,7 @@ function typeLane({ discipline, checklistFacts, shapeIndex, functionClones, symb
   }));
 }
 
-function deadSurfaceLane({ fixPlan, deadClassify, manifest }) {
+function deadSurfaceLane({ fixPlan, deadClassify, manifest, moduleReachability }) {
   const summary = fixPlan?.summary ?? {};
   const safe = n(summary.SAFE_FIX);
   const review = n(summary.REVIEW_FIX);
@@ -157,18 +168,20 @@ function deadSurfaceLane({ fixPlan, deadClassify, manifest }) {
   const frameworkResourceSurfaceCheck = formatFrameworkResourceSurfaceCounts(
     manifest?.frameworkResourceSurfaces
   );
+  const unreachableSccCheck = formatUnreachableSccReviewCheck(moduleReachability);
   const checks = [
     `Tier summary: SAFE_FIX ${safe}, REVIEW_FIX ${review}, DEGRADED ${degraded}, MUTED ${muted}. Do not present REVIEW_FIX as removable without screening.`,
     `Muted/excluded families observed: ${excludedText}. Translate them into plain language for the user.`,
     ...(resolverBlockedDistribution ? [resolverBlockedDistribution] : []),
     ...(resolverBlockedHint ? [resolverBlockedHint] : []),
     ...(frameworkResourceSurfaceCheck ? [frameworkResourceSurfaceCheck] : []),
+    ...(unreachableSccCheck ? [unreachableSccCheck] : []),
     'For each visible cleanup candidate, check whether it is exported through package/API/declaration/test-only surfaces before recommending a change.',
   ];
   return lane('Lane 3 — Dead Export And Public Surface Review', renderLanePrompt({
     title: 'Dead-export/public-surface reviewer',
     mission: 'Separate real cleanup from public surface, declaration/type-surface, framework, generated, config, and test-consumer false positives.',
-    artifacts: ['fix-plan.json', 'dead-classify.json', 'symbols.json', 'manifest.json'],
+    artifacts: ['fix-plan.json', 'dead-classify.json', 'symbols.json', 'manifest.json', 'module-reachability.json'],
     checks,
     report: 'Which candidates are safe to leave alone, which need review together, and at most one action-ready cleanup slice.',
   }));
@@ -202,6 +215,7 @@ export function renderAuditReviewPack({
   functionClones = null,
   deadClassify = null,
   symbols = null,
+  moduleReachability = null,
 } = {}) {
   const lines = [
     '# Audit Review Pack',
@@ -216,7 +230,7 @@ export function renderAuditReviewPack({
     '',
     topologyLane({ topology, callGraph, barrels }),
     typeLane({ discipline, checklistFacts, shapeIndex, functionClones, symbols }),
-    deadSurfaceLane({ fixPlan, deadClassify, manifest }),
+    deadSurfaceLane({ fixPlan, deadClassify, manifest, moduleReachability }),
     failureLane({ checklistFacts, manifest }),
     '## Merge Instructions',
     '',
