@@ -215,11 +215,11 @@ function sortedObject(map) {
 }
 
 function buildSummary(files) {
-  const byLane = {};
-  const byCapabilityPack = {};
-  const byConfidence = {};
-  const byReason = {};
-  const byFramework = {};
+  const byLane = Object.create(null);
+  const byCapabilityPack = Object.create(null);
+  const byConfidence = Object.create(null);
+  const byReason = Object.create(null);
+  const byFramework = Object.create(null);
   let totalSurfaceLanes = 0;
   for (const entry of files) {
     for (const lane of entry.surfaceLanes) {

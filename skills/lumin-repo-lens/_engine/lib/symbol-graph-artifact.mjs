@@ -204,12 +204,12 @@ function sortClassMethodRecords(records = []) {
 }
 
 function buildClassMethodIndex({ root, fileData }) {
-  const out = {};
+  const out = Object.create(null);
   for (const [absFile, info] of fileData) {
     const methods = info.classMethods ?? [];
     if (methods.length === 0) continue;
     const rel = relPath(root, absFile);
-    const byName = {};
+    const byName = Object.create(null);
     for (const method of sortClassMethodRecords(methods)) {
       const name = method.name ?? method.methodName;
       if (!name) continue;

@@ -392,7 +392,7 @@ function maxObservedRss(entries) {
 }
 
 function collectArtifactSizeSummary() {
-  const byName = {};
+  const byName = Object.create(null);
   let totalBytes = 0;
 
   for (const name of collectProducedArtifacts(OUT)) {

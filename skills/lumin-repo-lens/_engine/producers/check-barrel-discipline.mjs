@@ -128,7 +128,7 @@ for (const f of files) {
   }
 }
 
-const byPackage = {};
+const byPackage = Object.create(null);
 for (const pkg of rootBarrelSpecs) {
   const directList = rootImportsByPkg.get(pkg) ?? [];
   const prefix = pkg + '/';
