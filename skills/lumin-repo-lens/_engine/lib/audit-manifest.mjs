@@ -373,6 +373,7 @@ function buildFrameworkResourceSurfacesSummary(artifact) {
     : files.slice(0, 10).map((entry) => ({
         file: entry.file ?? null,
         lanes: (entry.surfaceLanes ?? []).map((lane) => lane.lane).filter(Boolean),
+        capabilityPacks: (entry.surfaceLanes ?? []).map((lane) => lane.capabilityPack).filter(Boolean),
         reasons: (entry.surfaceLanes ?? []).map((lane) => lane.reason).filter(Boolean),
       }));
   return {
@@ -385,6 +386,7 @@ function buildFrameworkResourceSurfacesSummary(artifact) {
       0,
     ),
     byLane: summary.byLane ?? {},
+    byCapabilityPack: summary.byCapabilityPack ?? {},
     byConfidence: summary.byConfidence ?? {},
     byReason: summary.byReason ?? {},
     byFramework: summary.byFramework ?? {},

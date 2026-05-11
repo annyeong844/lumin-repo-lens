@@ -63,6 +63,87 @@ export function extractStringTarget(target, depth = 0) {
   return null;
 }
 
+const SOURCE_CONDITION_RE = /^@[^/]+\/source$/;
+const PACKAGE_IMPORTS_SUPPORTED_CONDITIONS = ['import', 'default', 'node', 'require', 'types'];
+
+function isSourceConditionKey(key) {
+  return key === 'source' ||
+    key === '@*/source' ||
+    SOURCE_CONDITION_RE.test(key) ||
+    key.endsWith('/source');
+}
+
+function extractPackageImportsTarget(target, depth = 0) {
+  if (depth > 8) return null;
+  if (target == null) return null;
+  if (typeof target === 'string') return target;
+  if (Array.isArray(target)) {
+    for (const item of target) {
+      const r = extractPackageImportsTarget(item, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof target !== 'object') return null;
+
+  for (const key of Object.keys(target)) {
+    if (!isSourceConditionKey(key)) continue;
+    const r = extractPackageImportsTarget(target[key], depth + 1);
+    if (r) return r;
+  }
+  for (const key of PACKAGE_IMPORTS_SUPPORTED_CONDITIONS) {
+    if (!(key in target)) continue;
+    const r = extractPackageImportsTarget(target[key], depth + 1);
+    if (r) return r;
+  }
+  return null;
+}
+
+function collectStringTargets(target, depth = 0, out = []) {
+  if (depth > 8 || target == null) return out;
+  if (typeof target === 'string') {
+    out.push(target);
+    return out;
+  }
+  if (Array.isArray(target)) {
+    for (const item of target) collectStringTargets(item, depth + 1, out);
+    return out;
+  }
+  if (typeof target === 'object') {
+    for (const value of Object.values(target)) collectStringTargets(value, depth + 1, out);
+  }
+  return out;
+}
+
+function addUnsupportedHashImport(map, pkgDir, key, target) {
+  const targets = [...new Set(collectStringTargets(target))];
+  if (targets.length === 0) return;
+  if (key.includes('*')) {
+    const starIdx = key.indexOf('*');
+    const keyPrefix = key.slice(0, starIdx);
+    const keySuffix = key.slice(starIdx + 1);
+    map.set(`${key}__HASHUNSUPPORTED__`, {
+      type: 'hash-unsupported',
+      reason: 'condition-profile-ambiguous',
+      source: 'imports',
+      pkgDir,
+      key,
+      keyPrefix,
+      keySuffix,
+      targetPatterns: targets.flatMap((t) => mapOutputPatternToSourceCandidates(t)),
+    });
+    return;
+  }
+  map.set(`${key}__HASHUNSUPPORTED__`, {
+    type: 'hash-unsupported',
+    reason: 'condition-profile-ambiguous',
+    source: 'imports',
+    pkgDir,
+    key,
+    targetCandidates: targets.map((t) => mapOutputToSource(pkgDir, t)),
+  });
+}
+
 // v0.6.3: map a package.json "exports" output-dir target to the actual
 // source file. Common output-dir → source-dir pairs:
 //   dist/ → src/, source/, lib/
@@ -609,8 +690,11 @@ function addDeclarationDirFallback(map, pkgDir, pkgJson, declarationDirs = []) {
 function addHashImports(map, pkgDir, pkgJson) {
   const imports = pkgJson.imports ?? {};
   for (const [key, target] of Object.entries(imports)) {
-    const t = extractStringTarget(target);
-    if (!t || typeof t !== 'string') continue;
+    const t = extractPackageImportsTarget(target);
+    if (!t || typeof t !== 'string') {
+      addUnsupportedHashImport(map, pkgDir, key, target);
+      continue;
+    }
     if (key.includes('*')) {
       // Wildcard form can't FS-probe (the `*` isn't a file) — use
       // mapOutputPatternToSource. Covers `.mjs` / `.cjs` / `.jsx` and

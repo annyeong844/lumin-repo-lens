@@ -73,9 +73,10 @@ function packageRelative(file, pkg) {
     : file;
 }
 
-function surfaceLane({ lane, confidence, reason, defaultAction = 'review-hint', affectsAbsenceClaims = true, evidence, extra = {} }) {
+function surfaceLane({ lane, capabilityPack, confidence, reason, defaultAction = 'review-hint', affectsAbsenceClaims = true, evidence, extra = {} }) {
   return {
     lane,
+    capabilityPack,
     confidence,
     ...extra,
     reason,
@@ -101,6 +102,7 @@ function storybookLane(pkg, relFile) {
   const deps = storybookDependencyEvidence(pkg);
   return surfaceLane({
     lane: 'framework-dispatch-entry',
+    capabilityPack: 'framework.storybook',
     confidence: deps.length > 0 ? 'grounded' : 'path-shaped-review',
     reason: 'storybook-story-file',
     extra: { framework: 'storybook' },
@@ -116,6 +118,7 @@ function strapiLane(pkg, relFile) {
   const deps = strapiDependencyEvidence(pkg);
   return surfaceLane({
     lane: 'framework-dispatch-entry',
+    capabilityPack: 'framework.strapi',
     confidence: deps.length > 0 ? 'grounded' : 'path-shaped-review',
     reason: 'strapi-filesystem-api',
     extra: { framework: 'strapi' },
@@ -131,6 +134,7 @@ function generatedDeclarationLane(relFile) {
   if (!/(^|\/)generated(\/|$)/.test(relFile)) return null;
   return surfaceLane({
     lane: 'generated-declaration-surface',
+    capabilityPack: 'surface.generated-declaration',
     confidence: 'generated-output-review',
     reason: 'generated-declaration-path',
     evidence: [
@@ -154,6 +158,7 @@ function bundledBuildLane(relFile, content) {
   if (!reason) return null;
   return surfaceLane({
     lane: 'bundled-build-artifact',
+    capabilityPack: 'surface.bundled-build-artifact',
     confidence: 'generated-output-review',
     reason,
     evidence: [
@@ -168,6 +173,7 @@ function scaffoldTemplateLane(relFile) {
   if (!/(^|\/)templates\//.test(relFile) && !/\.hbs$/.test(relFile)) return null;
   return surfaceLane({
     lane: 'scaffold-template-resource',
+    capabilityPack: 'surface.scaffold-template',
     confidence: 'resource-only',
     reason: /\.hbs$/.test(relFile) ? 'handlebars-template-resource' : 'templates-directory-resource',
     affectsAbsenceClaims: true,
@@ -188,6 +194,7 @@ function codemodResourceLane(relFile) {
   if (!matched) return null;
   return surfaceLane({
     lane: 'codemod-resource',
+    capabilityPack: 'surface.codemod-resource',
     confidence: 'resource-only',
     reason: matched === '__testfixtures__/**' ? 'testfixture-resource' : 'codemod-resource-path',
     evidence: [
@@ -209,6 +216,7 @@ function sortedObject(map) {
 
 function buildSummary(files) {
   const byLane = {};
+  const byCapabilityPack = {};
   const byConfidence = {};
   const byReason = {};
   const byFramework = {};
@@ -217,6 +225,7 @@ function buildSummary(files) {
     for (const lane of entry.surfaceLanes) {
       totalSurfaceLanes++;
       increment(byLane, lane.lane);
+      increment(byCapabilityPack, lane.capabilityPack);
       increment(byConfidence, lane.confidence);
       increment(byReason, lane.reason);
       increment(byFramework, lane.framework);
@@ -226,12 +235,14 @@ function buildSummary(files) {
     totalFilesWithSurfaces: files.length,
     totalSurfaceLanes,
     byLane: sortedObject(byLane),
+    byCapabilityPack: sortedObject(byCapabilityPack),
     byConfidence: sortedObject(byConfidence),
     byReason: sortedObject(byReason),
     byFramework: sortedObject(byFramework),
     topExamples: files.slice(0, 10).map((entry) => ({
       file: entry.file,
       lanes: entry.surfaceLanes.map((lane) => lane.lane),
+      capabilityPacks: entry.surfaceLanes.map((lane) => lane.capabilityPack).filter(Boolean),
       reasons: entry.surfaceLanes.map((lane) => lane.reason),
     })),
   };

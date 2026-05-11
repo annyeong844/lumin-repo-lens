@@ -9,9 +9,11 @@
 //   - 'EXTERNAL' when the spec looks like an external npm package
 //     (no matching alias / tsconfig path / root-prefix interpretation),
 //   - 'UNRESOLVED_INTERNAL' when the spec DID match a local alias
-//     pattern (tsconfig paths or wildcard) but the target file doesn't
-//     exist. This is a scanner blind spot, NOT an external package —
-//     v1.9.7 caller code (build-symbol-graph) treats these separately.
+//     pattern (tsconfig paths or wildcard), or a package-local Node
+//     `#imports` specifier that this resolver cannot evaluate, but the
+//     target file doesn't exist / cannot be proven. This is a scanner blind
+//     spot, NOT an external package — v1.9.7 caller code
+//     (build-symbol-graph) treats these separately.
 //   - null when spec is empty or a relative path that matches no file.
 //
 // Resolution order (each stage returns the result OR `undefined` = continue):
@@ -20,7 +22,7 @@
 //   3. scoped tsconfig baseUrl (baseUrl-only imports like app/_types)
 //   4. exact alias
 //   5. wildcard alias (longest matchPrefix wins)
-//   6. hash-wildcard (Node #imports)
+//   6. hash-wildcard / unsupported package-local Node #imports
 //   7. root-prefix (FP-16)
 //   → fallthrough: 'EXTERNAL' sentinel.
 //
@@ -64,6 +66,9 @@ const RESOLVE_INDEX_EXTS = [
   '/index.d.ts', '/index.d.mts', '/index.d.cts',
 ];
 export const NON_SOURCE_ASSET_RESOLUTION = 'NON_SOURCE_ASSET';
+const NODE_IMPORTS_UNSUPPORTED_REASON = 'hash-imports-unsupported';
+const NODE_IMPORTS_UNSUPPORTED_HINT = 'node-imports-unsupported';
+const CONDITION_PROFILE_AMBIGUOUS_HINT = 'condition-profile-ambiguous';
 
 const JS_SOURCE_EXT_RE = /\.(d\.)?(ts|tsx|js|jsx|mjs|cjs|mts|cts)$/i;
 
@@ -336,6 +341,8 @@ function unresolvedRecord(root, reason, details = {}) {
   return {
     reason,
     ...(details.stage ? { resolverStage: details.stage } : {}),
+    ...(details.outputLevel ? { outputLevel: details.outputLevel } : {}),
+    ...(details.unsupportedFamily ? { unsupportedFamily: details.unsupportedFamily } : {}),
     ...(details.matchedPattern ? { matchedPattern: details.matchedPattern } : {}),
     ...(details.source ? { source: details.source } : {}),
     ...(targetCandidates.length ? { targetCandidates: [...new Set(targetCandidates)].slice(0, 8) } : {}),
@@ -601,11 +608,15 @@ function explainWildcard(root, spec, aliasMap) {
     });
 }
 
-// ── Stage 6: hash-wildcard (Node #imports subpath) ───────
+// ── Stage 6: Node #imports subpath / unsupported family ──
 
 function resolveHashWildcard(spec, aliasMap) {
   let matched = false;
   for (const [, entry] of aliasMap) {
+    if (entry.type === 'hash-unsupported') {
+      if (hashImportEntryMatches(entry, spec)) return 'UNRESOLVED_INTERNAL';
+      continue;
+    }
     if (entry.type !== 'hash-wildcard') continue;
     if (!spec.startsWith(entry.keyPrefix)) continue;
     if (entry.keySuffix && !spec.endsWith(entry.keySuffix)) continue;
@@ -629,11 +640,43 @@ function resolveHashWildcard(spec, aliasMap) {
       }
     }
   }
+  if (spec.startsWith('#')) return 'UNRESOLVED_INTERNAL';
   return matched ? 'UNRESOLVED_INTERNAL' : undefined;
+}
+
+function hashImportEntryMatches(entry, spec) {
+  if (entry.key && !entry.key.includes('*')) return spec === entry.key;
+  if (!spec.startsWith(entry.keyPrefix ?? '')) return false;
+  if (entry.keySuffix && !spec.endsWith(entry.keySuffix)) return false;
+  const starEnd = entry.keySuffix ? spec.length - entry.keySuffix.length : spec.length;
+  return spec.slice((entry.keyPrefix ?? '').length, starEnd).length > 0;
+}
+
+function hashImportEntryCandidates(entry, spec) {
+  if (Array.isArray(entry.targetCandidates)) return entry.targetCandidates;
+  if (!Array.isArray(entry.targetPatterns)) return [];
+  const starEnd = entry.keySuffix ? spec.length - entry.keySuffix.length : spec.length;
+  const tail = spec.slice((entry.keyPrefix ?? '').length, starEnd);
+  if (!tail) return [];
+  return entry.targetPatterns.map((targetPattern) =>
+    path.join(entry.pkgDir, targetPattern.replace('*', tail)));
 }
 
 function explainHashWildcard(root, spec, aliasMap) {
   for (const [, entry] of aliasMap) {
+    if (entry.type === 'hash-unsupported') {
+      if (!hashImportEntryMatches(entry, spec)) continue;
+      const candidates = hashImportEntryCandidates(entry, spec);
+      return unresolvedRecord(root, entry.reason ?? 'condition-profile-ambiguous', {
+        stage: 'hash-imports',
+        outputLevel: 'unsupported',
+        unsupportedFamily: 'node-imports',
+        matchedPattern: entry.key ?? `${entry.keyPrefix ?? ''}*${entry.keySuffix ?? ''}`,
+        source: entry.source,
+        targetCandidates: candidates,
+        hint: CONDITION_PROFILE_AMBIGUOUS_HINT,
+      });
+    }
     if (entry.type !== 'hash-wildcard') continue;
     if (!spec.startsWith(entry.keyPrefix)) continue;
     if (entry.keySuffix && !spec.endsWith(entry.keySuffix)) continue;
@@ -651,6 +694,15 @@ function explainHashWildcard(root, spec, aliasMap) {
       source: entry.source,
       targetCandidates: candidates,
       hint: unresolvedGeneratedArtifactHintForCandidates(candidates),
+    });
+  }
+  if (spec.startsWith('#')) {
+    return unresolvedRecord(root, NODE_IMPORTS_UNSUPPORTED_REASON, {
+      stage: 'hash-imports',
+      outputLevel: 'unsupported',
+      unsupportedFamily: 'node-imports',
+      source: 'package-json-imports',
+      hint: NODE_IMPORTS_UNSUPPORTED_HINT,
     });
   }
   return null;

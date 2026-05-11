@@ -260,7 +260,7 @@ export function buildResolverCapabilitiesArtifact() {
         status: 'partial',
         supportedCases: ['package-local #imports wildcard maps'],
         unsupportedCases: ['ambiguous condition maps in imports', 'custom condition profiles not configured by scan'],
-        reasonCodes: ['hash-import-target-missing'],
+        reasonCodes: ['condition-profile-ambiguous', 'hash-import-target-missing', 'hash-imports-unsupported'],
         absenceClaimPolicy: 'fail-closed-when-encountered',
         fixtureRefs: ['resolver-node-imports-hash-wildcard'],
       },
@@ -313,13 +313,19 @@ function buildUnresolvedImports(records) {
     family: familyForRecord(record),
     reason: record.reason ?? 'unknown-internal-resolution',
     resolverStage: record.resolverStage,
-    outputLevel: 'unresolved_with_reason',
+    outputLevel: record.outputLevel ?? 'unresolved_with_reason',
+    unsupportedFamily: record.unsupportedFamily,
+    createsGraphEdge: false,
     matchedPattern: record.matchedPattern,
     source: record.source,
     targetCandidates: targetCandidates(record).length ? sortStrings(targetCandidates(record)) : undefined,
     hint: record.hint,
     generatedArtifact: record.generatedArtifact,
   })), unresolvedImportKey);
+}
+
+function buildUnsupportedImports(records) {
+  return buildUnresolvedImports(records.filter((record) => record?.outputLevel === 'unsupported'));
 }
 
 function buildCandidateTargets(records) {
@@ -355,7 +361,8 @@ function blindZoneFromRecord(record) {
     importer: record.consumerFile ?? record.fromHint,
     specifier: record.specifier,
     resolverStage: record.resolverStage,
-    outputLevel: 'unresolved_with_reason',
+    outputLevel: record.outputLevel ?? 'unresolved_with_reason',
+    unsupportedFamily: record.unsupportedFamily,
     affectedPackageScope: affectedPackageScopeForRecord(record),
     blocksAbsenceClaims: true,
     blockingScope: relevancePolicy?.blockingScope,
@@ -471,6 +478,7 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
     : [];
 
   const unresolvedImports = buildUnresolvedImports(records);
+  const unsupportedImports = buildUnsupportedImports(records);
   const candidateTargets = buildCandidateTargets(records);
   const blindZones = buildBlindZones(records, generatedConsumerBlindZones);
   const blockedCandidateHints = buildBlockedCandidateHints(blindZones);
@@ -492,6 +500,7 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
       blockedCandidateHintCount: blockedCandidateHints.length,
       candidateTargetCount: candidateTargets.length,
       unresolvedImportCount: unresolvedImports.length,
+      unsupportedImportCount: unsupportedImports.length,
       topFamilies: topFamilies(unresolvedImports, blindZones),
       topAffectedPackageScopes: topAffectedPackageScopes(blindZones),
       topUnresolvedReasons: topUnresolvedReasons(records),
@@ -502,6 +511,7 @@ export function buildResolverDiagnosticsArtifact(symbolsData, {
     blindZones,
     blockedCandidateHints,
     candidateTargets,
+    unsupportedImports,
     unresolvedImports,
     topUnresolvedSpecifiers: (symbolsData?.topUnresolvedSpecifiers ?? []).slice(0, 20),
   };
