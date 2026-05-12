@@ -128,6 +128,70 @@ function candidateFromIdentity(identity, fallback = {}) {
   };
 }
 
+function serviceOperationCandidate(entry = {}) {
+  const identity = entry.identity ?? `${entry.ownerFile ?? 'unknown'}::${entry.name ?? 'unknown'}`;
+  return candidateFromIdentity(identity, {
+    ownerFile: entry.ownerFile,
+    exportedName: entry.name,
+    policyExcluded: entry.policyExcluded,
+    policyReason: entry.policyReason,
+  });
+}
+
+function serviceOperationEvidence(policy = {}, entry = {}) {
+  return {
+    artifact: 'pre-write-advisory.json',
+    matchedField: 'lookups[].serviceOperationSiblingPolicy.promoted',
+    policyId: policy.policyId,
+    policyVersion: policy.policyVersion,
+    candidateIdentity: entry.identity,
+    operationFamily: entry.operationFamily,
+    sharedDomainTokens: entry.sharedDomainTokens ?? [],
+    locality: entry.locality,
+    supportingReasons: entry.supportingReasons ?? [],
+  };
+}
+
+function addServiceOperationMutedCue(suppressedCues, policy = {}, entry = {}, reason = undefined) {
+  const candidate = serviceOperationCandidate(entry);
+  suppressedCues.push({
+    cueTier: CUE_TIERS.MUTED,
+    evidenceLane: 'service-operation-sibling',
+    reason: reason ?? entry.reason ?? 'service-sibling-muted',
+    policyId: policy.policyId,
+    policyVersion: policy.policyVersion,
+    ownerFile: candidate.ownerFile,
+    exportedName: candidate.exportedName,
+    identity: candidate.identity,
+    matchedField: entry.matchedField ?? 'defIndex',
+    operationFamily: entry.operationFamily,
+    sharedDomainTokens: entry.sharedDomainTokens ?? [],
+    supportingReasons: entry.supportingReasons ?? [],
+    locality: entry.locality,
+  });
+}
+
+function addServiceOperationSiblingPolicy({ lookup, cardMap, suppressedCues }) {
+  const policy = lookup.serviceOperationSiblingPolicy;
+  if (!policy || typeof policy !== 'object') return;
+
+  for (const entry of policy.promoted ?? []) {
+    if (entry?.matchedField === 'classMethodIndex') {
+      addServiceOperationMutedCue(suppressedCues, policy, entry, 'service-sibling-class-method-lane');
+      continue;
+    }
+    addCue(cardMap, suppressedCues, serviceOperationCandidate(entry), reviewCue({
+      lane: 'service-operation-sibling',
+      claim: 'related service operation sibling',
+      evidence: [serviceOperationEvidence(policy, entry)],
+    }));
+  }
+
+  for (const entry of policy.muted ?? []) {
+    addServiceOperationMutedCue(suppressedCues, policy, entry);
+  }
+}
+
 function addNameLookup({ lookup, cardMap, suppressedCues }) {
   for (const identity of lookup.identities ?? []) {
     addCue(cardMap, suppressedCues, identity, safeCue({
@@ -210,6 +274,8 @@ function addNameLookup({ lookup, cardMap, suppressedCues }) {
       matchedField: hint.matchedField ?? 'defIndex',
     });
   }
+
+  addServiceOperationSiblingPolicy({ lookup, cardMap, suppressedCues });
 }
 
 function addFileLookup({ lookup, cardMap, suppressedCues }) {
