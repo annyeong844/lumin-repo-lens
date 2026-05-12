@@ -38,6 +38,48 @@ const SEMANTIC_STOP_TOKENS = new Set([
   'manager', 'index', 'main', 'src', 'lib', 'utils', 'util', 'ts', 'js', 'mjs',
   'cjs', 'tsx', 'jsx',
 ]);
+const SERVICE_OPERATION_POLICY_ID = 'prewrite-service-operation-sibling-cue';
+const SERVICE_OPERATION_POLICY_VERSION = 'prewrite-service-operation-sibling-cue-v1';
+const SERVICE_OPERATION_POLICY_MAX_RESULTS = 5;
+const SERVICE_READ_QUERY_VERBS = new Set([
+  'fetch', 'find', 'get', 'list', 'load', 'lookup', 'query', 'read', 'resolve',
+  'retrieve', 'search',
+]);
+const SERVICE_MUTATION_VERB_FAMILIES = new Map([
+  ['add', 'mutation-create'],
+  ['create', 'mutation-create'],
+  ['delete', 'mutation-delete'],
+  ['destroy', 'mutation-delete'],
+  ['dispatch', 'mutation-send'],
+  ['emit', 'mutation-send'],
+  ['patch', 'mutation-update'],
+  ['remove', 'mutation-delete'],
+  ['save', 'mutation-save'],
+  ['send', 'mutation-send'],
+  ['set', 'mutation-update'],
+  ['update', 'mutation-update'],
+  ['upsert', 'mutation-save'],
+  ['write', 'mutation-save'],
+]);
+const SERVICE_OPERATION_VERBS = new Set([
+  ...SERVICE_READ_QUERY_VERBS,
+  ...SERVICE_MUTATION_VERB_FAMILIES.keys(),
+]);
+const SERVICE_POLICY_PROMOTABLE_REASONS = new Set([
+  'single-non-weak-token-only',
+  'near-distance-exceeded',
+  'near-length-delta-exceeded',
+]);
+const SERVICE_POLICY_EXCLUDED_PATH_SEGMENTS = new Set([
+  '__generated__',
+  'build',
+  'coverage',
+  'dist',
+  'generated',
+  'node_modules',
+  'vendor',
+  'vendors',
+]);
 // ── Helpers ──────────────────────────────────────────────────
 
 function sharedPrefix(a, b) {
@@ -113,6 +155,14 @@ function capSuppressedCandidates(entries, cap) {
     ...entry,
     candidateCount: entries.length,
   }));
+}
+
+function candidateIdentity(entry) {
+  return entry?.identity ?? (
+    entry?.ownerFile && entry?.name
+      ? `${normalizeRelPath(entry.ownerFile)}::${entry.name}`
+      : null
+  );
 }
 
 // Levenshtein with an early-exit cap. If distance exceeds `cap`, returns
@@ -538,6 +588,219 @@ function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, 
   };
 }
 
+// ── Service-operation sibling policy (WT-23 P1) ──────────────
+
+function normalizeDomainToken(token) {
+  if (typeof token !== 'string') return null;
+  if (token.length > 3 && token.endsWith('ies')) return `${token.slice(0, -3)}y`;
+  if (token.length > 3 &&
+      token.endsWith('s') &&
+      !token.endsWith('ss') &&
+      !token.endsWith('us')) {
+    return token.slice(0, -1);
+  }
+  return token;
+}
+
+function serviceOperationInfo(name) {
+  const tokens = uniqueTokens(name);
+  const verb = tokens[0] ?? null;
+  let operationFamily = null;
+  if (SERVICE_READ_QUERY_VERBS.has(verb)) {
+    operationFamily = 'read-query';
+  } else if (SERVICE_MUTATION_VERB_FAMILIES.has(verb)) {
+    operationFamily = SERVICE_MUTATION_VERB_FAMILIES.get(verb);
+  }
+
+  const domainTokens = tokens
+    .filter((token) => token !== verb && !SERVICE_OPERATION_VERBS.has(token))
+    .map(normalizeDomainToken)
+    .filter(Boolean);
+
+  return {
+    verb,
+    operationFamily,
+    domainTokens: [...new Set(domainTokens)],
+  };
+}
+
+function policyExcludedPath(ownerFile) {
+  const normalized = normalizeRelPath(ownerFile);
+  if (!normalized) return false;
+  const segments = normalized.split('/');
+  return segments.some((segment) => SERVICE_POLICY_EXCLUDED_PATH_SEGMENTS.has(segment)) ||
+    /\.bundle\.[cm]?[jt]sx?$/.test(normalized) ||
+    /(^|\/)vendor\.[cm]?[jt]sx?$/.test(normalized);
+}
+
+function supportingReasonRank(reason) {
+  switch (reason) {
+    case 'single-non-weak-token-only':
+      return 0;
+    case 'near-distance-exceeded':
+      return 1;
+    case 'near-length-delta-exceeded':
+      return 2;
+    case 'domain-token-overlap':
+      return 3;
+    default:
+      return 10;
+  }
+}
+
+function sortSupportingReasons(reasons) {
+  return [...new Set(reasons)].sort((a, b) =>
+    supportingReasonRank(a) - supportingReasonRank(b) ||
+    a.localeCompare(b)
+  );
+}
+
+function mergeSuppressedPolicyCandidates(suppressedNearNames, suppressedSemanticHints) {
+  const byIdentity = new Map();
+  const append = (entry, lane) => {
+    const identity = candidateIdentity(entry);
+    if (!identity) return;
+    if (!byIdentity.has(identity)) {
+      byIdentity.set(identity, {
+        ...candidateHintFields(entry),
+        identity,
+        locality: entry.locality ?? { sameDir: false, sameFile: false },
+        supportingReasons: [],
+        matchedTokens: [],
+        suppressedLanes: [],
+      });
+    }
+    const current = byIdentity.get(identity);
+    if (localityRank(entry) > localityRank(current)) {
+      current.locality = entry.locality ?? current.locality;
+    }
+    if (entry.reason) current.supportingReasons.push(entry.reason);
+    if (Array.isArray(entry.matchedTokens)) {
+      current.matchedTokens.push(...entry.matchedTokens);
+    }
+    current.suppressedLanes.push(lane);
+    if (Number.isFinite(entry.distance)) current.distance = entry.distance;
+    if (Number.isFinite(entry.lengthDelta)) current.lengthDelta = entry.lengthDelta;
+    if (Number.isFinite(entry.score)) current.score = entry.score;
+  };
+
+  for (const entry of suppressedNearNames ?? []) append(entry, 'near-name');
+  for (const entry of suppressedSemanticHints ?? []) append(entry, 'semantic');
+
+  return [...byIdentity.values()].map((candidate) => ({
+    ...candidate,
+    supportingReasons: sortSupportingReasons(candidate.supportingReasons),
+    matchedTokens: [...new Set(candidate.matchedTokens)],
+    suppressedLanes: [...new Set(candidate.suppressedLanes)].sort(),
+  }));
+}
+
+function servicePolicyBaseCandidate(candidate, reason = null) {
+  const out = {
+    identity: candidate.identity,
+    name: candidate.name,
+    ownerFile: candidate.ownerFile,
+  };
+  if (candidate.matchedField) out.matchedField = candidate.matchedField;
+  if (reason) out.reason = reason;
+  if (candidate.operationFamily) out.operationFamily = candidate.operationFamily;
+  if (candidate.sharedDomainTokens) out.sharedDomainTokens = candidate.sharedDomainTokens;
+  if (candidate.supportingReasons) out.supportingReasons = candidate.supportingReasons;
+  if (candidate.locality) out.locality = candidate.locality;
+  if (candidate.signatureSupport) out.signatureSupport = candidate.signatureSupport;
+  if (candidate.suppressedLanes) out.suppressedLanes = candidate.suppressedLanes;
+  return out;
+}
+
+function sortServicePolicyEntries(entries) {
+  return entries.sort((a, b) =>
+    localityRank(b) - localityRank(a) ||
+    String(a.operationFamily ?? '').localeCompare(String(b.operationFamily ?? '')) ||
+    a.name.localeCompare(b.name) ||
+    a.ownerFile.localeCompare(b.ownerFile) ||
+    a.identity.localeCompare(b.identity)
+  );
+}
+
+function emptyServiceOperationSiblingPolicy() {
+  return {
+    policyId: SERVICE_OPERATION_POLICY_ID,
+    policyVersion: SERVICE_OPERATION_POLICY_VERSION,
+    evaluatedCandidateCount: 0,
+    promotedCandidateCount: 0,
+    mutedCandidateCount: 0,
+    promoted: [],
+    muted: [],
+  };
+}
+
+function computeServiceOperationSiblingPolicy({
+  intentName,
+  suppressedNearNames,
+  suppressedSemanticHints,
+}) {
+  const policy = emptyServiceOperationSiblingPolicy();
+  const candidates = mergeSuppressedPolicyCandidates(suppressedNearNames, suppressedSemanticHints);
+  if (candidates.length === 0) return policy;
+
+  const intentOperation = serviceOperationInfo(intentName);
+  const intentDomainSet = new Set(intentOperation.domainTokens);
+  const promoted = [];
+  const muted = [];
+
+  for (const candidate of candidates) {
+    const candidateOperation = serviceOperationInfo(candidate.name);
+    const candidateDomainSet = new Set(candidateOperation.domainTokens);
+    const sharedDomainTokens = intentOperation.domainTokens
+      .filter((token) => candidateDomainSet.has(token));
+    const enriched = {
+      ...candidate,
+      operationFamily: candidateOperation.operationFamily,
+      sharedDomainTokens,
+      signatureSupport: {
+        status: 'unavailable',
+        reason: 'no-signature-facts',
+      },
+    };
+
+    const hasPromotableSuppression = enriched.supportingReasons
+      .some((reason) => SERVICE_POLICY_PROMOTABLE_REASONS.has(reason));
+    let muteReason = null;
+    if (!enriched.name || !enriched.ownerFile || !enriched.identity) {
+      muteReason = 'service-sibling-insufficient-metadata';
+    } else if (policyExcludedPath(enriched.ownerFile)) {
+      muteReason = 'service-sibling-policy-excluded';
+    } else if (enriched.matchedField && enriched.matchedField !== 'defIndex') {
+      muteReason = 'service-sibling-surface-kind-unsupported';
+    } else if (!hasPromotableSuppression) {
+      muteReason = 'service-sibling-insufficient-suppressed-support';
+    } else if (!enriched.locality?.sameFile && !enriched.locality?.sameDir) {
+      muteReason = 'service-sibling-locality-mismatch';
+    } else if (!intentOperation.operationFamily || !candidateOperation.operationFamily) {
+      muteReason = 'service-sibling-unknown-operation';
+    } else if (intentDomainSet.size === 0 || sharedDomainTokens.length === 0) {
+      muteReason = 'service-sibling-domain-mismatch';
+    } else if (intentOperation.operationFamily !== candidateOperation.operationFamily) {
+      muteReason = 'service-sibling-operation-family-mismatch';
+    } else if (intentOperation.operationFamily !== 'read-query') {
+      muteReason = 'service-sibling-family-not-promotable';
+    }
+
+    if (muteReason) {
+      muted.push(servicePolicyBaseCandidate(enriched, muteReason));
+    } else {
+      promoted.push(servicePolicyBaseCandidate(enriched));
+    }
+  }
+
+  policy.evaluatedCandidateCount = candidates.length;
+  policy.promotedCandidateCount = promoted.length;
+  policy.mutedCandidateCount = muted.length;
+  policy.promoted = sortServicePolicyEntries(promoted).slice(0, SERVICE_OPERATION_POLICY_MAX_RESULTS);
+  policy.muted = sortServicePolicyEntries(muted).slice(0, SERVICE_OPERATION_POLICY_MAX_RESULTS);
+  return policy;
+}
+
 // ── AST identity enumeration ─────────────────────────────────
 
 function enumerateAstIdentities(intentName, defIndex) {
@@ -676,6 +939,11 @@ export function lookupName(intentName, ctx) {
   const suppressedSemanticHints = semanticCandidateResult.suppressedSemanticHints;
   const suppressedSemanticHintCount = semanticCandidateResult.suppressedSemanticHintCount;
   const intentTokens = semanticCandidateResult.intentTokens;
+  const serviceOperationSiblingPolicy = computeServiceOperationSiblingPolicy({
+    intentName,
+    suppressedNearNames,
+    suppressedSemanticHints,
+  });
   if (nearNames.length > 0) {
     citations.push(`[degraded, fuzzy-name match; source: symbols.json.defIndex/classMethodIndex name scan — search hint only, NOT a grounded reuse claim]`);
   }
@@ -702,6 +970,7 @@ export function lookupName(intentName, ctx) {
     suppressedNearNameCount,
     suppressedSemanticHints,
     suppressedSemanticHintCount,
+    serviceOperationSiblingPolicy,
     citations,
   };
 }
