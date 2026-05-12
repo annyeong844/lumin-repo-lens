@@ -174,12 +174,33 @@ function addNameLookup({ lookup, cardMap, suppressedCues }) {
     }));
   }
 
+  for (const near of lookup.suppressedNearNames ?? []) {
+    suppressedCues.push({
+      cueTier: CUE_TIERS.MUTED,
+      evidenceLane: 'near-name',
+      reason: near.reason ?? 'near-name-suppressed',
+      tokens: near.matchedTokens ?? [],
+      distance: near.distance,
+      lengthDelta: near.lengthDelta,
+      locality: near.locality,
+      candidateCount: near.candidateCount ?? 1,
+      tokenizerVersion: TOKENIZER_VERSION,
+      tokenPolicyVersion: TOKEN_POLICY_VERSION,
+      ownerFile: near.ownerFile,
+      exportedName: near.name,
+      identity: near.identity ?? `${near.ownerFile}::${near.name}`,
+      matchedField: near.matchedField ?? 'defIndex',
+    });
+  }
+
   for (const hint of lookup.suppressedSemanticHints ?? []) {
     suppressedCues.push({
       cueTier: CUE_TIERS.MUTED,
       evidenceLane: 'intent-token',
-      reason: hint.reason ?? 'weak-common-token-only',
+      reason: hint.reason ?? 'domain-token-overlap',
       tokens: hint.matchedTokens ?? [],
+      score: hint.score,
+      locality: hint.locality,
       candidateCount: hint.candidateCount ?? 1,
       tokenizerVersion: TOKENIZER_VERSION,
       tokenPolicyVersion: TOKEN_POLICY_VERSION,

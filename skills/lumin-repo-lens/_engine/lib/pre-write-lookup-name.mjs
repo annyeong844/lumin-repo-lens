@@ -59,10 +59,60 @@ function uniqueTokens(...parts) {
   return [...new Set(parts.flatMap(splitSemanticTokens))];
 }
 
-function hasOnlyWeakCommonTokens(a, b) {
+function commonTokens(a, b) {
   const aSet = new Set(uniqueTokens(a));
-  const common = uniqueTokens(b).filter((token) => aSet.has(token));
+  return uniqueTokens(b).filter((token) => aSet.has(token));
+}
+
+function hasOnlyWeakCommonTokens(a, b) {
+  const common = commonTokens(a, b);
   return common.length > 0 && common.every(isWeakCommonToken);
+}
+
+function normalizeRelPath(value) {
+  return typeof value === 'string' && value.trim()
+    ? value.replace(/\\/g, '/')
+    : null;
+}
+
+function dirnameRel(value) {
+  const normalized = normalizeRelPath(value);
+  if (!normalized) return null;
+  const idx = normalized.lastIndexOf('/');
+  return idx >= 0 ? normalized.slice(0, idx) : '';
+}
+
+function intentOwnerFileHint(intentDeclaration) {
+  return normalizeRelPath(
+    intentDeclaration?.ownerFile ??
+    intentDeclaration?.file ??
+    intentDeclaration?.targetFile ??
+    null
+  );
+}
+
+function localityFor(candidate, intentOwnerFile) {
+  const candidateFile = normalizeRelPath(candidate.ownerFile);
+  if (!candidateFile || !intentOwnerFile) {
+    return { sameDir: false, sameFile: false };
+  }
+  return {
+    sameDir: dirnameRel(candidateFile) === dirnameRel(intentOwnerFile),
+    sameFile: candidateFile === intentOwnerFile,
+  };
+}
+
+function localityRank(entry) {
+  if (entry?.locality?.sameFile) return 2;
+  if (entry?.locality?.sameDir) return 1;
+  return 0;
+}
+
+function capSuppressedCandidates(entries, cap) {
+  return entries.slice(0, cap).map((entry) => ({
+    ...entry,
+    candidateCount: entries.length,
+  }));
 }
 
 // Levenshtein with an early-exit cap. If distance exceeds `cap`, returns
@@ -313,13 +363,25 @@ function candidateHintFields(candidate) {
   return out;
 }
 
-function computeNearNames(intentName, defIndex, classMethodIndex) {
+function computeNearNameCandidates(intentName, intentDeclaration, defIndex, classMethodIndex) {
   const candidates = [];
+  const suppressedNearNames = [];
+  const intentOwnerFile = intentOwnerFileHint(intentDeclaration);
 
   for (const candidate of enumerateSearchCandidates(defIndex, classMethodIndex)) {
     const { name } = candidate;
     if (name === intentName && candidate.matchedField !== 'classMethodIndex') continue;
-    if (hasOnlyWeakCommonTokens(intentName, name)) continue;
+    const matchedTokens = commonTokens(intentName, name);
+    const hasCommonTokenSignal = matchedTokens.length > 0;
+    if (hasOnlyWeakCommonTokens(intentName, name)) {
+      suppressedNearNames.push({
+        ...candidateHintFields(candidate),
+        matchedTokens,
+        reason: 'domain-token-overlap',
+        locality: localityFor(candidate, intentOwnerFile),
+      });
+      continue;
+    }
 
     // Cheap filter A (prefix): shared prefix ≥ 4 qualifies on a
     // relaxed length budget — `formatTimestamp` (15) vs `formatDate`
@@ -338,11 +400,33 @@ function computeNearNames(intentName, defIndex, classMethodIndex) {
 
     // Cheap filter B (length delta): without a shared prefix, Lev ≥ 3
     // is guaranteed when length delta ≥ 3. Skip without computing.
-    if (Math.abs(name.length - intentName.length) > NEAR_NAME_MAX_LENGTH_DELTA) continue;
+    const lengthDelta = Math.abs(name.length - intentName.length);
+    if (lengthDelta > NEAR_NAME_MAX_LENGTH_DELTA) {
+      if (hasCommonTokenSignal || prefix >= NEAR_NAME_SHARED_PREFIX_MIN) {
+        suppressedNearNames.push({
+          ...candidateHintFields(candidate),
+          matchedTokens,
+          lengthDelta,
+          reason: 'near-length-delta-exceeded',
+          locality: localityFor(candidate, intentOwnerFile),
+        });
+      }
+      continue;
+    }
 
     const dist = levenshteinCapped(name, intentName, NEAR_NAME_MAX_DISTANCE);
     if (dist <= NEAR_NAME_MAX_DISTANCE) {
       candidates.push({ ...candidateHintFields(candidate), distance: dist });
+    } else if (hasCommonTokenSignal || prefix >= NEAR_NAME_SHARED_PREFIX_MIN) {
+      suppressedNearNames.push({
+        ...candidateHintFields(candidate),
+        matchedTokens,
+        distance: dist,
+        reason: prefix < NEAR_NAME_SHARED_PREFIX_MIN && !hasCommonTokenSignal
+          ? 'near-prefix-mismatch'
+          : 'near-distance-exceeded',
+        locality: localityFor(candidate, intentOwnerFile),
+      });
     }
   }
 
@@ -352,15 +436,32 @@ function computeNearNames(intentName, defIndex, classMethodIndex) {
     a.name.localeCompare(b.name) ||
     a.ownerFile.localeCompare(b.ownerFile)
   );
-  return candidates.slice(0, NEAR_NAME_MAX_RESULTS);
+  suppressedNearNames.sort((a, b) =>
+    localityRank(b) - localityRank(a) ||
+    (a.distance ?? Number.POSITIVE_INFINITY) - (b.distance ?? Number.POSITIVE_INFINITY) ||
+    (a.lengthDelta ?? Number.POSITIVE_INFINITY) - (b.lengthDelta ?? Number.POSITIVE_INFINITY) ||
+    a.name.localeCompare(b.name) ||
+    a.ownerFile.localeCompare(b.ownerFile)
+  );
+  return {
+    nearNames: candidates.slice(0, NEAR_NAME_MAX_RESULTS),
+    suppressedNearNames: capSuppressedCandidates(suppressedNearNames, NEAR_NAME_MAX_RESULTS),
+    suppressedNearNameCount: suppressedNearNames.length,
+  };
 }
 
 function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, classMethodIndex) {
   const queryTokens = uniqueTokens(intentName, intentDeclaration?.kind, intentDeclaration?.why);
-  if (queryTokens.length === 0) return { semanticHints: [], suppressedSemanticHints: [] };
+  if (queryTokens.length === 0) return {
+    semanticHints: [],
+    suppressedSemanticHints: [],
+    suppressedSemanticHintCount: 0,
+    intentTokens: [],
+  };
   const querySet = new Set(queryTokens);
   const semanticHints = [];
   const suppressedSemanticHints = [];
+  const intentOwnerFile = intentOwnerFileHint(intentDeclaration);
 
   for (const candidate of enumerateSearchCandidates(defIndex, classMethodIndex)) {
     const { name } = candidate;
@@ -375,12 +476,15 @@ function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, 
 
     const score = matchedTokens.length;
     if (score < SEMANTIC_HINT_MIN_SCORE) {
-      if (matchedTokens.length === 1 && matchedTokens.every(isWeakCommonToken)) {
+      if (matchedTokens.length === 1) {
         suppressedSemanticHints.push({
           ...candidateHintFields(candidate),
           matchedTokens,
           score,
-          reason: 'weak-common-token-only',
+          reason: matchedTokens.every(isWeakCommonToken)
+            ? 'domain-token-overlap'
+            : 'single-non-weak-token-only',
+          locality: localityFor(candidate, intentOwnerFile),
         });
       }
       continue;
@@ -401,8 +505,9 @@ function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, 
         matchedSupportTokens: strongSupportMatches,
         score,
         reason: matchedTokens.every(isWeakCommonToken)
-          ? 'weak-common-token-only'
+          ? 'domain-token-overlap'
           : 'insufficient-non-weak-support',
+        locality: localityFor(candidate, intentOwnerFile),
       });
       continue;
     }
@@ -416,16 +521,20 @@ function computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, 
   }
 
   const sortHints = (arr) => arr.sort((a, b) =>
+    localityRank(b) - localityRank(a) ||
     b.score - a.score ||
-    a.ownerFile.localeCompare(b.ownerFile) ||
-    a.name.localeCompare(b.name)
+    a.name.localeCompare(b.name) ||
+    a.ownerFile.localeCompare(b.ownerFile)
   );
   const candidateCount = suppressedSemanticHints.length;
   return {
     semanticHints: sortHints(semanticHints).slice(0, SEMANTIC_HINT_MAX_RESULTS),
-    suppressedSemanticHints: sortHints(suppressedSemanticHints)
-      .slice(0, SEMANTIC_HINT_MAX_RESULTS)
-      .map((hint) => ({ ...hint, candidateCount })),
+    suppressedSemanticHints: capSuppressedCandidates(
+      sortHints(suppressedSemanticHints),
+      SEMANTIC_HINT_MAX_RESULTS,
+    ),
+    suppressedSemanticHintCount: candidateCount,
+    intentTokens: queryTokens,
   };
 }
 
@@ -549,14 +658,24 @@ export function lookupName(intentName, ctx) {
   }
 
   // 5. Near-name hints — only when no AST identity was found.
-  const nearNames = identities.length === 0
-    ? computeNearNames(intentName, defIndex, classMethodIndex)
-    : [];
+  const nearCandidateResult = identities.length === 0
+    ? computeNearNameCandidates(intentName, intentDeclaration, defIndex, classMethodIndex)
+    : { nearNames: [], suppressedNearNames: [], suppressedNearNameCount: 0 };
+  const nearNames = nearCandidateResult.nearNames;
+  const suppressedNearNames = nearCandidateResult.suppressedNearNames;
+  const suppressedNearNameCount = nearCandidateResult.suppressedNearNameCount;
   const semanticCandidateResult = identities.length === 0
     ? computeSemanticHintCandidates(intentName, intentDeclaration, defIndex, classMethodIndex)
-    : { semanticHints: [], suppressedSemanticHints: [] };
+    : {
+      semanticHints: [],
+      suppressedSemanticHints: [],
+      suppressedSemanticHintCount: 0,
+      intentTokens: uniqueTokens(intentName, intentDeclaration?.kind, intentDeclaration?.why),
+    };
   const semanticHints = semanticCandidateResult.semanticHints;
   const suppressedSemanticHints = semanticCandidateResult.suppressedSemanticHints;
+  const suppressedSemanticHintCount = semanticCandidateResult.suppressedSemanticHintCount;
+  const intentTokens = semanticCandidateResult.intentTokens;
   if (nearNames.length > 0) {
     citations.push(`[degraded, fuzzy-name match; source: symbols.json.defIndex/classMethodIndex name scan — search hint only, NOT a grounded reuse claim]`);
   }
@@ -576,9 +695,13 @@ export function lookupName(intentName, ctx) {
     identities,
     canonicalClaim,
     canonicalAstStatus,
+    intentTokens,
     nearNames,
     semanticHints,
+    suppressedNearNames,
+    suppressedNearNameCount,
     suppressedSemanticHints,
+    suppressedSemanticHintCount,
     citations,
   };
 }

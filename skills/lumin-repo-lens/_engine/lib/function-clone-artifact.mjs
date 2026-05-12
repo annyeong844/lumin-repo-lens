@@ -401,13 +401,14 @@ export function extractFunctionCloneFilePayload({ src, relFile, scope }) {
 function groupFacts(facts, key, {
   minSize = FUNCTION_CLONE_NEAR_THRESHOLDS.minGroupSize,
   minBodyLoc = FUNCTION_CLONE_NEAR_THRESHOLDS.minBodyLocForGrouping,
+  minStatements = FUNCTION_CLONE_NEAR_THRESHOLDS.minStatementsForGrouping,
 } = {}) {
   const byHash = new Map();
   for (const fact of facts) {
     if (!fact?.[key]) continue;
     if (
       (fact.bodyLoc ?? 0) < minBodyLoc ||
-      (fact.statementCount ?? 0) < FUNCTION_CLONE_NEAR_THRESHOLDS.minStatementsForGrouping
+      (fact.statementCount ?? 0) < minStatements
     ) continue;
     if (!byHash.has(fact[key])) byHash.set(fact[key], []);
     byHash.get(fact[key]).push(fact);
@@ -697,7 +698,10 @@ export function assembleFunctionCloneArtifact({
     String(a.line ?? '').localeCompare(String(b.line ?? '')) ||
     (a.message ?? '').localeCompare(b.message ?? ''));
 
-  const exactBodyGroups = groupFacts(stampedFacts, 'normalizedExactHash');
+  const exactBodyGroups = groupFacts(stampedFacts, 'normalizedExactHash', {
+    minBodyLoc: 1,
+    minStatements: 1,
+  });
   const structureGroups = groupFacts(stampedFacts, 'normalizedStructureHash');
   const signatureGroups = groupSignatureFacts(stampedFacts);
   const nearFunctionCandidates = buildNearFunctionCandidates(
