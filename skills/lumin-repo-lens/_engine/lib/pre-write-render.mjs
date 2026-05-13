@@ -380,7 +380,43 @@ function reviewActionForCue(cue) {
   if (cue.evidenceLane === 'inline-extraction') {
     return 'inspect the cited occurrence ranges before extracting helper code.';
   }
+  if (cue.evidenceLane === 'service-operation-sibling') {
+    return 'inspect this related operation before creating parallel service code.';
+  }
   return 'inspect the cited file or symbol before creating parallel code.';
+}
+
+function formatInlineCodeList(values) {
+  const items = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (items.length === 0) return '`unknown`';
+  return items.map((item) => `\`${item}\``).join(', ');
+}
+
+function formatServiceLocality(locality) {
+  if (!locality || typeof locality !== 'object') return 'unknown';
+  const labels = [];
+  for (const [key, value] of Object.entries(locality)) {
+    if (value === true) labels.push(key);
+  }
+  return labels.length > 0 ? labels.join(', ') : 'none';
+}
+
+function renderServiceOperationReviewCue(card, cue) {
+  const candidate = card.candidate ?? {};
+  const evidence = Array.isArray(cue.evidence) ? cue.evidence[0] ?? {} : {};
+  const name = candidate.exportedName ?? evidence.candidateIdentity?.split('::').at(-1) ?? 'unknown';
+  const ownerFile = candidate.ownerFile ?? evidence.candidateIdentity?.split('::').at(0) ?? 'unknown';
+  const out = [];
+
+  out.push(`- Review related service operation: \`${name}\` in \`${ownerFile}\`.`);
+  out.push(`  [${cue.confidence ?? 'heuristic-review'}, ${evidenceSummary(cue.evidence)}; cueTier=${cue.cueTier}]`);
+  if (evidence.policyVersion) {
+    out.push(`  policy ${evidence.policyVersion}`);
+  }
+  out.push(`  shared domain tokens: ${formatInlineCodeList(evidence.sharedDomainTokens)}; operation family: \`${evidence.operationFamily ?? 'unknown'}\`; locality: ${formatServiceLocality(evidence.locality)}.`);
+  out.push(`  supporting suppressed reasons: ${formatInlineCodeList(evidence.supportingReasons)}.`);
+  out.push(`  action: ${reviewActionForCue(cue)}`);
+  return out;
 }
 
 function renderCueSections(advisory) {
@@ -396,7 +432,11 @@ function renderCueSections(advisory) {
       if (cue.cueTier === 'SAFE_CUE') {
         grounded.push(row, evidence, '  Note: grounded fact only; not a semantic-equivalence or auto-reuse claim.');
       } else if (cue.cueTier === 'AGENT_REVIEW_CUE') {
-        review.push(row, evidence, `  action: ${reviewActionForCue(cue)}`);
+        if (cue.evidenceLane === 'service-operation-sibling') {
+          review.push(...renderServiceOperationReviewCue(card, cue));
+        } else {
+          review.push(row, evidence, `  action: ${reviewActionForCue(cue)}`);
+        }
       }
     }
   }
