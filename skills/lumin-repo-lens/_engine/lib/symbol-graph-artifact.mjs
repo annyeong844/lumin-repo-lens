@@ -31,26 +31,38 @@ function buildFilesWithParseErrors({ root, entries }) {
 }
 
 function sortNamespaceReExportDiagnostics(items) {
-  return [...(items ?? [])]
-    .sort((a, b) =>
-      `${a.consumerFile ?? ''}|${a.exportedName ?? ''}|${a.targetFile ?? ''}|${a.kind ?? ''}|${a.line ?? ''}`
-        .localeCompare(`${b.consumerFile ?? ''}|${b.exportedName ?? ''}|${b.targetFile ?? ''}|${b.kind ?? ''}|${b.line ?? ''}`));
+  return [...(items ?? [])].sort((a, b) =>
+    `${a.consumerFile ?? ''}|${a.exportedName ?? ''}|${a.targetFile ?? ''}|${a.kind ?? ''}|${a.line ?? ''}`.localeCompare(
+      `${b.consumerFile ?? ''}|${b.exportedName ?? ''}|${b.targetFile ?? ''}|${b.kind ?? ''}|${b.line ?? ''}`,
+    ),
+  );
 }
 
-function buildTopUnresolvedSpecifiers({ unresolvedInternalByPrefix, prefixExamples }) {
+function buildTopUnresolvedSpecifiers({
+  unresolvedInternalByPrefix,
+  prefixExamples,
+}) {
   return [...unresolvedInternalByPrefix.entries()]
     .sort((a, b) => b[1] - a[1])
     .slice(0, 20)
     .map(([specifierPrefix, count]) => {
       const example = prefixExamples.get(specifierPrefix) ?? specifierPrefix;
       let likelyCause = null;
-      if (/^(@|~|#)\//.test(specifierPrefix) || /^@[^/]+\//.test(specifierPrefix)) {
+      if (
+        /^(@|~|#)\//.test(specifierPrefix) ||
+        /^@[^/]+\//.test(specifierPrefix)
+      ) {
         likelyCause =
           'possible unresolved tsconfig paths alias. Check per-app ' +
           'tsconfig.json for a compilerOptions.paths entry matching this prefix. ' +
           'See FP-36 in references/false-positive-index.md.';
       }
-      return { specifierPrefix, count, example, ...(likelyCause ? { likelyCause } : {}) };
+      return {
+        specifierPrefix,
+        count,
+        example,
+        ...(likelyCause ? { likelyCause } : {}),
+      };
     });
 }
 
@@ -59,7 +71,9 @@ function compactUnresolvedExample(record = {}) {
     specifier: record.specifier,
     consumerFile: record.consumerFile,
     kind: record.kind,
-    ...(typeof record.typeOnly === 'boolean' ? { typeOnly: record.typeOnly } : {}),
+    ...(typeof record.typeOnly === 'boolean'
+      ? { typeOnly: record.typeOnly }
+      : {}),
     ...(record.resolverStage ? { resolverStage: record.resolverStage } : {}),
     ...(record.matchedPattern ? { matchedPattern: record.matchedPattern } : {}),
     ...(record.hint ? { hint: record.hint } : {}),
@@ -76,8 +90,9 @@ function unresolvedSpace(record = {}) {
 }
 
 function sortedCounterObject(counter) {
-  return Object.fromEntries([...counter.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0])));
+  return Object.fromEntries(
+    [...counter.entries()].sort((a, b) => a[0].localeCompare(b[0])),
+  );
 }
 
 function buildUnresolvedInternalSummaryByReason(records) {
@@ -115,20 +130,30 @@ function buildUnresolvedInternalSummaryByReason(records) {
     group.examples.push(compactUnresolvedExample(record));
   }
 
-  return Object.fromEntries([...groups.entries()]
-    .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
-    .map(([reason, group]) => [reason, {
-      count: group.count,
-      spaces: group.spaces,
-      ...(group.resolverStages.size
-        ? { resolverStages: sortedCounterObject(group.resolverStages) }
-        : {}),
-      ...(group.hints.size ? { hints: sortedCounterObject(group.hints) } : {}),
-      examples: group.examples.sort((a, b) =>
-        `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`
-          .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`))
-        .slice(0, 5),
-    }]));
+  return Object.fromEntries(
+    [...groups.entries()]
+      .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
+      .map(([reason, group]) => [
+        reason,
+        {
+          count: group.count,
+          spaces: group.spaces,
+          ...(group.resolverStages.size
+            ? { resolverStages: sortedCounterObject(group.resolverStages) }
+            : {}),
+          ...(group.hints.size
+            ? { hints: sortedCounterObject(group.hints) }
+            : {}),
+          examples: group.examples
+            .sort((a, b) =>
+              `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`.localeCompare(
+                `${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`,
+              ),
+            )
+            .slice(0, 5),
+        },
+      ]),
+  );
 }
 
 function buildDynamicImportOpacity({ root, fileData }) {
@@ -150,21 +175,26 @@ function buildDynamicImportOpacity({ root, fileData }) {
     }
   }
   return dynamicImportOpacity.sort((a, b) =>
-    `${a.consumerFile}|${String(a.line).padStart(6, '0')}|${a.prefix ?? ''}`
-      .localeCompare(`${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.prefix ?? ''}`));
+    `${a.consumerFile}|${String(a.line).padStart(6, '0')}|${a.prefix ?? ''}`.localeCompare(
+      `${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.prefix ?? ''}`,
+    ),
+  );
 }
 
 function sortCjsSurfaceList(entries = []) {
   return [...entries].sort((a, b) =>
-    `${a.name ?? ''}|${a.kind ?? ''}|${String(a.line ?? '').padStart(6, '0')}`
-      .localeCompare(`${b.name ?? ''}|${b.kind ?? ''}|${String(b.line ?? '').padStart(6, '0')}`));
+    `${a.name ?? ''}|${a.kind ?? ''}|${String(a.line ?? '').padStart(6, '0')}`.localeCompare(
+      `${b.name ?? ''}|${b.kind ?? ''}|${String(b.line ?? '').padStart(6, '0')}`,
+    ),
+  );
 }
 
 function buildCjsExportSurfaceByFile({ root, fileData }) {
   const out = {};
   for (const [absFile, info] of fileData) {
     const surface = info.cjsExportSurface;
-    if (!surface || (!surface.exact?.length && !surface.opaque?.length)) continue;
+    if (!surface || (!surface.exact?.length && !surface.opaque?.length))
+      continue;
     out[relPath(root, absFile)] = {
       exact: sortCjsSurfaceList(surface.exact),
       opaque: sortCjsSurfaceList(surface.opaque),
@@ -185,8 +215,10 @@ function buildCjsRequireOpacity({ root, fileData }) {
     }
   }
   return cjsRequireOpacity.sort((a, b) =>
-    `${a.consumerFile}|${String(a.line).padStart(6, '0')}|${a.kind ?? ''}`
-      .localeCompare(`${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.kind ?? ''}`));
+    `${a.consumerFile}|${String(a.line).padStart(6, '0')}|${a.kind ?? ''}`.localeCompare(
+      `${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.kind ?? ''}`,
+    ),
+  );
 }
 
 function buildPlainDefIndex({ root, defIndex }) {
@@ -199,8 +231,10 @@ function buildPlainDefIndex({ root, defIndex }) {
 
 function sortClassMethodRecords(records = []) {
   return [...records].sort((a, b) =>
-    `${a.className ?? ''}|${a.name ?? ''}|${String(a.line ?? '').padStart(6, '0')}|${a.identity ?? ''}`
-      .localeCompare(`${b.className ?? ''}|${b.name ?? ''}|${String(b.line ?? '').padStart(6, '0')}|${b.identity ?? ''}`));
+    `${a.className ?? ''}|${a.name ?? ''}|${String(a.line ?? '').padStart(6, '0')}|${a.identity ?? ''}`.localeCompare(
+      `${b.className ?? ''}|${b.name ?? ''}|${String(b.line ?? '').padStart(6, '0')}|${b.identity ?? ''}`,
+    ),
+  );
 }
 
 function buildClassMethodIndex({ root, fileData }) {
@@ -234,10 +268,64 @@ function buildClassMethodIndex({ root, fileData }) {
   return out;
 }
 
+function sortPreWriteLocalOperationRecords(records = []) {
+  return [...records].sort((a, b) =>
+    `${a.containerName ?? ''}|${a.name ?? ''}|${String(a.line ?? '').padStart(6, '0')}|${a.identity ?? ''}`.localeCompare(
+      `${b.containerName ?? ''}|${b.name ?? ''}|${String(b.line ?? '').padStart(6, '0')}|${b.identity ?? ''}`,
+    ),
+  );
+}
+
+function buildPreWriteLocalOperationIndex({ root, fileData }) {
+  const byOwnerFile = Object.create(null);
+  let operationCount = 0;
+
+  for (const [absFile, info] of fileData) {
+    const operations = sortPreWriteLocalOperationRecords(
+      info.localOperations ?? [],
+    );
+    if (operations.length === 0) continue;
+    const rel = relPath(root, absFile);
+    byOwnerFile[rel] = operations.map((operation) => ({
+      identity: operation.identity,
+      name: operation.name,
+      ownerFile: operation.ownerFile ?? rel,
+      containerName: operation.containerName,
+      containerKind: operation.containerKind,
+      scopeKind: operation.scopeKind ?? 'nested-function',
+      matchedField: operation.matchedField ?? 'preWriteLocalOperationIndex',
+      line: operation.line,
+      operationFamily: operation.operationFamily,
+      domainTokens: [...(operation.domainTokens ?? [])].sort(),
+      visibility: operation.visibility ?? 'local-only',
+      eligibleForDeadExportRanking: false,
+      eligibleForSafeFix: false,
+    }));
+    operationCount += operations.length;
+  }
+
+  return {
+    schemaVersion: 'pre-write-local-operations.v1',
+    status: 'complete',
+    meta: {
+      supports: {
+        nestedLocalOperationIndex: true,
+      },
+    },
+    byOwnerFile,
+    summary: {
+      ownerFileCount: Object.keys(byOwnerFile).length,
+      operationCount,
+    },
+  };
+}
+
 function sortResolvedInternalEdges(edges) {
   return [...(edges ?? [])].sort((a, b) =>
-    `${a.from ?? ''}|${a.to ?? ''}|${a.kind ?? ''}|${a.source ?? ''}|${a.typeOnly ? '1' : '0'}`
-      .localeCompare(`${b.from ?? ''}|${b.to ?? ''}|${b.kind ?? ''}|${b.source ?? ''}|${b.typeOnly ? '1' : '0'}`));
+    `${a.from ?? ''}|${a.to ?? ''}|${a.kind ?? ''}|${a.source ?? ''}|${a.typeOnly ? '1' : '0'}`.localeCompare(
+      `${b.from ?? ''}|${b.to ?? ''}|${b.kind ?? ''}|${b.source ?? ''}|${b.typeOnly ? '1' : '0'}`,
+    ),
+  );
 }
 
 function sortGeneratedVirtualSurfaces(surfaces) {
@@ -245,21 +333,28 @@ function sortGeneratedVirtualSurfaces(surfaces) {
     .map((surface) => ({
       ...surface,
       exports: [...(surface.exports ?? [])].sort((a, b) =>
-        `${a.name ?? ''}|${a.kind ?? ''}`.localeCompare(`${b.name ?? ''}|${b.kind ?? ''}`)),
+        `${a.name ?? ''}|${a.kind ?? ''}`.localeCompare(
+          `${b.name ?? ''}|${b.kind ?? ''}`,
+        ),
+      ),
     }))
     .sort((a, b) => `${a.id ?? ''}`.localeCompare(`${b.id ?? ''}`));
 }
 
 function sortGeneratedVirtualImportConsumers(consumers) {
   return [...(consumers ?? [])].sort((a, b) =>
-    `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.name ?? ''}|${a.kind ?? ''}|${a.surfaceId ?? ''}`
-      .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.name ?? ''}|${b.kind ?? ''}|${b.surfaceId ?? ''}`));
+    `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.name ?? ''}|${a.kind ?? ''}|${a.surfaceId ?? ''}`.localeCompare(
+      `${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.name ?? ''}|${b.kind ?? ''}|${b.surfaceId ?? ''}`,
+    ),
+  );
 }
 
 function sortGeneratedConsumerBlindZones(zones) {
   return [...(zones ?? [])].sort((a, b) =>
-    `${a.scopePackageRoot ?? ''}|${a.candidatePath ?? ''}|${a.specifier ?? ''}|${a.consumerFile ?? ''}`
-      .localeCompare(`${b.scopePackageRoot ?? ''}|${b.candidatePath ?? ''}|${b.specifier ?? ''}|${b.consumerFile ?? ''}`));
+    `${a.scopePackageRoot ?? ''}|${a.candidatePath ?? ''}|${a.specifier ?? ''}|${a.consumerFile ?? ''}`.localeCompare(
+      `${b.scopePackageRoot ?? ''}|${b.candidatePath ?? ''}|${b.specifier ?? ''}|${b.consumerFile ?? ''}`,
+    ),
+  );
 }
 
 export function buildSymbolsArtifact({
@@ -329,6 +424,7 @@ export function buildSymbolsArtifact({
         nonSourceAssetImports: true,
         namespaceReExportDiagnostics: true,
         classMethodIndex: true,
+        nestedLocalOperationIndex: true,
       },
       languageSupport,
       warnings: artifactWarnings,
@@ -336,7 +432,14 @@ export function buildSymbolsArtifact({
     },
     files: files.length,
     totalDefs: [...defIndex.values()].reduce((a, m) => a + m.size, 0),
-    totalClassMethods: [...fileData.values()].reduce((a, info) => a + (info.classMethods?.length ?? 0), 0),
+    totalClassMethods: [...fileData.values()].reduce(
+      (a, info) => a + (info.classMethods?.length ?? 0),
+      0,
+    ),
+    totalPreWriteLocalOperations: [...fileData.values()].reduce(
+      (a, info) => a + (info.localOperations?.length ?? 0),
+      0,
+    ),
     totalUsesResolved: totalUses,
     unresolvedUses,
     uses: {
@@ -347,17 +450,29 @@ export function buildSymbolsArtifact({
       unresolvedInternal: unresolvedInternalUses,
       mdxConsumers: mdxConsumerUses,
       unresolvedInternalRatio:
-        (resolvedInternalUses + unresolvedInternalUses) > 0
-          ? +(unresolvedInternalUses / (resolvedInternalUses + unresolvedInternalUses)).toFixed(4)
+        resolvedInternalUses + unresolvedInternalUses > 0
+          ? +(
+              unresolvedInternalUses /
+              (resolvedInternalUses + unresolvedInternalUses)
+            ).toFixed(4)
           : 0,
     },
-    dependencyImportConsumers: [...(dependencyImportConsumers ?? [])].sort((a, b) =>
-      `${a.depRoot ?? ''}|${a.fromSpec ?? ''}|${a.file ?? ''}|${a.kind ?? ''}`
-        .localeCompare(`${b.depRoot ?? ''}|${b.fromSpec ?? ''}|${b.file ?? ''}|${b.kind ?? ''}`)),
+    dependencyImportConsumers: [...(dependencyImportConsumers ?? [])].sort(
+      (a, b) =>
+        `${a.depRoot ?? ''}|${a.fromSpec ?? ''}|${a.file ?? ''}|${a.kind ?? ''}`.localeCompare(
+          `${b.depRoot ?? ''}|${b.fromSpec ?? ''}|${b.file ?? ''}|${b.kind ?? ''}`,
+        ),
+    ),
     resolvedInternalEdges: sortResolvedInternalEdges(resolvedInternalEdges),
-    generatedConsumerBlindZones: sortGeneratedConsumerBlindZones(generatedConsumerBlindZones),
-    generatedVirtualSurfaces: sortGeneratedVirtualSurfaces(generatedVirtualSurfaces),
-    generatedVirtualImportConsumers: sortGeneratedVirtualImportConsumers(generatedVirtualImportConsumers),
+    generatedConsumerBlindZones: sortGeneratedConsumerBlindZones(
+      generatedConsumerBlindZones,
+    ),
+    generatedVirtualSurfaces: sortGeneratedVirtualSurfaces(
+      generatedVirtualSurfaces,
+    ),
+    generatedVirtualImportConsumers: sortGeneratedVirtualImportConsumers(
+      generatedVirtualImportConsumers,
+    ),
     topUnresolvedSpecifiers: buildTopUnresolvedSpecifiers({
       unresolvedInternalByPrefix,
       prefixExamples,
@@ -366,12 +481,20 @@ export function buildSymbolsArtifact({
     cjsExportSurfaceByFile: buildCjsExportSurfaceByFile({ root, fileData }),
     cjsRequireOpacity: buildCjsRequireOpacity({ root, fileData }),
     unresolvedInternalSpecifiers: [...unresolvedInternalSpecifiers].sort(),
-    unresolvedInternalSpecifierRecords: [...(unresolvedInternalSpecifierRecords ?? [])].sort((a, b) =>
-      `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`
-        .localeCompare(`${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`)),
-    unresolvedInternalSummaryByReason:
-      buildUnresolvedInternalSummaryByReason(unresolvedInternalSpecifierRecords),
-    filesWithParseErrors: buildFilesWithParseErrors({ root, entries: nextCache.entries }),
+    unresolvedInternalSpecifierRecords: [
+      ...(unresolvedInternalSpecifierRecords ?? []),
+    ].sort((a, b) =>
+      `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`.localeCompare(
+        `${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`,
+      ),
+    ),
+    unresolvedInternalSummaryByReason: buildUnresolvedInternalSummaryByReason(
+      unresolvedInternalSpecifierRecords,
+    ),
+    filesWithParseErrors: buildFilesWithParseErrors({
+      root,
+      entries: nextCache.entries,
+    }),
     deadTotal: dead.length,
     trulyDead: trulyDead.length,
     deadInProd: deadInProd.length,
@@ -379,11 +502,17 @@ export function buildSymbolsArtifact({
     topSymbolFanIn: symbolFanIn.slice(0, 50),
     fanInByIdentity,
     fanInByIdentitySpace: fanInByIdentitySpace ?? {},
-    namespaceReExportDiagnostics: sortNamespaceReExportDiagnostics(namespaceReExportDiagnostics),
+    namespaceReExportDiagnostics: sortNamespaceReExportDiagnostics(
+      namespaceReExportDiagnostics,
+    ),
     helperOwnersByIdentity: anyContaminationFacts?.helperOwnersByIdentity ?? {},
     typeOwnersByIdentity: anyContaminationFacts?.typeOwnersByIdentity ?? {},
     defIndex: buildPlainDefIndex({ root, defIndex }),
     classMethodIndex: buildClassMethodIndex({ root, fileData }),
+    preWriteLocalOperationIndex: buildPreWriteLocalOperationIndex({
+      root,
+      fileData,
+    }),
     deadProdList: deadInProd,
     reExportsByFile: buildReExportsByFile({ root, fileData }),
   };

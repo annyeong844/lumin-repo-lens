@@ -23,6 +23,41 @@ import { parseOxcOrThrow } from './parse-oxc.mjs';
 import { computeLineStarts, lineOf } from './line-offset.mjs';
 import { extractTypeEscapes } from './extract-ts-escapes.mjs';
 import { definitionIdFromOxcNode } from './definition-id.mjs';
+import { uniquePreWriteTokens } from './pre-write-token-policy.mjs';
+
+const LOCAL_OPERATION_READ_QUERY_VERBS = new Set([
+  'fetch',
+  'find',
+  'get',
+  'list',
+  'load',
+  'lookup',
+  'query',
+  'read',
+  'resolve',
+  'retrieve',
+  'search',
+]);
+
+const LOCAL_OPERATION_MUTATION_VERBS = new Set([
+  'add',
+  'create',
+  'delete',
+  'destroy',
+  'dispatch',
+  'emit',
+  'patch',
+  'remove',
+  'save',
+  'send',
+  'set',
+  'update',
+  'upsert',
+  'write',
+]);
+
+const LOCAL_OPERATION_CONTAINER_START = new Set(['build', 'create', 'make']);
+const LOCAL_OPERATION_CONTAINER_DOMAIN = new Set(['repository', 'service']);
 
 function makeLineGetter(src) {
   const lineStarts = computeLineStarts(src);
@@ -41,7 +76,8 @@ function literalImportSource(node) {
 
 function literalRequireSource(node) {
   if (node?.type !== 'CallExpression') return null;
-  if (node.callee?.type !== 'Identifier' || node.callee.name !== 'require') return null;
+  if (node.callee?.type !== 'Identifier' || node.callee.name !== 'require')
+    return null;
   const first = node.arguments?.[0];
   return first?.type === 'Literal' && typeof first.value === 'string'
     ? first.value
@@ -49,21 +85,27 @@ function literalRequireSource(node) {
 }
 
 function isRequireCall(node) {
-  return node?.type === 'CallExpression' &&
+  return (
+    node?.type === 'CallExpression' &&
     node.callee?.type === 'Identifier' &&
-    node.callee.name === 'require';
+    node.callee.name === 'require'
+  );
 }
 
 function opaqueDynamicImportHint(node) {
   if (node?.type !== 'ImportExpression') return null;
   if (literalImportSource(node)) return null;
   const s = node.source;
-  if (s?.type === 'TemplateLiteral' &&
-      Array.isArray(s.expressions) &&
-      s.expressions.length > 0) {
+  if (
+    s?.type === 'TemplateLiteral' &&
+    Array.isArray(s.expressions) &&
+    s.expressions.length > 0
+  ) {
     const prefix = s.quasis?.[0]?.value?.cooked;
-    if (typeof prefix === 'string' &&
-        /^(?:\.\/|\.\.\/).+[\/\\]$/.test(prefix)) {
+    if (
+      typeof prefix === 'string' &&
+      /^(?:\.\/|\.\.\/).+[\/\\]$/.test(prefix)
+    ) {
       return { kind: 'template-prefix', prefix };
     }
   }
@@ -77,14 +119,16 @@ function importMetaGlobPattern(node) {
   if (memberPropertyName(callee) !== 'glob') return null;
   const object = callee.object;
   if (object?.type !== 'MetaProperty') return null;
-  if (object.meta?.name !== 'import' || object.property?.name !== 'meta') return null;
+  if (object.meta?.name !== 'import' || object.property?.name !== 'meta')
+    return null;
   return literalStringValue(node.arguments?.[0]);
 }
 
 function affectedDirFromGlobPattern(pattern) {
   if (typeof pattern !== 'string') return null;
   const normalized = pattern.replace(/\\/g, '/');
-  if (!normalized.startsWith('./') && !normalized.startsWith('../')) return null;
+  if (!normalized.startsWith('./') && !normalized.startsWith('../'))
+    return null;
   const firstDynamic = normalized.search(/[*?[{]/);
   if (firstDynamic < 0) return null;
   const staticPrefix = normalized.slice(0, firstDynamic);
@@ -101,15 +145,20 @@ function opaqueCjsRequireHint(node) {
 
 function literalStringValue(node) {
   if (!node) return null;
-  if ((node.type === 'Literal' || node.type === 'StringLiteral') &&
-      typeof node.value === 'string') {
+  if (
+    (node.type === 'Literal' || node.type === 'StringLiteral') &&
+    typeof node.value === 'string'
+  ) {
     return node.value;
   }
   return null;
 }
 
 function isJsonPathFragment(value) {
-  return typeof value === 'string' && value.replace(/\\/g, '/').toLowerCase().endsWith('.json');
+  return (
+    typeof value === 'string' &&
+    value.replace(/\\/g, '/').toLowerCase().endsWith('.json')
+  );
 }
 
 function isPathJoinOrResolveCall(node) {
@@ -117,9 +166,11 @@ function isPathJoinOrResolveCall(node) {
   const callee = node.callee;
   if (callee?.type !== 'MemberExpression' || callee.computed) return false;
   const prop = memberPropertyName(callee);
-  return (prop === 'join' || prop === 'resolve') &&
+  return (
+    (prop === 'join' || prop === 'resolve') &&
     callee.object?.type === 'Identifier' &&
-    callee.object.name === 'path';
+    callee.object.name === 'path'
+  );
 }
 
 function isStaticJsonRequireArgument(node) {
@@ -157,7 +208,12 @@ function isNonEscapingTrackedIdentifierRead(parent, key) {
   if (!parent) return false;
   if (parent.type === 'IfStatement' && key === 'test') return true;
   if (parent.type === 'LogicalExpression' && key === 'left') return true;
-  if (parent.type === 'UnaryExpression' && parent.operator === 'typeof' && key === 'argument') return true;
+  if (
+    parent.type === 'UnaryExpression' &&
+    parent.operator === 'typeof' &&
+    key === 'argument'
+  )
+    return true;
   return false;
 }
 
@@ -165,7 +221,12 @@ function isMutatingMemberAccess(parent, key) {
   if (!parent) return false;
   if (parent.type === 'AssignmentExpression' && key === 'left') return true;
   if (parent.type === 'UpdateExpression' && key === 'argument') return true;
-  if (parent.type === 'UnaryExpression' && parent.operator === 'delete' && key === 'argument') return true;
+  if (
+    parent.type === 'UnaryExpression' &&
+    parent.operator === 'delete' &&
+    key === 'argument'
+  )
+    return true;
   return false;
 }
 
@@ -176,22 +237,48 @@ function collectTopLevelSymbols(program, getNodeLine, artifactFilePath) {
   const namespaceImports = new Map();
   const namedImports = new Map();
   const cjsExportSurface = collectCjsExportSurface(program, getNodeLine);
-  const classMethods = collectClassMethodSurface(program, getNodeLine, artifactFilePath);
+  const classMethods = collectClassMethodSurface(
+    program,
+    getNodeLine,
+    artifactFilePath,
+  );
+  const localOperations = collectPreWriteLocalOperationSurface(
+    program,
+    getNodeLine,
+    artifactFilePath,
+  );
   const localDeclarations = collectTopLevelDeclarationTargets(program);
 
   for (const node of program.body) {
-    collectExportDefinitions(node, defs, getNodeLine, artifactFilePath, localDeclarations);
+    collectExportDefinitions(
+      node,
+      defs,
+      getNodeLine,
+      artifactFilePath,
+      localDeclarations,
+    );
     collectReExports(node, reExports, uses, getNodeLine);
     collectImports(node, uses, namespaceImports, namedImports, getNodeLine);
   }
 
-  return { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface, classMethods };
+  return {
+    defs,
+    uses,
+    reExports,
+    namespaceImports,
+    namedImports,
+    cjsExportSurface,
+    classMethods,
+    localOperations,
+  };
 }
 
 function classNameFromTopLevelNode(node) {
-  const declaration = node.type === 'ExportNamedDeclaration' || node.type === 'ExportDefaultDeclaration'
-    ? node.declaration
-    : node;
+  const declaration =
+    node.type === 'ExportNamedDeclaration' ||
+    node.type === 'ExportDefaultDeclaration'
+      ? node.declaration
+      : node;
 
   if (declaration?.type === 'ClassDeclaration' && declaration.id?.name) {
     return { className: declaration.id.name, classNode: declaration };
@@ -200,7 +287,10 @@ function classNameFromTopLevelNode(node) {
   if (declaration?.type === 'VariableDeclaration') {
     const out = [];
     for (const decl of declaration.declarations ?? []) {
-      if (decl.id?.type === 'Identifier' && decl.init?.type === 'ClassExpression') {
+      if (
+        decl.id?.type === 'Identifier' &&
+        decl.init?.type === 'ClassExpression'
+      ) {
         out.push({ className: decl.id.name, classNode: decl.init });
       }
     }
@@ -212,7 +302,8 @@ function classNameFromTopLevelNode(node) {
 
 function methodNameFromClassKey(key, computed) {
   if (!key) return null;
-  if (key.type === 'PrivateIdentifier' && typeof key.name === 'string') return `#${key.name}`;
+  if (key.type === 'PrivateIdentifier' && typeof key.name === 'string')
+    return `#${key.name}`;
   if (!computed && typeof key.name === 'string') return key.name;
   if (computed) return null;
   if (typeof key.value === 'string') return key.value;
@@ -228,15 +319,20 @@ function classMemberRecord(member, className, getNodeLine, artifactFilePath) {
       member.value?.type === 'FunctionExpression');
   if (!isMethod && !isFunctionField) return null;
 
-  const methodName = methodNameFromClassKey(member.key, member.computed === true);
+  const methodName = methodNameFromClassKey(
+    member.key,
+    member.computed === true,
+  );
   if (!methodName || methodName === 'constructor') return null;
 
-  const memberKind = isMethod ? (member.kind ?? 'method') : 'class-field-function';
+  const memberKind = isMethod
+    ? (member.kind ?? 'method')
+    : 'class-field-function';
   if (memberKind === 'constructor') return null;
 
   const visibility = methodName.startsWith('#')
     ? 'private'
-    : member.accessibility ?? 'public';
+    : (member.accessibility ?? 'public');
   const line = getNodeLine(member.key ?? member);
   const endLine = getNodeLine(member.value ?? member);
   const record = {
@@ -256,10 +352,20 @@ function classMemberRecord(member, className, getNodeLine, artifactFilePath) {
   return record;
 }
 
-function collectClassMethodsFromClass(classNode, className, getNodeLine, artifactFilePath) {
+function collectClassMethodsFromClass(
+  classNode,
+  className,
+  getNodeLine,
+  artifactFilePath,
+) {
   const out = [];
   for (const member of classNode?.body?.body ?? []) {
-    const record = classMemberRecord(member, className, getNodeLine, artifactFilePath);
+    const record = classMemberRecord(
+      member,
+      className,
+      getNodeLine,
+      artifactFilePath,
+    );
     if (record) out.push(record);
   }
   return out;
@@ -271,38 +377,243 @@ function collectClassMethodSurface(program, getNodeLine, artifactFilePath) {
     const info = classNameFromTopLevelNode(node);
     if (Array.isArray(info)) {
       for (const entry of info) {
-        out.push(...collectClassMethodsFromClass(entry.classNode, entry.className, getNodeLine, artifactFilePath));
+        out.push(
+          ...collectClassMethodsFromClass(
+            entry.classNode,
+            entry.className,
+            getNodeLine,
+            artifactFilePath,
+          ),
+        );
       }
       continue;
     }
     if (info) {
-      out.push(...collectClassMethodsFromClass(info.classNode, info.className, getNodeLine, artifactFilePath));
+      out.push(
+        ...collectClassMethodsFromClass(
+          info.classNode,
+          info.className,
+          getNodeLine,
+          artifactFilePath,
+        ),
+      );
     }
   }
   return out;
 }
 
+function isFunctionExpressionLike(node) {
+  return (
+    node?.type === 'FunctionExpression' ||
+    node?.type === 'ArrowFunctionExpression'
+  );
+}
+
+function containerKindForVariableInit(node) {
+  if (node?.type === 'FunctionExpression') return 'const-function-expression';
+  if (node?.type === 'ArrowFunctionExpression') return 'const-arrow-function';
+  return null;
+}
+
+function containerCandidateFromFunctionDeclaration(node) {
+  if (node?.type !== 'FunctionDeclaration' || !node.id?.name) return null;
+  return {
+    name: node.id.name,
+    node,
+    containerKind: 'function-declaration',
+  };
+}
+
+function containerCandidateFromVariableDeclarator(decl, declarationKind) {
+  if (declarationKind !== 'const') return null;
+  if (decl?.id?.type !== 'Identifier' || !isFunctionExpressionLike(decl.init))
+    return null;
+  const containerKind = containerKindForVariableInit(decl.init);
+  if (!containerKind) return null;
+  return {
+    name: decl.id.name,
+    node: decl.init,
+    containerKind,
+  };
+}
+
+function collectExportedFactoryContainers(program) {
+  const localDeclarations = collectTopLevelDeclarationTargets(program);
+  const containers = [];
+
+  function addContainer(candidate) {
+    if (!candidate || !isLocalOperationContainerName(candidate.name)) return;
+    containers.push(candidate);
+  }
+
+  for (const node of program.body ?? []) {
+    if (node.type === 'ExportDefaultDeclaration') {
+      addContainer(containerCandidateFromFunctionDeclaration(node.declaration));
+      continue;
+    }
+
+    if (node.type !== 'ExportNamedDeclaration' || node.source) continue;
+
+    const declaration = node.declaration;
+    if (declaration?.type === 'FunctionDeclaration') {
+      addContainer(containerCandidateFromFunctionDeclaration(declaration));
+      continue;
+    }
+
+    if (declaration?.type === 'VariableDeclaration') {
+      for (const decl of declaration.declarations ?? []) {
+        addContainer(
+          containerCandidateFromVariableDeclarator(decl, declaration.kind),
+        );
+      }
+      continue;
+    }
+
+    for (const spec of node.specifiers ?? []) {
+      if (spec.type !== 'ExportSpecifier') continue;
+      const localName = spec.local?.name;
+      const local = localName ? localDeclarations.get(localName) : null;
+      if (!local) continue;
+      if (local.type === 'FunctionDeclaration') {
+        addContainer(containerCandidateFromFunctionDeclaration(local));
+      } else if (local.type === 'VariableDeclarator') {
+        addContainer(containerCandidateFromVariableDeclarator(local, 'const'));
+      }
+    }
+  }
+
+  return containers.sort((a, b) =>
+    `${a.name}|${a.containerKind}`.localeCompare(
+      `${b.name}|${b.containerKind}`,
+    ),
+  );
+}
+
+function isLocalOperationContainerName(name) {
+  const tokens = uniquePreWriteTokens(name);
+  return (
+    LOCAL_OPERATION_CONTAINER_START.has(tokens[0]) &&
+    tokens.some((token) => LOCAL_OPERATION_CONTAINER_DOMAIN.has(token))
+  );
+}
+
+function localOperationInfo(name) {
+  const tokens = uniquePreWriteTokens(name);
+  const verb = tokens[0];
+  if (!LOCAL_OPERATION_READ_QUERY_VERBS.has(verb)) return null;
+  if (LOCAL_OPERATION_MUTATION_VERBS.has(verb)) return null;
+  const domainTokens = tokens
+    .slice(1)
+    .filter(
+      (token) =>
+        token &&
+        !LOCAL_OPERATION_READ_QUERY_VERBS.has(token) &&
+        !LOCAL_OPERATION_MUTATION_VERBS.has(token),
+    );
+  if (domainTokens.length === 0) return null;
+  return {
+    operationFamily: 'read-query',
+    domainTokens,
+  };
+}
+
+function localFunctionCandidateFromStatement(statement) {
+  if (statement?.type === 'FunctionDeclaration' && statement.id?.name) {
+    return {
+      name: statement.id.name,
+      node: statement,
+      declarationKind: 'function-declaration',
+    };
+  }
+
+  if (statement?.type !== 'VariableDeclaration' || statement.kind !== 'const')
+    return null;
+  const out = [];
+  for (const decl of statement.declarations ?? []) {
+    if (decl.id?.type !== 'Identifier' || !isFunctionExpressionLike(decl.init))
+      continue;
+    const declarationKind = containerKindForVariableInit(decl.init);
+    if (!declarationKind) continue;
+    out.push({
+      name: decl.id.name,
+      node: decl,
+      declarationKind,
+    });
+  }
+  return out;
+}
+
+function collectPreWriteLocalOperationSurface(
+  program,
+  getNodeLine,
+  artifactFilePath,
+) {
+  const out = [];
+  for (const container of collectExportedFactoryContainers(program)) {
+    if (container.node?.body?.type !== 'BlockStatement') continue;
+    for (const statement of container.node.body.body ?? []) {
+      const candidate = localFunctionCandidateFromStatement(statement);
+      const candidates = Array.isArray(candidate) ? candidate : [candidate];
+      for (const item of candidates) {
+        if (!item) continue;
+        const operation = localOperationInfo(item.name);
+        if (!operation) continue;
+        out.push({
+          identity: `${artifactFilePath}::${container.name}#${item.name}`,
+          name: item.name,
+          ownerFile: artifactFilePath,
+          containerName: container.name,
+          containerKind: container.containerKind,
+          scopeKind: 'nested-function',
+          matchedField: 'preWriteLocalOperationIndex',
+          line: getNodeLine(item.node?.id ?? item.node),
+          operationFamily: operation.operationFamily,
+          domainTokens: operation.domainTokens,
+          visibility: 'local-only',
+          eligibleForDeadExportRanking: false,
+          eligibleForSafeFix: false,
+        });
+      }
+    }
+  }
+  return out.sort((a, b) =>
+    `${a.ownerFile}|${a.containerName}|${a.name}|${String(a.line).padStart(6, '0')}`.localeCompare(
+      `${b.ownerFile}|${b.containerName}|${b.name}|${String(b.line).padStart(6, '0')}`,
+    ),
+  );
+}
+
 function collectTopLevelDeclarationTargets(program) {
   const out = new Map();
   for (const node of program.body ?? []) {
-    const declaration = node.type === 'ExportNamedDeclaration' && node.declaration
-      ? node.declaration
-      : node;
+    const declaration =
+      node.type === 'ExportNamedDeclaration' && node.declaration
+        ? node.declaration
+        : node;
     if (!declaration || typeof declaration !== 'object') continue;
 
-    if (declaration.type === 'FunctionDeclaration' || declaration.type === 'ClassDeclaration') {
-      if (declaration.id?.name && !out.has(declaration.id.name)) out.set(declaration.id.name, declaration);
+    if (
+      declaration.type === 'FunctionDeclaration' ||
+      declaration.type === 'ClassDeclaration'
+    ) {
+      if (declaration.id?.name && !out.has(declaration.id.name))
+        out.set(declaration.id.name, declaration);
       continue;
     }
 
     if (declaration.type === 'VariableDeclaration') {
       for (const decl of declaration.declarations ?? []) {
-        if (decl.id?.type === 'Identifier' && !out.has(decl.id.name)) out.set(decl.id.name, decl);
+        if (decl.id?.type === 'Identifier' && !out.has(decl.id.name))
+          out.set(decl.id.name, decl);
       }
       continue;
     }
 
-    if (isTypeDeclaration(declaration) && declaration.id?.name && !out.has(declaration.id.name)) {
+    if (
+      isTypeDeclaration(declaration) &&
+      declaration.id?.name &&
+      !out.has(declaration.id.name)
+    ) {
       out.set(declaration.id.name, declaration);
     }
   }
@@ -314,32 +625,56 @@ function withDefinitionId(def, artifactFilePath, targetNode) {
   return definitionId ? { ...def, definitionId } : def;
 }
 
-function collectExportDefinitions(node, defs, getNodeLine, artifactFilePath, localDeclarations) {
+function collectExportDefinitions(
+  node,
+  defs,
+  getNodeLine,
+  artifactFilePath,
+  localDeclarations,
+) {
   if (node.type === 'ExportDefaultDeclaration') {
-    defs.push(withDefinitionId(
-      { name: 'default', kind: 'default', line: getNodeLine(node) },
-      artifactFilePath,
-      node.declaration ?? node,
-    ));
+    defs.push(
+      withDefinitionId(
+        { name: 'default', kind: 'default', line: getNodeLine(node) },
+        artifactFilePath,
+        node.declaration ?? node,
+      ),
+    );
     return;
   }
 
   if (node.type !== 'ExportNamedDeclaration' || node.source) return;
   collectDeclarationDefs(node.declaration, defs, getNodeLine, artifactFilePath);
-  collectExportSpecifierDefs(node, defs, getNodeLine, artifactFilePath, localDeclarations);
+  collectExportSpecifierDefs(
+    node,
+    defs,
+    getNodeLine,
+    artifactFilePath,
+    localDeclarations,
+  );
 }
 
-function collectDeclarationDefs(declaration, defs, getNodeLine, artifactFilePath) {
+function collectDeclarationDefs(
+  declaration,
+  defs,
+  getNodeLine,
+  artifactFilePath,
+) {
   if (!declaration) return;
   const line = getNodeLine(declaration);
 
-  if (declaration.type === 'FunctionDeclaration' || declaration.type === 'ClassDeclaration') {
+  if (
+    declaration.type === 'FunctionDeclaration' ||
+    declaration.type === 'ClassDeclaration'
+  ) {
     if (declaration.id?.name) {
-      defs.push(withDefinitionId(
-        { name: declaration.id.name, kind: declaration.type, line },
-        artifactFilePath,
-        declaration,
-      ));
+      defs.push(
+        withDefinitionId(
+          { name: declaration.id.name, kind: declaration.type, line },
+          artifactFilePath,
+          declaration,
+        ),
+      );
     }
     return;
   }
@@ -347,41 +682,63 @@ function collectDeclarationDefs(declaration, defs, getNodeLine, artifactFilePath
   if (declaration.type === 'VariableDeclaration') {
     for (const decl of declaration.declarations) {
       if (decl.id?.type === 'Identifier') {
-        defs.push(withDefinitionId(
-          { name: decl.id.name, kind: `${declaration.kind}-var`, line },
-          artifactFilePath,
-          decl,
-        ));
+        defs.push(
+          withDefinitionId(
+            { name: decl.id.name, kind: `${declaration.kind}-var`, line },
+            artifactFilePath,
+            decl,
+          ),
+        );
       }
     }
     return;
   }
 
   if (isTypeDeclaration(declaration) && declaration.id?.name) {
-    defs.push(withDefinitionId(
-      { name: declaration.id.name, kind: declaration.type, line },
-      artifactFilePath,
-      declaration,
-    ));
+    defs.push(
+      withDefinitionId(
+        { name: declaration.id.name, kind: declaration.type, line },
+        artifactFilePath,
+        declaration,
+      ),
+    );
   }
 }
 
-function collectExportSpecifierDefs(node, defs, getNodeLine, artifactFilePath, localDeclarations) {
+function collectExportSpecifierDefs(
+  node,
+  defs,
+  getNodeLine,
+  artifactFilePath,
+  localDeclarations,
+) {
   for (const spec of node.specifiers ?? []) {
     if (spec.type !== 'ExportSpecifier' || !spec.exported?.name) continue;
     const exportedName = spec.exported.name;
     const localName = spec.local?.name ?? exportedName;
-    const def = { name: exportedName, kind: 'ExportSpecifier', line: getNodeLine(spec) };
+    const def = {
+      name: exportedName,
+      kind: 'ExportSpecifier',
+      line: getNodeLine(spec),
+    };
     if (localName !== exportedName) def.localName = localName;
-    defs.push(withDefinitionId(def, artifactFilePath, localDeclarations.get(localName) ?? spec));
+    defs.push(
+      withDefinitionId(
+        def,
+        artifactFilePath,
+        localDeclarations.get(localName) ?? spec,
+      ),
+    );
   }
 }
 
 function isTypeDeclaration(node) {
-  return node.type === 'TSInterfaceDeclaration' ||
+  return (
+    node.type === 'TSInterfaceDeclaration' ||
     node.type === 'TSTypeAliasDeclaration' ||
     node.type === 'TSEnumDeclaration' ||
-    node.type === 'TSModuleDeclaration';
+    node.type === 'TSModuleDeclaration'
+  );
 }
 
 function collectReExports(node, reExports, uses, getNodeLine) {
@@ -423,7 +780,13 @@ function collectNamedReExportUses(node, uses, getNodeLine) {
   }
 }
 
-function collectImports(node, uses, namespaceImports, namedImports, getNodeLine) {
+function collectImports(
+  node,
+  uses,
+  namespaceImports,
+  namedImports,
+  getNodeLine,
+) {
   if (node.type !== 'ImportDeclaration') return;
 
   if ((node.specifiers ?? []).length === 0) {
@@ -481,16 +844,21 @@ function collectCjsExportSurface(program, getNodeLine) {
   for (const node of program.body ?? []) {
     if (node.type !== 'ExpressionStatement') continue;
     const expr = node.expression;
-    if (expr?.type !== 'AssignmentExpression' || expr.operator !== '=') continue;
+    if (expr?.type !== 'AssignmentExpression' || expr.operator !== '=')
+      continue;
     collectCjsExportAssignment(expr, surface, getNodeLine);
   }
 
   surface.exact.sort((a, b) =>
-    `${a.name}|${a.kind}|${String(a.line).padStart(6, '0')}`
-      .localeCompare(`${b.name}|${b.kind}|${String(b.line).padStart(6, '0')}`));
+    `${a.name}|${a.kind}|${String(a.line).padStart(6, '0')}`.localeCompare(
+      `${b.name}|${b.kind}|${String(b.line).padStart(6, '0')}`,
+    ),
+  );
   surface.opaque.sort((a, b) =>
-    `${a.kind}|${String(a.line).padStart(6, '0')}`
-      .localeCompare(`${b.kind}|${String(b.line).padStart(6, '0')}`));
+    `${a.kind}|${String(a.line).padStart(6, '0')}`.localeCompare(
+      `${b.kind}|${String(b.line).padStart(6, '0')}`,
+    ),
+  );
 
   return surface.exact.length || surface.opaque.length ? surface : null;
 }
@@ -546,11 +914,13 @@ function cjsExportMemberAssignment(node) {
 }
 
 function isModuleExportsObject(node) {
-  return node?.type === 'MemberExpression' &&
+  return (
+    node?.type === 'MemberExpression' &&
     !node.computed &&
     node.object?.type === 'Identifier' &&
     node.object.name === 'module' &&
-    memberPropertyName(node) === 'exports';
+    memberPropertyName(node) === 'exports'
+  );
 }
 
 function collectModuleExportsObjectProperties(node, surface, getNodeLine) {
@@ -564,8 +934,11 @@ function collectModuleExportsObjectProperties(node, surface, getNodeLine) {
     }
 
     const name = prop.computed
-      ? (prop.key?.type === 'Literal' && typeof prop.key.value === 'string' ? prop.key.value : null)
-      : (prop.key?.name ?? (typeof prop.key?.value === 'string' ? prop.key.value : null));
+      ? prop.key?.type === 'Literal' && typeof prop.key.value === 'string'
+        ? prop.key.value
+        : null
+      : (prop.key?.name ??
+        (typeof prop.key?.value === 'string' ? prop.key.value : null));
     if (name) {
       surface.exact.push({
         name,
@@ -581,7 +954,12 @@ function collectModuleExportsObjectProperties(node, surface, getNodeLine) {
   }
 }
 
-function collectMemberPrecisionUses(program, namespaceImports, namedImports, getNodeLine) {
+function collectMemberPrecisionUses(
+  program,
+  namespaceImports,
+  namedImports,
+  getNodeLine,
+) {
   const state = createMemberPrecisionState();
   const rootScope = makeScope();
   bindNamespaceImports(rootScope, namespaceImports, state);
@@ -616,7 +994,8 @@ function makeScope(parent = null) {
 }
 
 function bind(scope, name, binding) {
-  if (typeof name === 'string' && name.length > 0) scope.bindings.set(name, binding);
+  if (typeof name === 'string' && name.length > 0)
+    scope.bindings.set(name, binding);
 }
 
 function resolveBinding(scope, name) {
@@ -653,38 +1032,56 @@ function bindPattern(scope, pattern, binding) {
   if (pattern.type === 'ObjectPattern') {
     for (const prop of pattern.properties ?? []) {
       if (prop?.type === 'Property') bindPattern(scope, prop.value, binding);
-      else if (prop?.type === 'RestElement') bindPattern(scope, prop.argument, binding);
+      else if (prop?.type === 'RestElement')
+        bindPattern(scope, prop.argument, binding);
     }
     return;
   }
-  if (pattern.type === 'RestElement') bindPattern(scope, pattern.argument, binding);
-  else if (pattern.type === 'AssignmentPattern') bindPattern(scope, pattern.left, binding);
+  if (pattern.type === 'RestElement')
+    bindPattern(scope, pattern.argument, binding);
+  else if (pattern.type === 'AssignmentPattern')
+    bindPattern(scope, pattern.left, binding);
 }
 
 function bindNamespaceImports(rootScope, namespaceImports, state) {
   for (const [localName, imp] of namespaceImports) {
-    bind(rootScope, localName, makeTracked(state, 'namespace', {
-      fromSpec: imp.fromSpec,
-      typeOnly: imp.typeOnly,
-      line: imp.line,
+    bind(
+      rootScope,
       localName,
-    }));
+      makeTracked(state, 'namespace', {
+        fromSpec: imp.fromSpec,
+        typeOnly: imp.typeOnly,
+        line: imp.line,
+        localName,
+      }),
+    );
   }
 }
 
 function bindNamedImports(rootScope, namedImports, state) {
   for (const [localName, imp] of namedImports) {
-    bind(rootScope, localName, makeTracked(state, 'named-import', {
-      fromSpec: imp.fromSpec,
-      importedName: imp.importedName,
-      typeOnly: imp.typeOnly,
-      line: imp.line,
+    bind(
+      rootScope,
       localName,
-    }));
+      makeTracked(state, 'named-import', {
+        fromSpec: imp.fromSpec,
+        importedName: imp.importedName,
+        typeOnly: imp.typeOnly,
+        line: imp.line,
+        localName,
+      }),
+    );
   }
 }
 
-function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key = '') {
+function walkMemberPrecision(
+  node,
+  scope,
+  state,
+  getNodeLine,
+  parent = null,
+  key = '',
+) {
   if (!node || typeof node !== 'object') return;
 
   if (node.type === 'Program') {
@@ -693,7 +1090,8 @@ function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key
   }
 
   if (node.type === 'ImportDeclaration') return;
-  if (isFunctionNode(node)) return walkFunctionNode(node, scope, state, getNodeLine);
+  if (isFunctionNode(node))
+    return walkFunctionNode(node, scope, state, getNodeLine);
   if (node.type === 'BlockStatement' || node.type === 'CatchClause') {
     return walkBlockLikeNode(node, scope, state, getNodeLine);
   }
@@ -702,12 +1100,14 @@ function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key
     bind(scope, node.id?.name, { kind: 'local' });
   }
 
-  if (node.type === 'VariableDeclaration') return walkVariableDeclaration(node, scope, state, getNodeLine);
+  if (node.type === 'VariableDeclaration')
+    return walkVariableDeclaration(node, scope, state, getNodeLine);
   if (handleCjsReexportAssignment(node, state, getNodeLine)) return;
   if (handleThenDynamicImport(node, scope, state, getNodeLine)) return;
   if (handleDirectRequireMemberExpression(node, state, getNodeLine)) return;
   if (handleImportMetaGlobExpression(node, state, getNodeLine)) return;
-  if (handleTrackedMemberExpression(node, scope, parent, key, getNodeLine)) return;
+  if (handleTrackedMemberExpression(node, scope, parent, key, getNodeLine))
+    return;
   if (handleFallbackImportExpression(node, state, getNodeLine)) return;
   if (handleFallbackRequireExpression(node, state, getNodeLine, parent)) return;
   if (handleOpaqueRequireExpression(node, state, getNodeLine)) return;
@@ -717,22 +1117,28 @@ function walkMemberPrecision(node, scope, state, getNodeLine, parent = null, key
 }
 
 function isFunctionNode(node) {
-  return node.type === 'FunctionDeclaration' ||
+  return (
+    node.type === 'FunctionDeclaration' ||
     node.type === 'FunctionExpression' ||
-    node.type === 'ArrowFunctionExpression';
+    node.type === 'ArrowFunctionExpression'
+  );
 }
 
 function walkFunctionNode(node, scope, state, getNodeLine) {
-  if (node.type === 'FunctionDeclaration') bind(scope, node.id?.name, { kind: 'local' });
+  if (node.type === 'FunctionDeclaration')
+    bind(scope, node.id?.name, { kind: 'local' });
   const fnScope = makeScope(scope);
-  if (node.type === 'FunctionExpression') bind(fnScope, node.id?.name, { kind: 'local' });
-  for (const param of node.params ?? []) bindPattern(fnScope, param, { kind: 'local' });
+  if (node.type === 'FunctionExpression')
+    bind(fnScope, node.id?.name, { kind: 'local' });
+  for (const param of node.params ?? [])
+    bindPattern(fnScope, param, { kind: 'local' });
   walkMemberPrecision(node.body, fnScope, state, getNodeLine, node, 'body');
 }
 
 function walkBlockLikeNode(node, scope, state, getNodeLine) {
   const blockScope = makeScope(scope);
-  if (node.type === 'CatchClause') bindPattern(blockScope, node.param, { kind: 'local' });
+  if (node.type === 'CatchClause')
+    bindPattern(blockScope, node.param, { kind: 'local' });
   const body = node.type === 'BlockStatement' ? node.body : [node.body];
   walkNodeList(body, blockScope, state, getNodeLine, node, 'body');
 }
@@ -743,17 +1149,26 @@ function walkVariableDeclaration(node, scope, state, getNodeLine) {
     if (requireSpec) {
       state.handledCjsRequires.add(decl.init);
       if (decl.id?.type === 'ObjectPattern') {
-        collectCjsDestructuringUses(decl.id, requireSpec, state, getNodeLine(decl.init));
+        collectCjsDestructuringUses(
+          decl.id,
+          requireSpec,
+          state,
+          getNodeLine(decl.init),
+        );
         bindPattern(scope, decl.id, { kind: 'local' });
       } else if (decl.id?.type === 'Identifier') {
         if (node.kind === 'const') {
-          bind(scope, decl.id.name, makeTracked(state, 'cjs', {
-            fromSpec: requireSpec,
-            typeOnly: false,
-            line: getNodeLine(decl.init),
-            localName: decl.id.name,
-            node: decl.init,
-          }));
+          bind(
+            scope,
+            decl.id.name,
+            makeTracked(state, 'cjs', {
+              fromSpec: requireSpec,
+              typeOnly: false,
+              line: getNodeLine(decl.init),
+              localName: decl.id.name,
+              node: decl.init,
+            }),
+          );
         } else {
           state.cjsFallbackUses.push({
             fromSpec: requireSpec,
@@ -792,7 +1207,10 @@ function walkVariableDeclaration(node, scope, state, getNodeLine) {
       });
       bind(scope, decl.id.name, record);
       state.handledDynamicImports.add(importNode);
-    } else if (decl.id?.type === 'ObjectPattern' && decl.init?.type === 'Identifier') {
+    } else if (
+      decl.id?.type === 'ObjectPattern' &&
+      decl.init?.type === 'Identifier'
+    ) {
       const record = resolveBinding(scope, decl.init.name);
       if (record?.kind === 'cjs') {
         collectCjsAliasDestructuringUses(decl.id, record, getNodeLine);
@@ -812,9 +1230,10 @@ function collectCjsAliasDestructuringUses(pattern, record, getNodeLine) {
   for (const prop of pattern.properties ?? []) {
     if (prop?.type === 'Property') {
       const key = prop.key;
-      const name = key?.type === 'Identifier' || key?.type === 'Literal'
-        ? String(key.name ?? key.value)
-        : null;
+      const name =
+        key?.type === 'Identifier' || key?.type === 'Literal'
+          ? String(key.name ?? key.value)
+          : null;
       if (name) record.members.push({ name, line: getNodeLine(prop) });
       else record.degraded = true;
     } else if (prop?.type === 'RestElement') {
@@ -827,9 +1246,10 @@ function collectCjsDestructuringUses(pattern, fromSpec, state, line) {
   for (const prop of pattern.properties ?? []) {
     if (prop?.type === 'Property') {
       const key = prop.key;
-      const name = key?.type === 'Identifier' || key?.type === 'Literal'
-        ? String(key.name ?? key.value)
-        : null;
+      const name =
+        key?.type === 'Identifier' || key?.type === 'Literal'
+          ? String(key.name ?? key.value)
+          : null;
       if (name) {
         state.cjsDirectUses.push({
           fromSpec,
@@ -855,10 +1275,13 @@ function collectCjsDestructuringUses(pattern, fromSpec, state, line) {
 function isModuleExportsTarget(node) {
   if (node?.type !== 'MemberExpression' || node.computed) return false;
   const prop = memberPropertyName(node);
-  if (node.object?.type === 'Identifier' && node.object.name === 'exports') return !!prop;
-  return node.object?.type === 'Identifier' &&
+  if (node.object?.type === 'Identifier' && node.object.name === 'exports')
+    return !!prop;
+  return (
+    node.object?.type === 'Identifier' &&
     node.object.name === 'module' &&
-    prop === 'exports';
+    prop === 'exports'
+  );
 }
 
 function handleCjsReexportAssignment(node, state, getNodeLine) {
@@ -905,16 +1328,20 @@ function handleDirectRequireMemberExpression(node, state, getNodeLine) {
 }
 
 function handleThenDynamicImport(node, scope, state, getNodeLine) {
-  if (node.type !== 'CallExpression' ||
-      node.callee?.type !== 'MemberExpression' ||
-      node.callee.computed ||
-      memberPropertyName(node.callee) !== 'then') return false;
+  if (
+    node.type !== 'CallExpression' ||
+    node.callee?.type !== 'MemberExpression' ||
+    node.callee.computed ||
+    memberPropertyName(node.callee) !== 'then'
+  )
+    return false;
 
   const importNode = node.callee.object;
   const fromSpec = literalImportSource(importNode);
   const callback = node.arguments?.[0];
   const param = callback?.params?.[0];
-  if (!fromSpec || param?.type !== 'Identifier' || !isFunctionNode(callback)) return false;
+  if (!fromSpec || param?.type !== 'Identifier' || !isFunctionNode(callback))
+    return false;
 
   const record = makeTracked(state, 'dynamic', {
     fromSpec,
@@ -928,18 +1355,29 @@ function handleThenDynamicImport(node, scope, state, getNodeLine) {
   for (const extraParam of (callback.params ?? []).slice(1)) {
     bindPattern(callbackScope, extraParam, { kind: 'local' });
   }
-  walkMemberPrecision(callback.body, callbackScope, state, getNodeLine, callback, 'body');
+  walkMemberPrecision(
+    callback.body,
+    callbackScope,
+    state,
+    getNodeLine,
+    callback,
+    'body',
+  );
   state.handledDynamicImports.add(importNode);
   return true;
 }
 
 function handleTrackedMemberExpression(node, scope, parent, key, getNodeLine) {
-  if (node.type !== 'MemberExpression' || node.object?.type !== 'Identifier') return false;
+  if (node.type !== 'MemberExpression' || node.object?.type !== 'Identifier')
+    return false;
   const record = resolveBinding(scope, node.object.name);
-  if (record?.kind !== 'namespace' &&
-      record?.kind !== 'named-import' &&
-      record?.kind !== 'dynamic' &&
-      record?.kind !== 'cjs') return false;
+  if (
+    record?.kind !== 'namespace' &&
+    record?.kind !== 'named-import' &&
+    record?.kind !== 'dynamic' &&
+    record?.kind !== 'cjs'
+  )
+    return false;
 
   if (record.kind === 'cjs') {
     if (isMutatingMemberAccess(parent, key)) {
@@ -976,7 +1414,11 @@ function handleFallbackImportExpression(node, state, getNodeLine) {
   if (node.type !== 'ImportExpression') return false;
   const fromSpec = literalImportSource(node);
   if (fromSpec && !state.handledDynamicImports.has(node)) {
-    state.fallbackDynamicImports.push({ node, fromSpec, line: getNodeLine(node) });
+    state.fallbackDynamicImports.push({
+      node,
+      fromSpec,
+      line: getNodeLine(node),
+    });
   } else if (!fromSpec) {
     const hint = opaqueDynamicImportHint(node);
     if (hint) {
@@ -1041,10 +1483,12 @@ function handleOpaqueRequireExpression(node, state, getNodeLine) {
 function handleTrackedIdentifier(node, scope, parent, key) {
   if (node.type !== 'Identifier') return false;
   const record = resolveBinding(scope, node.name);
-  if (record?.kind === 'namespace' ||
-      record?.kind === 'named-import' ||
-      record?.kind === 'dynamic' ||
-      record?.kind === 'cjs') {
+  if (
+    record?.kind === 'namespace' ||
+    record?.kind === 'named-import' ||
+    record?.kind === 'dynamic' ||
+    record?.kind === 'cjs'
+  ) {
     if (isNonEscapingTrackedIdentifierRead(parent, key)) return true;
     record.degraded = true;
   }
@@ -1059,11 +1503,18 @@ function walkNodeList(nodes, scope, state, getNodeLine, parent, key) {
 
 function walkChildNodes(node, scope, state, getNodeLine) {
   for (const childKey of Object.keys(node)) {
-    if (childKey === 'type' || childKey === 'start' || childKey === 'end') continue;
+    if (childKey === 'type' || childKey === 'start' || childKey === 'end')
+      continue;
     const v = node[childKey];
     if (Array.isArray(v)) {
-      walkNodeList(v.filter((child) => child && typeof child === 'object' && child.type),
-        scope, state, getNodeLine, node, childKey);
+      walkNodeList(
+        v.filter((child) => child && typeof child === 'object' && child.type),
+        scope,
+        state,
+        getNodeLine,
+        node,
+        childKey,
+      );
     } else if (v && typeof v === 'object' && typeof v.type === 'string') {
       walkMemberPrecision(v, scope, state, getNodeLine, node, childKey);
     }
@@ -1223,9 +1674,22 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
   const result = parseOxcOrThrow(filePath, src);
   const getNodeLine = makeLineGetter(src);
   const artifactFilePath = options.artifactFilePath ?? filePath;
-  const { defs, uses, reExports, namespaceImports, namedImports, cjsExportSurface, classMethods } =
-    collectTopLevelSymbols(result.program, getNodeLine, artifactFilePath);
-  const memberPrecision = collectMemberPrecisionUses(result.program, namespaceImports, namedImports, getNodeLine);
+  const {
+    defs,
+    uses,
+    reExports,
+    namespaceImports,
+    namedImports,
+    cjsExportSurface,
+    classMethods,
+    localOperations,
+  } = collectTopLevelSymbols(result.program, getNodeLine, artifactFilePath);
+  const memberPrecision = collectMemberPrecisionUses(
+    result.program,
+    namespaceImports,
+    namedImports,
+    getNodeLine,
+  );
   uses.push(...memberPrecision.uses);
   const typeEscapePath = artifactFilePath;
   const typeEscapeResult = extractTypeEscapes(src, typeEscapePath);
@@ -1236,6 +1700,7 @@ export function extractDefinitionsAndUses(filePath, options = {}) {
     uses,
     reExports,
     classMethods,
+    localOperations,
     typeEscapes: typeEscapeResult.typeEscapes ?? [],
     loc: src.split('\n').length,
     ...(cjsExportSurface ? { cjsExportSurface } : {}),

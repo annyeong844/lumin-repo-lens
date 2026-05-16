@@ -140,8 +140,8 @@ if (tsEnabled) langList.push('go');
 
 const PRODUCER_ID = 'symbols';
 const PRODUCER_VERSION = 1;
-const FACT_SCHEMA_VERSION = 4;
-const PARSER_IDENTITY = 'symbol-graph-extractors:v2';
+const FACT_SCHEMA_VERSION = 5;
+const PARSER_IDENTITY = 'symbol-graph-extractors:v3';
 
 function isJsFamilyFile(filePath) {
   return JS_FAMILY_LANGS.includes(path.extname(filePath).slice(1).toLowerCase());
@@ -412,6 +412,7 @@ let typeEscapeCount = 0;
 let dynamicImportOpacityCount = 0;
 let cjsRequireOpacityCount = 0;
 let classMethodCount = 0;
+let localOperationCount = 0;
 for (const [f, entry] of Object.entries(nextCache.entries)) {
   if (entry.parseError || entry.defs === undefined) continue;
   definitionCount += (entry.defs ?? []).length;
@@ -421,12 +422,14 @@ for (const [f, entry] of Object.entries(nextCache.entries)) {
   dynamicImportOpacityCount += (entry.dynamicImportOpacity ?? []).length;
   cjsRequireOpacityCount += (entry.cjsRequireOpacity ?? []).length;
   classMethodCount += (entry.classMethods ?? []).length;
+  localOperationCount += (entry.localOperations ?? []).length;
   fileData.set(f, {
     filePath: f,
     defs: entry.defs ?? [],
     uses: entry.uses ?? [],
     reExports: entry.reExports ?? [],
     classMethods: entry.classMethods ?? [],
+    localOperations: entry.localOperations ?? [],
     typeEscapes: entry.typeEscapes ?? [],
     loc: entry.loc ?? 0,
     dynamicImportOpacity: entry.dynamicImportOpacity ?? [],
@@ -449,6 +452,7 @@ phaseTimer.setCounter('typeEscapeCount', typeEscapeCount);
 phaseTimer.setCounter('dynamicImportOpacityCount', dynamicImportOpacityCount);
 phaseTimer.setCounter('cjsRequireOpacityCount', cjsRequireOpacityCount);
 phaseTimer.setCounter('classMethodCount', classMethodCount);
+phaseTimer.setCounter('localOperationCount', localOperationCount);
 phaseTimer.recordPhase('assemble-file-data', Date.now() - assembleFileDataStarted);
 console.log(`[parse] errors: ${parseErrors}`);
 

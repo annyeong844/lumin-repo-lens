@@ -28,17 +28,17 @@
 // this list and the canonical file is a defect — the tests lock it.
 
 export const ESCAPE_KINDS = Object.freeze([
-  'explicit-any',
-  'as-any',
-  'angle-any',
-  'as-unknown-as-T',
-  'rest-any-args',
-  'index-sig-any',
-  'generic-default-any',
-  'ts-ignore',
-  'ts-expect-error',
-  'no-explicit-any-disable',
-  'jsdoc-any',
+  "explicit-any",
+  "as-any",
+  "angle-any",
+  "as-unknown-as-T",
+  "rest-any-args",
+  "index-sig-any",
+  "generic-default-any",
+  "ts-ignore",
+  "ts-expect-error",
+  "no-explicit-any-disable",
+  "jsdoc-any",
 ]);
 
 const ESCAPE_KIND_SET = new Set(ESCAPE_KINDS);
@@ -56,8 +56,8 @@ const ESCAPE_KIND_SET = new Set(ESCAPE_KINDS);
 // `required`  — entry.<key> MUST be present and correctly-typed.
 // `optional`  — entry.<key> MAY be present; validator accepts absence.
 export const PLANNED_ESCAPE_KEYS = Object.freeze({
-  required: Object.freeze(['escapeKind', 'locationHint', 'reason']),
-  optional: Object.freeze(['codeShape', 'alternativeConsidered']),
+  required: Object.freeze(["escapeKind", "locationHint", "reason"]),
+  optional: Object.freeze(["codeShape", "alternativeConsidered"]),
 });
 
 export const PLANNED_ESCAPE_ALL_KEYS = Object.freeze([
@@ -68,17 +68,17 @@ export const PLANNED_ESCAPE_ALL_KEYS = Object.freeze([
 // ── Top-level intent keys ────────────────────────────────────
 
 const TOP_LEVEL_ARRAY_KEYS = Object.freeze([
-  'names',
-  'shapes',
-  'files',
-  'dependencies',
-  'plannedTypeEscapes',
+  "names",
+  "shapes",
+  "files",
+  "dependencies",
+  "plannedTypeEscapes",
 ]);
 
 // ── Helpers ──────────────────────────────────────────────────
 
 function isPlainObject(v) {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
+  return v !== null && typeof v === "object" && !Array.isArray(v);
 }
 
 function fail(error, errorPath) {
@@ -86,53 +86,83 @@ function fail(error, errorPath) {
 }
 
 function optionalStringField(entry, field, errorPath) {
-  if (entry[field] !== undefined &&
-      (typeof entry[field] !== 'string' || entry[field].length === 0)) {
-    return fail(`${errorPath}.${field} must be a non-empty string when present`,
-                `${errorPath}.${field}`);
+  if (
+    entry[field] !== undefined &&
+    (typeof entry[field] !== "string" || entry[field].length === 0)
+  ) {
+    return fail(
+      `${errorPath}.${field} must be a non-empty string when present`,
+      `${errorPath}.${field}`,
+    );
   }
   return null;
 }
 
 function normalizeNameEntry(entry, index) {
   const errorPath = `names[${index}]`;
-  if (typeof entry === 'string') {
-    if (entry.length === 0) return fail(`${errorPath} must be a non-empty string`, errorPath);
+  if (typeof entry === "string") {
+    if (entry.length === 0)
+      return fail(`${errorPath} must be a non-empty string`, errorPath);
     return { value: entry, declaration: null };
   }
   if (!isPlainObject(entry)) {
-    return fail(`${errorPath} must be a non-empty string or object with name`, errorPath);
+    return fail(
+      `${errorPath} must be a non-empty string or object with name`,
+      errorPath,
+    );
   }
-  if (typeof entry.name !== 'string' || entry.name.length === 0) {
-    return fail(`${errorPath}.name must be a non-empty string`, `${errorPath}.name`);
+  if (typeof entry.name !== "string" || entry.name.length === 0) {
+    return fail(
+      `${errorPath}.name must be a non-empty string`,
+      `${errorPath}.name`,
+    );
   }
-  const kindErr = optionalStringField(entry, 'kind', errorPath);
+  const kindErr = optionalStringField(entry, "kind", errorPath);
   if (kindErr) return kindErr;
-  const whyErr = optionalStringField(entry, 'why', errorPath);
+  const whyErr = optionalStringField(entry, "why", errorPath);
   if (whyErr) return whyErr;
+  const ownerFileErr = optionalStringField(entry, "ownerFile", errorPath);
+  if (ownerFileErr) return ownerFileErr;
+  const fileErr = optionalStringField(entry, "file", errorPath);
+  if (fileErr) return fileErr;
+  const targetFileErr = optionalStringField(entry, "targetFile", errorPath);
+  if (targetFileErr) return targetFileErr;
+  const ownerFile = entry.ownerFile ?? entry.file ?? entry.targetFile;
   return {
     value: entry.name,
     declaration: {
       name: entry.name,
       ...(entry.kind !== undefined ? { kind: entry.kind } : {}),
       ...(entry.why !== undefined ? { why: entry.why } : {}),
+      ...(ownerFile !== undefined ? { ownerFile } : {}),
+      ...(entry.file !== undefined ? { file: entry.file } : {}),
+      ...(entry.targetFile !== undefined
+        ? { targetFile: entry.targetFile }
+        : {}),
     },
   };
 }
 
 function normalizeDependencyEntry(entry, index) {
   const errorPath = `dependencies[${index}]`;
-  if (typeof entry === 'string') {
-    if (entry.length === 0) return fail(`${errorPath} must be a non-empty string`, errorPath);
+  if (typeof entry === "string") {
+    if (entry.length === 0)
+      return fail(`${errorPath} must be a non-empty string`, errorPath);
     return { value: entry, declaration: null };
   }
   if (!isPlainObject(entry)) {
-    return fail(`${errorPath} must be a non-empty string or object with specifier`, errorPath);
+    return fail(
+      `${errorPath} must be a non-empty string or object with specifier`,
+      errorPath,
+    );
   }
-  if (typeof entry.specifier !== 'string' || entry.specifier.length === 0) {
-    return fail(`${errorPath}.specifier must be a non-empty string`, `${errorPath}.specifier`);
+  if (typeof entry.specifier !== "string" || entry.specifier.length === 0) {
+    return fail(
+      `${errorPath}.specifier must be a non-empty string`,
+      `${errorPath}.specifier`,
+    );
   }
-  const whyErr = optionalStringField(entry, 'why', errorPath);
+  const whyErr = optionalStringField(entry, "why", errorPath);
   if (whyErr) return whyErr;
   return {
     value: entry.specifier,
@@ -144,11 +174,11 @@ function normalizeDependencyEntry(entry, index) {
 }
 
 function isUnsafeRepoRelativePath(value) {
-  if (typeof value !== 'string' || value.length === 0) return true;
-  if (value.includes('\\')) return true;
-  if (value.startsWith('/') || /^[A-Za-z]:/.test(value)) return true;
-  const parts = value.split('/');
-  return parts.some((part) => part === '..' || part.length === 0);
+  if (typeof value !== "string" || value.length === 0) return true;
+  if (value.includes("\\")) return true;
+  if (value.startsWith("/") || /^[A-Za-z]:/.test(value)) return true;
+  const parts = value.split("/");
+  return parts.some((part) => part === ".." || part.length === 0);
 }
 
 function normalizeRefactorSourceEntry(entry, index) {
@@ -157,29 +187,36 @@ function normalizeRefactorSourceEntry(entry, index) {
     return fail(`${errorPath} must be an object`, errorPath);
   }
   if (isUnsafeRepoRelativePath(entry.file)) {
-    return fail(`${errorPath}.file must be a repository-relative path`, `${errorPath}.file`);
+    return fail(
+      `${errorPath}.file must be a repository-relative path`,
+      `${errorPath}.file`,
+    );
   }
 
   const out = { file: entry.file };
 
   if (entry.lines !== undefined) {
     if (!Array.isArray(entry.lines) || entry.lines.length === 0) {
-      return fail(`${errorPath}.lines must be a non-empty array of positive integers when present`,
-                  `${errorPath}.lines`);
+      return fail(
+        `${errorPath}.lines must be a non-empty array of positive integers when present`,
+        `${errorPath}.lines`,
+      );
     }
     const lines = [];
     for (let i = 0; i < entry.lines.length; i++) {
       const line = entry.lines[i];
       if (!Number.isInteger(line) || line <= 0) {
-        return fail(`${errorPath}.lines[${i}] must be a positive integer`,
-                    `${errorPath}.lines[${i}]`);
+        return fail(
+          `${errorPath}.lines[${i}] must be a positive integer`,
+          `${errorPath}.lines[${i}]`,
+        );
       }
       lines.push(line);
     }
     out.lines = lines;
   }
 
-  const whyErr = optionalStringField(entry, 'why', errorPath);
+  const whyErr = optionalStringField(entry, "why", errorPath);
   if (whyErr) return whyErr;
   if (entry.why !== undefined) out.why = entry.why;
 
@@ -192,35 +229,54 @@ function validateShape(shape, index) {
   if (!isPlainObject(shape)) {
     return fail(`shapes[${index}] must be an object`, `shapes[${index}]`);
   }
-  const hasExactInput = shape.hash !== undefined || shape.typeLiteral !== undefined;
+  const hasExactInput =
+    shape.hash !== undefined || shape.typeLiteral !== undefined;
   if (shape.fields === undefined && !hasExactInput) {
-    return fail(`shapes[${index}].fields must be an array`, `shapes[${index}].fields`);
+    return fail(
+      `shapes[${index}].fields must be an array`,
+      `shapes[${index}].fields`,
+    );
   }
   if (shape.fields !== undefined && !Array.isArray(shape.fields)) {
-    return fail(`shapes[${index}].fields must be an array`, `shapes[${index}].fields`);
+    return fail(
+      `shapes[${index}].fields must be an array`,
+      `shapes[${index}].fields`,
+    );
   }
   const fields = shape.fields ?? [];
   for (let j = 0; j < fields.length; j++) {
-    if (typeof fields[j] !== 'string' || fields[j].length === 0) {
-      return fail(`shapes[${index}].fields[${j}] must be a non-empty string`,
-                  `shapes[${index}].fields[${j}]`);
+    if (typeof fields[j] !== "string" || fields[j].length === 0) {
+      return fail(
+        `shapes[${index}].fields[${j}] must be a non-empty string`,
+        `shapes[${index}].fields[${j}]`,
+      );
     }
   }
   if (shape.hash !== undefined) {
-    if (typeof shape.hash !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(shape.hash)) {
-      return fail(`shapes[${index}].hash must be sha256:<64 lowercase hex> when present`,
-                  `shapes[${index}].hash`);
+    if (
+      typeof shape.hash !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(shape.hash)
+    ) {
+      return fail(
+        `shapes[${index}].hash must be sha256:<64 lowercase hex> when present`,
+        `shapes[${index}].hash`,
+      );
     }
   }
   if (shape.typeLiteral !== undefined) {
-    if (typeof shape.typeLiteral !== 'string' || shape.typeLiteral.trim().length === 0) {
-      return fail(`shapes[${index}].typeLiteral must be a non-empty string when present`,
-                  `shapes[${index}].typeLiteral`);
+    if (
+      typeof shape.typeLiteral !== "string" ||
+      shape.typeLiteral.trim().length === 0
+    ) {
+      return fail(
+        `shapes[${index}].typeLiteral must be a non-empty string when present`,
+        `shapes[${index}].typeLiteral`,
+      );
     }
   }
-  const nameErr = optionalStringField(shape, 'name', `shapes[${index}]`);
+  const nameErr = optionalStringField(shape, "name", `shapes[${index}]`);
   if (nameErr) return nameErr;
-  const whyErr = optionalStringField(shape, 'why', `shapes[${index}]`);
+  const whyErr = optionalStringField(shape, "why", `shapes[${index}]`);
   if (whyErr) return whyErr;
   return null;
 }
@@ -236,36 +292,46 @@ function validatePlannedEscape(entry, index) {
   if (!ESCAPE_KIND_SET.has(entry.escapeKind)) {
     return fail(
       `${pathPrefix}.escapeKind must be one of ${JSON.stringify(ESCAPE_KINDS)}; got ${JSON.stringify(entry.escapeKind)}`,
-      `${pathPrefix}.escapeKind`
+      `${pathPrefix}.escapeKind`,
     );
   }
 
   // locationHint — required, non-empty string. Literal 'unknown' is OK.
-  if (typeof entry.locationHint !== 'string' || entry.locationHint.length === 0) {
+  if (
+    typeof entry.locationHint !== "string" ||
+    entry.locationHint.length === 0
+  ) {
     return fail(
       `${pathPrefix}.locationHint is required and must be a non-empty string (use literal "unknown" when the identity is not yet known)`,
-      `${pathPrefix}.locationHint`
+      `${pathPrefix}.locationHint`,
     );
   }
 
   // reason — required, non-empty string.
-  if (typeof entry.reason !== 'string' || entry.reason.length === 0) {
+  if (typeof entry.reason !== "string" || entry.reason.length === 0) {
     return fail(
       `${pathPrefix}.reason is required and must be a non-empty string (the intent-side half of the three-stage any-defense needs WHY)`,
-      `${pathPrefix}.reason`
+      `${pathPrefix}.reason`,
     );
   }
 
   // codeShape — optional, but if present must be a string.
-  if (entry.codeShape !== undefined && typeof entry.codeShape !== 'string') {
-    return fail(`${pathPrefix}.codeShape must be a string when present`,
-                `${pathPrefix}.codeShape`);
+  if (entry.codeShape !== undefined && typeof entry.codeShape !== "string") {
+    return fail(
+      `${pathPrefix}.codeShape must be a string when present`,
+      `${pathPrefix}.codeShape`,
+    );
   }
 
   // alternativeConsidered — optional, but if present must be a string.
-  if (entry.alternativeConsidered !== undefined && typeof entry.alternativeConsidered !== 'string') {
-    return fail(`${pathPrefix}.alternativeConsidered must be a string when present`,
-                `${pathPrefix}.alternativeConsidered`);
+  if (
+    entry.alternativeConsidered !== undefined &&
+    typeof entry.alternativeConsidered !== "string"
+  ) {
+    return fail(
+      `${pathPrefix}.alternativeConsidered must be a string when present`,
+      `${pathPrefix}.alternativeConsidered`,
+    );
   }
 
   return null;
@@ -304,7 +370,7 @@ function validatePlannedEscape(entry, index) {
  */
 export function validateIntent(raw) {
   if (!isPlainObject(raw)) {
-    return fail('intent must be a plain object', '');
+    return fail("intent must be a plain object", "");
   }
 
   const warnings = [];
@@ -315,9 +381,9 @@ export function validateIntent(raw) {
     if (!(key in normalizedInput)) {
       normalizedInput[key] = [];
       warnings.push({
-        kind: 'missing-intent-key-defaulted',
+        kind: "missing-intent-key-defaulted",
         key,
-        action: 'defaulted-to-empty-array',
+        action: "defaulted-to-empty-array",
       });
     }
   }
@@ -347,7 +413,10 @@ export function validateIntent(raw) {
 
   // 5. files — array of non-empty strings.
   for (let i = 0; i < normalizedInput.files.length; i++) {
-    if (typeof normalizedInput.files[i] !== 'string' || normalizedInput.files[i].length === 0) {
+    if (
+      typeof normalizedInput.files[i] !== "string" ||
+      normalizedInput.files[i].length === 0
+    ) {
       return fail(`files[${i}] must be a non-empty string`, `files[${i}]`);
     }
   }
@@ -356,10 +425,14 @@ export function validateIntent(raw) {
   const dependencies = [];
   const dependencyDeclarations = [];
   for (let i = 0; i < normalizedInput.dependencies.length; i++) {
-    const normalized = normalizeDependencyEntry(normalizedInput.dependencies[i], i);
+    const normalized = normalizeDependencyEntry(
+      normalizedInput.dependencies[i],
+      i,
+    );
     if (normalized.ok === false) return normalized;
     dependencies.push(normalized.value);
-    if (normalized.declaration) dependencyDeclarations.push(normalized.declaration);
+    if (normalized.declaration)
+      dependencyDeclarations.push(normalized.declaration);
   }
 
   // 7. plannedTypeEscapes — each entry fully validated.
@@ -372,11 +445,17 @@ export function validateIntent(raw) {
   let refactorSources = null;
   if (normalizedInput.refactorSources !== undefined) {
     if (!Array.isArray(normalizedInput.refactorSources)) {
-      return fail('refactorSources must be an array when present', 'refactorSources');
+      return fail(
+        "refactorSources must be an array when present",
+        "refactorSources",
+      );
     }
     refactorSources = [];
     for (let i = 0; i < normalizedInput.refactorSources.length; i++) {
-      const normalized = normalizeRefactorSourceEntry(normalizedInput.refactorSources[i], i);
+      const normalized = normalizeRefactorSourceEntry(
+        normalizedInput.refactorSources[i],
+        i,
+      );
       if (normalized.ok === false) return normalized;
       refactorSources.push(normalized.value);
     }

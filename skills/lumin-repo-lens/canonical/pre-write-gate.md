@@ -39,18 +39,18 @@ From Claude's own upcoming action (what it is about to create), extract:
 - **Planned type escapes** — any intentional `any`, `as any`, `as unknown as T`, JSDoc `{any}`, `@ts-ignore`, or `no-explicit-any` disable Claude plans to write. Each declared up front with the reason (third-party lib shape unknown, migration scaffold, etc.). Declaration here is the intent-side half of the three-stage defense in `canonical/any-contamination.md` §6 Stage 1; post-write compares planned-vs-observed to catch silently-introduced escapes.
 - **Planned files** — repo-relative files Claude expects to add or materially touch when that can be inferred. Post-write compares this list against files that appeared after pre-write and records scanned files outside the list as `fileDelta.unexpectedNew`.
 
-Intent extraction is explicit — Claude states these five items before pre-write proceeds when it can. This forces self-declaration, which is itself a useful artifact. The JSON transport normalizes all five top-level keys: `names`, `shapes`, `files`, `dependencies`, and `plannedTypeEscapes` (see `references/pre-write-intent-shape.md`). Missing top-level arrays are defaulted to `[]` with `intentWarnings`; present-but-wrong types remain schema errors. `names` / `dependencies` may be terse strings or structured self-declarations with `why`; lookups normalize to strings and preserve the declaration metadata in the advisory JSON.
+Intent extraction is explicit — Claude states these five items before pre-write proceeds when it can. This forces self-declaration, which is itself a useful artifact. The JSON transport normalizes all five top-level keys: `names`, `shapes`, `files`, `dependencies`, and `plannedTypeEscapes` (see `references/pre-write-intent-shape.md`). Missing top-level arrays are defaulted to `[]` with `intentWarnings`; present-but-wrong types remain schema errors. `names` / `dependencies` may be terse strings or structured self-declarations with `why`; lookups normalize to strings and preserve the declaration metadata in the advisory JSON. Structured `names` may also carry `ownerFile`, or the `file` / `targetFile` aliases, so locality-sensitive pre-write policies can calibrate through the normal CLI route.
 
 ### Step 3 — Lookup per intent item
 
 For each item in the intent list:
 
-| Intent | Lookup | Output shape |
-|---|---|---|
-| Name candidate | symbol graph by identity (see `identity-and-alias.md`) | "exists at `<owner>::<name>`" / "not observed in scan range" |
-| Shape candidate | shape hash index (fact-model.md) + any-contamination check (any-contamination.md §3 "Contamination definitions" + the "Pre-write gate interaction" block in §6 Stage 1 / §9) | "matches shape of `<identity>`" / "matches but candidate is any-contaminated" / "no structural match" |
-| File candidate | topology + triage.topDirs | "file exists; N LOC" / "new file; boundary rule `<rule>` applies"; may also emit domain-cluster Watch-for evidence when sibling files share a prefix or repeated basename token |
-| Dependency candidate | package.json + existing package-import consumer graph | "already imported from `<file>`" / "declared package with no observed static package imports" / "new package; requires install" |
+| Intent               | Lookup                                                                                                                                                                       | Output shape                                                                                                                                                                    |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Name candidate       | symbol graph by identity (see `identity-and-alias.md`)                                                                                                                       | "exists at `<owner>::<name>`" / "not observed in scan range"                                                                                                                    |
+| Shape candidate      | shape hash index (fact-model.md) + any-contamination check (any-contamination.md §3 "Contamination definitions" + the "Pre-write gate interaction" block in §6 Stage 1 / §9) | "matches shape of `<identity>`" / "matches but candidate is any-contaminated" / "no structural match"                                                                           |
+| File candidate       | topology + triage.topDirs                                                                                                                                                    | "file exists; N LOC" / "new file; boundary rule `<rule>` applies"; may also emit domain-cluster Watch-for evidence when sibling files share a prefix or repeated basename token |
+| Dependency candidate | package.json + existing package-import consumer graph                                                                                                                        | "already imported from `<file>`" / "declared package with no observed static package imports" / "new package; requires install"                                                 |
 
 Every lookup returns a result with a citation in the `[grounded, <artifact>.json.<field>=<value>]` form (invariants.md Iron Law).
 
@@ -64,12 +64,12 @@ contamination state as `[확인 불가, reason: producer did not emit
 anyContamination capability]`. It must not call a candidate clean merely
 because the annotation is absent.
 
-| `labels` includes | Lookup rendering |
-|---|---|
-| none (annotation omitted, capability true) | `[grounded, ...]` — clean reuse candidate. |
-| `unknown-surface` only | `[grounded structural, semantic caution: unknown-surface]` — `unknown` is a safe boundary type, NOT contamination. Advisory notes that reuse requires narrowing via type guards; candidate is fine. |
+| `labels` includes                                 | Lookup rendering                                                                                                                                                                                                                           |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| none (annotation omitted, capability true)        | `[grounded, ...]` — clean reuse candidate.                                                                                                                                                                                                 |
+| `unknown-surface` only                            | `[grounded structural, semantic caution: unknown-surface]` — `unknown` is a safe boundary type, NOT contamination. Advisory notes that reuse requires narrowing via type guards; candidate is fine.                                        |
 | `has-any` only (no `any-contaminated` escalation) | `[grounded structural, any signal present, semantic caution: mild `any` occurrence]` — single passing occurrence (e.g. one `Record<string, any>` field). Reuse is viable but the advisory surfaces the measurement so Claude can weigh it. |
-| `any-contaminated` or `severely-any-contaminated` | `[grounded, anyContamination.label = ..., measurements = ...]` plus `[recommendation: warn-on-reuse, confidence: low, reason: <label> semantic reuse caution]` — measurement remains grounded; reuse carries real type-safety loss. |
+| `any-contaminated` or `severely-any-contaminated` | `[grounded, anyContamination.label = ..., measurements = ...]` plus `[recommendation: warn-on-reuse, confidence: low, reason: <label> semantic reuse caution]` — measurement remains grounded; reuse carries real type-safety loss.        |
 
 The advisory text MUST surface the raw measurements from `anyContamination.measurements` (ratio, counts) for every non-clean tier, not just the label — scale is the signal Claude needs (see any-contamination.md §11 "Honesty requirements").
 
@@ -101,7 +101,7 @@ When `<output>/` lacks recent artifacts, run only what the intent items require:
   package specifiers, not relative/internal module paths. If the symbol
   graph is unavailable or lacks `meta.supports.dependencyImportConsumers`,
   report the import count as unavailable; never render it as `0 observed
-  consumers`.
+consumers`.
 
 Never run the full pipeline for a pre-write. Latency budget: < 5 seconds total in warm-cache case, < 30 seconds in cold-cache.
 
