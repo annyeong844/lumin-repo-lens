@@ -836,6 +836,9 @@ function localOperationPolicyCandidate(entry, enriched, reason = null) {
       reason: 'no-signature-facts',
     },
   };
+  if (Array.isArray(enriched.supportingReasons)) {
+    out.supportingReasons = enriched.supportingReasons;
+  }
   if (reason) out.reason = reason;
   if (entry.containerName) out.containerName = entry.containerName;
   if (entry.containerKind) out.containerKind = entry.containerKind;
@@ -910,7 +913,10 @@ function computeLocalOperationSiblingPolicy({
     if (muteReason) {
       muted.push(localOperationPolicyCandidate(entry, enriched, muteReason));
     } else {
-      promoted.push(localOperationPolicyCandidate(entry, enriched));
+      promoted.push(localOperationPolicyCandidate(entry, {
+        ...enriched,
+        supportingReasons: ['local-operation-same-file-domain-overlap'],
+      }));
     }
   }
 
