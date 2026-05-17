@@ -205,6 +205,24 @@ function isEsbuildToken(token) {
     normalized.endsWith('/esbuild.ps1');
 }
 
+function commandName(token) {
+  return String(token ?? '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .pop()
+    .toLowerCase()
+    .replace(/\.(?:cmd|ps1|exe)$/i, '');
+}
+
+function runtimeScriptTool(token) {
+  const name = commandName(token);
+  if (name === 'node') return 'node';
+  if (name === 'tsx') return 'tsx';
+  if (name === 'ts-node' || name === 'ts-node-esm') return name;
+  if (name === 'bun') return 'bun';
+  return null;
+}
+
 function isSourceEntrypointToken(token) {
   return /^\.{0,2}\//.test(token) || /^[A-Za-z0-9_@][^:]*\.(?:[cm]?[jt]sx?)$/i.test(token);
 }
@@ -219,6 +237,17 @@ function isCommandSeparator(token) {
 
 function normalizeScriptTarget(token) {
   return token.replace(/^\.\//, '');
+}
+
+function isCommandPosition(tokens, index) {
+  return index === 0 || isCommandSeparator(tokens[index - 1]);
+}
+
+function isRuntimeModeToken(tool, token) {
+  const normalized = String(token ?? '').toLowerCase();
+  if (tool === 'tsx') return normalized === 'watch';
+  if (tool === 'bun') return normalized === 'run';
+  return false;
 }
 
 function extractTsupEntrypoints(command) {
@@ -310,11 +339,34 @@ function extractEsbuildEntrypoints(command) {
   return out;
 }
 
+function extractRuntimeScriptEntrypoints(command) {
+  const tokens = tokenizeCommand(command);
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (!isCommandPosition(tokens, i)) continue;
+    const tool = runtimeScriptTool(tokens[i]);
+    if (!tool) continue;
+    for (let j = i + 1; j < tokens.length; j++) {
+      const t = tokens[j];
+      if (isCommandSeparator(t)) break;
+      if (t.startsWith('-')) continue;
+      if (isRuntimeModeToken(tool, t)) continue;
+      if (!hasSourceEntrypointExtension(t)) continue;
+      if (isSourceEntrypointToken(t)) {
+        out.push({ target: normalizeScriptTarget(t), tool, runtime: true });
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 function extractScriptEntrypoints(command, pkgDir) {
   return [
     ...extractTsupEntrypoints(command).map((target) => ({ target, tool: 'tsup' })),
     ...extractRollupEntrypoints(command, pkgDir),
     ...extractEsbuildEntrypoints(command),
+    ...extractRuntimeScriptEntrypoints(command),
   ];
 }
 
@@ -590,6 +642,7 @@ export function collectScriptEntrypointFiles({ root, repoMode }) {
         addEntry(entries, root, pkgDir, relativeTarget, {
           ...source.evidence,
           tool: entry.tool,
+          ...(entry.runtime ? { runtime: true } : {}),
           ...(entry.dynamicInput ? { dynamicInput: true } : {}),
         });
       }
