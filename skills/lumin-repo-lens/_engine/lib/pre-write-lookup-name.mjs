@@ -83,6 +83,12 @@ const SERVICE_POLICY_EXCLUDED_PATH_SEGMENTS = new Set([
   'vendor',
   'vendors',
 ]);
+const SERVICE_POLICY_NON_CALLABLE_DEFINITION_KINDS = new Set([
+  'TSInterfaceDeclaration',
+  'TSTypeAliasDeclaration',
+  'TSEnumDeclaration',
+  'TSModuleDeclaration',
+]);
 // ── Helpers ──────────────────────────────────────────────────
 
 function sharedPrefix(a, b) {
@@ -407,6 +413,8 @@ function candidateHintFields(candidate) {
   };
   if (candidate.matchedField) out.matchedField = candidate.matchedField;
   if (candidate.identity) out.identity = candidate.identity;
+  const definitionKind = candidate.definitionKind ?? candidate.defInfo?.kind;
+  if (definitionKind) out.definitionKind = definitionKind;
   if (candidate.matchedField === 'classMethodIndex') out.exportedName = candidate.name;
   if (candidate.className) out.className = candidate.className;
   if (candidate.memberKind) out.memberKind = candidate.memberKind;
@@ -705,6 +713,7 @@ function servicePolicyBaseCandidate(candidate, reason = null) {
     ownerFile: candidate.ownerFile,
   };
   if (candidate.matchedField) out.matchedField = candidate.matchedField;
+  if (candidate.definitionKind) out.definitionKind = candidate.definitionKind;
   if (reason) out.reason = reason;
   if (candidate.operationFamily) out.operationFamily = candidate.operationFamily;
   if (candidate.sharedDomainTokens) out.sharedDomainTokens = candidate.sharedDomainTokens;
@@ -713,6 +722,10 @@ function servicePolicyBaseCandidate(candidate, reason = null) {
   if (candidate.signatureSupport) out.signatureSupport = candidate.signatureSupport;
   if (candidate.suppressedLanes) out.suppressedLanes = candidate.suppressedLanes;
   return out;
+}
+
+function isNonCallableServiceDefinition(candidate) {
+  return SERVICE_POLICY_NON_CALLABLE_DEFINITION_KINDS.has(candidate.definitionKind);
 }
 
 function sortServicePolicyEntries(entries) {
@@ -775,6 +788,8 @@ function computeServiceOperationSiblingPolicy({
       muteReason = 'service-sibling-policy-excluded';
     } else if (enriched.matchedField && enriched.matchedField !== 'defIndex') {
       muteReason = 'service-sibling-surface-kind-unsupported';
+    } else if (isNonCallableServiceDefinition(enriched)) {
+      muteReason = 'service-sibling-non-callable-definition';
     } else if (!hasPromotableSuppression) {
       muteReason = 'service-sibling-insufficient-suppressed-support';
     } else if (!enriched.locality?.sameFile && !enriched.locality?.sameDir) {
