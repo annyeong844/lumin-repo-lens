@@ -32,7 +32,7 @@ const ARTIFACT_CANDIDATES = [
   'function-clones.json',
   'framework-resource-surfaces.json',
   'resolver-capabilities.json', 'resolver-diagnostics.json',
-  'symbols.json', 'entry-surface.json', 'module-reachability.json',
+  'symbols.json', 'unused-deps.json', 'entry-surface.json', 'module-reachability.json',
   'dead-classify.json', 'runtime-evidence.json',
   'staleness.json', 'fix-plan.json', 'checklist-facts.json',
   'producer-performance.json',

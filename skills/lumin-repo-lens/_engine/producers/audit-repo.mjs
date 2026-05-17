@@ -652,6 +652,9 @@ if (!RUN_BASE_PIPELINE) {
   // ─── Step 5: symbol graph (always, required for classify) ──
   runStep('build-symbol-graph.mjs', { required: true });
 
+  // ─── Step 5a: review-only declared dependency hygiene ───
+  runStep('build-unused-deps.mjs', { required: false });
+
   // ─── Step 5b: resolver capability + per-run diagnostics ───
   runStep('build-resolver-diagnostics.mjs', {
     required: false,
