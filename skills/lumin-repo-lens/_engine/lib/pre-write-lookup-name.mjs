@@ -41,6 +41,9 @@ const SEMANTIC_STOP_TOKENS = new Set([
 const SERVICE_OPERATION_POLICY_ID = 'prewrite-service-operation-sibling-cue';
 const SERVICE_OPERATION_POLICY_VERSION = 'prewrite-service-operation-sibling-cue-v1';
 const SERVICE_OPERATION_POLICY_MAX_RESULTS = 5;
+const LOCAL_OPERATION_POLICY_ID = 'prewrite-local-operation-sibling';
+const LOCAL_OPERATION_POLICY_VERSION = 'prewrite-local-operation-sibling-v1';
+const LOCAL_OPERATION_POLICY_MAX_RESULTS = 5;
 const SERVICE_READ_QUERY_VERBS = new Set([
   'fetch', 'find', 'get', 'list', 'load', 'lookup', 'query', 'read', 'resolve',
   'retrieve', 'search',
@@ -801,6 +804,124 @@ function computeServiceOperationSiblingPolicy({
   return policy;
 }
 
+function emptyLocalOperationSiblingPolicy(status = 'not-run', reason = null) {
+  const policy = {
+    policyId: LOCAL_OPERATION_POLICY_ID,
+    policyVersion: LOCAL_OPERATION_POLICY_VERSION,
+    status,
+    evaluatedCandidateCount: 0,
+    promotedCandidateCount: 0,
+    mutedCandidateCount: 0,
+    promoted: [],
+    muted: [],
+  };
+  if (reason) policy.reason = reason;
+  return policy;
+}
+
+function localOperationPolicyCandidate(entry, enriched, reason = null) {
+  const out = {
+    identity: entry.identity,
+    name: entry.name,
+    ownerFile: normalizeRelPath(entry.ownerFile),
+    matchedField: 'preWriteLocalOperationIndex',
+    surfaceKind: 'nested-local-operation',
+    operationFamily: enriched.operationFamily,
+    sharedDomainTokens: enriched.sharedDomainTokens,
+    locality: enriched.locality,
+    eligibleForDeadExportRanking: entry.eligibleForDeadExportRanking === true,
+    eligibleForSafeFix: entry.eligibleForSafeFix === true,
+    signatureSupport: {
+      status: 'unavailable',
+      reason: 'no-signature-facts',
+    },
+  };
+  if (reason) out.reason = reason;
+  if (entry.containerName) out.containerName = entry.containerName;
+  if (entry.containerKind) out.containerKind = entry.containerKind;
+  if (Number.isFinite(entry.line)) out.line = entry.line;
+  if (Number.isFinite(entry.containerLine)) out.containerLine = entry.containerLine;
+  if (Array.isArray(entry.domainTokens)) out.domainTokens = entry.domainTokens;
+  return out;
+}
+
+function computeLocalOperationSiblingPolicy({
+  intentName,
+  intentDeclaration,
+  preWriteLocalOperationIndex,
+}) {
+  if (!preWriteLocalOperationIndex || typeof preWriteLocalOperationIndex !== 'object') {
+    return emptyLocalOperationSiblingPolicy('not-run', 'pre-write-local-operation-index-missing');
+  }
+  if (preWriteLocalOperationIndex.status !== 'complete') {
+    return emptyLocalOperationSiblingPolicy(
+      preWriteLocalOperationIndex.status ?? 'unavailable',
+      preWriteLocalOperationIndex.reason ?? 'pre-write-local-operation-index-incomplete',
+    );
+  }
+
+  const policy = emptyLocalOperationSiblingPolicy('complete');
+  const ownerFile = intentOwnerFileHint(intentDeclaration);
+  if (!ownerFile) {
+    policy.reason = 'intent-owner-file-missing';
+    return policy;
+  }
+
+  const entries = preWriteLocalOperationIndex.byOwnerFile?.[ownerFile] ?? [];
+  if (!Array.isArray(entries) || entries.length === 0) return policy;
+
+  const intentOperation = serviceOperationInfo(intentName);
+  const intentDomainSet = new Set(intentOperation.domainTokens);
+  const promoted = [];
+  const muted = [];
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const candidateName = entry.name;
+    const candidateOperation = serviceOperationInfo(candidateName);
+    const candidateDomainSet = new Set(candidateOperation.domainTokens);
+    const sharedDomainTokens = intentOperation.domainTokens
+      .filter((token) => candidateDomainSet.has(token));
+    const enriched = {
+      operationFamily: candidateOperation.operationFamily ?? entry.operationFamily ?? null,
+      sharedDomainTokens,
+      locality: localityFor(entry, ownerFile),
+    };
+
+    let muteReason = null;
+    if (!entry.identity || !candidateName || !entry.ownerFile) {
+      muteReason = 'local-operation-insufficient-metadata';
+    } else if (entry.surfaceKind && entry.surfaceKind !== 'nested-local-operation') {
+      muteReason = 'local-operation-surface-kind-unsupported';
+    } else if (policyExcludedPath(entry.ownerFile)) {
+      muteReason = 'local-operation-policy-excluded';
+    } else if (!enriched.locality.sameFile) {
+      muteReason = 'local-operation-locality-mismatch';
+    } else if (!intentOperation.operationFamily || !enriched.operationFamily) {
+      muteReason = 'local-operation-unknown-operation';
+    } else if (intentDomainSet.size === 0 || sharedDomainTokens.length === 0) {
+      muteReason = 'local-operation-domain-mismatch';
+    } else if (intentOperation.operationFamily !== enriched.operationFamily) {
+      muteReason = 'local-operation-family-mismatch';
+    } else if (intentOperation.operationFamily !== 'read-query') {
+      muteReason = 'local-operation-family-not-promotable';
+    }
+
+    if (muteReason) {
+      muted.push(localOperationPolicyCandidate(entry, enriched, muteReason));
+    } else {
+      promoted.push(localOperationPolicyCandidate(entry, enriched));
+    }
+  }
+
+  policy.evaluatedCandidateCount = promoted.length + muted.length;
+  policy.promotedCandidateCount = promoted.length;
+  policy.mutedCandidateCount = muted.length;
+  policy.promoted = sortServicePolicyEntries(promoted).slice(0, LOCAL_OPERATION_POLICY_MAX_RESULTS);
+  policy.muted = sortServicePolicyEntries(muted).slice(0, LOCAL_OPERATION_POLICY_MAX_RESULTS);
+  return policy;
+}
+
 // ── AST identity enumeration ─────────────────────────────────
 
 function enumerateAstIdentities(intentName, defIndex) {
@@ -944,6 +1065,11 @@ export function lookupName(intentName, ctx) {
     suppressedNearNames,
     suppressedSemanticHints,
   });
+  const localOperationSiblingPolicy = computeLocalOperationSiblingPolicy({
+    intentName,
+    intentDeclaration,
+    preWriteLocalOperationIndex: symbols.preWriteLocalOperationIndex,
+  });
   if (nearNames.length > 0) {
     citations.push(`[degraded, fuzzy-name match; source: symbols.json.defIndex/classMethodIndex name scan — search hint only, NOT a grounded reuse claim]`);
   }
@@ -971,6 +1097,7 @@ export function lookupName(intentName, ctx) {
     suppressedSemanticHints,
     suppressedSemanticHintCount,
     serviceOperationSiblingPolicy,
+    localOperationSiblingPolicy,
     citations,
   };
 }
