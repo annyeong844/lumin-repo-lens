@@ -152,6 +152,34 @@ function serviceOperationEvidence(policy = {}, entry = {}) {
   };
 }
 
+function localOperationCandidate(entry = {}) {
+  const identity = entry.identity ?? `${entry.ownerFile ?? 'unknown'}::${entry.containerName ?? 'unknown'}#${entry.name ?? 'unknown'}`;
+  return candidateFromIdentity(identity, {
+    ownerFile: entry.ownerFile,
+    exportedName: entry.name,
+    policyExcluded: entry.policyExcluded,
+    policyReason: entry.policyReason,
+  });
+}
+
+function localOperationEvidence(policy = {}, entry = {}) {
+  return {
+    artifact: 'pre-write-advisory.json',
+    matchedField: 'lookups[].localOperationSiblingPolicy.promoted',
+    policyId: policy.policyId,
+    policyVersion: policy.policyVersion,
+    candidateIdentity: entry.identity,
+    matchedFieldSource: entry.matchedField ?? 'preWriteLocalOperationIndex',
+    surfaceKind: entry.surfaceKind ?? 'nested-local-operation',
+    containerName: entry.containerName,
+    containerKind: entry.containerKind,
+    operationFamily: entry.operationFamily,
+    sharedDomainTokens: entry.sharedDomainTokens ?? [],
+    locality: entry.locality,
+    supportingReasons: entry.supportingReasons ?? [],
+  };
+}
+
 function addServiceOperationMutedCue(suppressedCues, policy = {}, entry = {}, reason = undefined) {
   const candidate = serviceOperationCandidate(entry);
   suppressedCues.push({
@@ -189,6 +217,45 @@ function addServiceOperationSiblingPolicy({ lookup, cardMap, suppressedCues }) {
 
   for (const entry of policy.muted ?? []) {
     addServiceOperationMutedCue(suppressedCues, policy, entry);
+  }
+}
+
+function addLocalOperationMutedCue(suppressedCues, policy = {}, entry = {}, reason = undefined) {
+  const candidate = localOperationCandidate(entry);
+  suppressedCues.push({
+    cueTier: CUE_TIERS.MUTED,
+    evidenceLane: 'local-operation-sibling',
+    reason: reason ?? entry.reason ?? 'local-operation-muted',
+    policyId: policy.policyId,
+    policyVersion: policy.policyVersion,
+    ownerFile: candidate.ownerFile,
+    exportedName: candidate.exportedName,
+    identity: candidate.identity,
+    matchedField: entry.matchedField ?? 'preWriteLocalOperationIndex',
+    surfaceKind: entry.surfaceKind ?? 'nested-local-operation',
+    containerName: entry.containerName,
+    containerKind: entry.containerKind,
+    operationFamily: entry.operationFamily,
+    sharedDomainTokens: entry.sharedDomainTokens ?? [],
+    supportingReasons: entry.supportingReasons ?? [],
+    locality: entry.locality,
+  });
+}
+
+function addLocalOperationSiblingPolicy({ lookup, cardMap, suppressedCues }) {
+  const policy = lookup.localOperationSiblingPolicy;
+  if (!policy || typeof policy !== 'object') return;
+
+  for (const entry of policy.promoted ?? []) {
+    addCue(cardMap, suppressedCues, localOperationCandidate(entry), reviewCue({
+      lane: 'local-operation-sibling',
+      claim: 'related local service operation',
+      evidence: [localOperationEvidence(policy, entry)],
+    }));
+  }
+
+  for (const entry of policy.muted ?? []) {
+    addLocalOperationMutedCue(suppressedCues, policy, entry);
   }
 }
 
@@ -276,6 +343,7 @@ function addNameLookup({ lookup, cardMap, suppressedCues }) {
   }
 
   addServiceOperationSiblingPolicy({ lookup, cardMap, suppressedCues });
+  addLocalOperationSiblingPolicy({ lookup, cardMap, suppressedCues });
 }
 
 function addFileLookup({ lookup, cardMap, suppressedCues }) {

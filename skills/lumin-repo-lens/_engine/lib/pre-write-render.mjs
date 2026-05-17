@@ -383,6 +383,9 @@ function reviewActionForCue(cue) {
   if (cue.evidenceLane === 'service-operation-sibling') {
     return 'inspect this related operation before creating parallel service code.';
   }
+  if (cue.evidenceLane === 'local-operation-sibling') {
+    return 'inspect this local operation before creating parallel service code.';
+  }
   return 'inspect the cited file or symbol before creating parallel code.';
 }
 
@@ -395,7 +398,15 @@ function formatInlineCodeList(values) {
 function formatServiceLocality(locality) {
   if (!locality || typeof locality !== 'object') return 'unknown';
   const labels = [];
-  for (const [key, value] of Object.entries(locality)) {
+  const preferred = ['sameFile', 'sameDir', 'samePackage'];
+  const keys = [
+    ...preferred.filter((key) => Object.prototype.hasOwnProperty.call(locality, key)),
+    ...Object.keys(locality)
+      .filter((key) => !preferred.includes(key))
+      .sort(),
+  ];
+  for (const key of keys) {
+    const value = locality[key];
     if (value === true) labels.push(key);
   }
   return labels.length > 0 ? labels.join(', ') : 'none';
@@ -419,6 +430,30 @@ function renderServiceOperationReviewCue(card, cue) {
   return out;
 }
 
+function nameFromLocalOperationIdentity(identity) {
+  const suffix = String(identity ?? '').split('#').at(-1);
+  return suffix && suffix !== String(identity ?? '') ? suffix : undefined;
+}
+
+function renderLocalOperationReviewCue(card, cue) {
+  const candidate = card.candidate ?? {};
+  const evidence = Array.isArray(cue.evidence) ? cue.evidence[0] ?? {} : {};
+  const name = candidate.exportedName ?? nameFromLocalOperationIdentity(evidence.candidateIdentity) ?? 'unknown';
+  const ownerFile = candidate.ownerFile ?? evidence.candidateIdentity?.split('::').at(0) ?? 'unknown';
+  const containerName = evidence.containerName ?? evidence.candidateIdentity?.split('::').at(-1)?.split('#').at(0) ?? 'unknown';
+  const out = [];
+
+  out.push(`- Review related local service operation: \`${name}\` inside \`${containerName}\` in \`${ownerFile}\`.`);
+  out.push(`  [${cue.confidence ?? 'heuristic-review'}, ${evidenceSummary(cue.evidence)}; cueTier=${cue.cueTier}]`);
+  if (evidence.policyVersion) {
+    out.push(`  policy ${evidence.policyVersion}`);
+  }
+  out.push(`  shared domain tokens: ${formatInlineCodeList(evidence.sharedDomainTokens)}; operation family: \`${evidence.operationFamily ?? 'unknown'}\`; locality: ${formatServiceLocality(evidence.locality)}.`);
+  out.push(`  supporting local-operation reasons: ${formatInlineCodeList(evidence.supportingReasons)}.`);
+  out.push(`  action: ${reviewActionForCue(cue)}`);
+  return out;
+}
+
 function renderCueSections(advisory) {
   const cueCards = advisory.cueCards ?? [];
   const unavailable = advisory.unavailableEvidence ?? [];
@@ -434,6 +469,8 @@ function renderCueSections(advisory) {
       } else if (cue.cueTier === 'AGENT_REVIEW_CUE') {
         if (cue.evidenceLane === 'service-operation-sibling') {
           review.push(...renderServiceOperationReviewCue(card, cue));
+        } else if (cue.evidenceLane === 'local-operation-sibling') {
+          review.push(...renderLocalOperationReviewCue(card, cue));
         } else {
           review.push(row, evidence, `  action: ${reviewActionForCue(cue)}`);
         }
