@@ -45,6 +45,20 @@ function formatFrameworkResourceSurfaceCounts(summary) {
   return `Framework/resource surfaces: ${total} files${laneText ? `; lanes ${laneText}` : ''}. Read manifest.json.frameworkResourceSurfaces and framework-resource-surfaces.json before treating import absence as deadness.`;
 }
 
+function formatDependencyHygieneReviewCheck(summary) {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
+  const status = typeof summary.status === 'string' ? summary.status : 'unavailable';
+  if (status !== 'complete') {
+    return 'Dependency hygiene review: evidence incomplete; do not infer dependency declaration absence. Read manifest.json.unusedDependencies and unused-deps.json.';
+  }
+
+  const reviewUnused = n(summary.reviewUnusedCount, 0);
+  const muted = n(summary.mutedCount, 0);
+  const confidenceLimited = n(summary.confidenceLimitedCount, 0);
+  if (reviewUnused <= 0 && confidenceLimited <= 0) return null;
+  return `Dependency hygiene review: inspect unused-deps.json before changing package manifests. review-only=${reviewUnused}; muted=${muted}; confidence-limited=${confidenceLimited}.`;
+}
+
 function formatUnreachableSccReviewCheck(moduleReachability) {
   const groups = n(moduleReachability?.summary?.unreachableStronglyConnectedComponents, 0);
   const files = n(moduleReachability?.summary?.unreachableStronglyConnectedFiles, 0);
@@ -168,20 +182,32 @@ function deadSurfaceLane({ fixPlan, deadClassify, manifest, moduleReachability }
   const frameworkResourceSurfaceCheck = formatFrameworkResourceSurfaceCounts(
     manifest?.frameworkResourceSurfaces
   );
+  const dependencyHygieneCheck = formatDependencyHygieneReviewCheck(
+    manifest?.unusedDependencies
+  );
   const unreachableSccCheck = formatUnreachableSccReviewCheck(moduleReachability);
+  const artifacts = [
+    'fix-plan.json',
+    'dead-classify.json',
+    'symbols.json',
+    'manifest.json',
+    'module-reachability.json',
+    ...(dependencyHygieneCheck ? ['unused-deps.json'] : []),
+  ];
   const checks = [
     `Tier summary: SAFE_FIX ${safe}, REVIEW_FIX ${review}, DEGRADED ${degraded}, MUTED ${muted}. Do not present REVIEW_FIX as removable without screening.`,
     `Muted/excluded families observed: ${excludedText}. Translate them into plain language for the user.`,
     ...(resolverBlockedDistribution ? [resolverBlockedDistribution] : []),
     ...(resolverBlockedHint ? [resolverBlockedHint] : []),
     ...(frameworkResourceSurfaceCheck ? [frameworkResourceSurfaceCheck] : []),
+    ...(dependencyHygieneCheck ? [dependencyHygieneCheck] : []),
     ...(unreachableSccCheck ? [unreachableSccCheck] : []),
     'For each visible cleanup candidate, check whether it is exported through package/API/declaration/test-only surfaces before recommending a change.',
   ];
   return lane('Lane 3 — Dead Export And Public Surface Review', renderLanePrompt({
     title: 'Dead-export/public-surface reviewer',
     mission: 'Separate real cleanup from public surface, declaration/type-surface, framework, generated, config, and test-consumer false positives.',
-    artifacts: ['fix-plan.json', 'dead-classify.json', 'symbols.json', 'manifest.json', 'module-reachability.json'],
+    artifacts,
     checks,
     report: 'Which candidates are safe to leave alone, which need review together, and at most one action-ready cleanup slice.',
   }));

@@ -394,6 +394,48 @@ function buildFrameworkResourceSurfacesSummary(artifact) {
   };
 }
 
+function buildUnusedDependenciesSummary(artifact) {
+  if (!artifact || typeof artifact !== 'object') return null;
+  const summary = artifact.summary ?? {};
+  const packages = Array.isArray(artifact.packages) ? artifact.packages : [];
+  const topReviewUnused = [];
+  for (const pkg of packages) {
+    const dependencies = Array.isArray(pkg?.dependencies) ? pkg.dependencies : [];
+    for (const dep of dependencies) {
+      if (dep?.status !== 'review-unused') continue;
+      topReviewUnused.push({
+        packageDir: pkg.packageDir ?? '.',
+        manifestPath: pkg.manifestPath ?? null,
+        name: dep.name ?? null,
+        field: dep.field ?? null,
+        reason: dep.reason ?? null,
+        confidence: dep.confidence ?? null,
+      });
+    }
+  }
+  topReviewUnused.sort((a, b) =>
+    String(a.packageDir ?? '').localeCompare(String(b.packageDir ?? '')) ||
+    String(a.name ?? '').localeCompare(String(b.name ?? '')) ||
+    String(a.field ?? '').localeCompare(String(b.field ?? '')));
+
+  return {
+    artifact: 'unused-deps.json',
+    schemaVersion: artifact.schemaVersion ?? null,
+    policyVersion: artifact.policyVersion ?? null,
+    status: artifact.status ?? null,
+    ...(artifact.reason ? { reason: artifact.reason } : {}),
+    packageCount: summary.packageCount ?? packages.length,
+    declaredDependencyCount: summary.declaredDependencyCount ?? 0,
+    usedCount: summary.usedCount ?? 0,
+    reviewUnusedCount: summary.reviewUnusedCount ?? 0,
+    mutedCount: summary.mutedCount ?? 0,
+    confidenceLimitedCount: summary.confidenceLimitedCount ?? 0,
+    unavailableCount: summary.unavailableCount ?? 0,
+    byReason: summary.byReason ?? {},
+    topReviewUnused: topReviewUnused.slice(0, 10),
+  };
+}
+
 export function collectProducedArtifacts(outDir) {
   const produced = new Set();
   for (const name of ARTIFACT_CANDIDATES) {
@@ -429,6 +471,7 @@ export function buildManifestEvidence({
   const resolverCapabilities = loadArtifact(outDir, 'resolver-capabilities.json', { onRead: onArtifactRead });
   const resolverDiagnostics = loadArtifact(outDir, 'resolver-diagnostics.json', { onRead: onArtifactRead });
   const frameworkResourceSurfaces = loadArtifact(outDir, 'framework-resource-surfaces.json', { onRead: onArtifactRead });
+  const unusedDeps = loadArtifact(outDir, 'unused-deps.json', { onRead: onArtifactRead });
   const entrySurface = loadArtifact(outDir, 'entry-surface.json', { onRead: onArtifactRead });
   const deadClassify = loadArtifact(outDir, 'dead-classify.json', { onRead: onArtifactRead });
 
@@ -467,6 +510,7 @@ export function buildManifestEvidence({
       generatedArtifactsMode,
     }),
     frameworkResourceSurfaces: buildFrameworkResourceSurfacesSummary(frameworkResourceSurfaces),
+    unusedDependencies: buildUnusedDependenciesSummary(unusedDeps),
     livingAudit: detectLivingAuditDocs(root),
   };
 }
@@ -479,5 +523,6 @@ export function refreshManifestEvidence(manifest, options) {
   manifest.blindZones = evidence.blindZones;
   manifest.generatedArtifacts = evidence.generatedArtifacts;
   manifest.frameworkResourceSurfaces = evidence.frameworkResourceSurfaces;
+  manifest.unusedDependencies = evidence.unusedDependencies;
   manifest.livingAudit = evidence.livingAudit;
 }

@@ -95,6 +95,25 @@ function formatFrameworkResourceSurfaceCounts(summary) {
   ].filter(Boolean).join('; ');
 }
 
+function formatDependencyHygieneCue(summary) {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
+  const status = typeof summary.status === 'string' ? summary.status : 'unavailable';
+  if (status !== 'complete') {
+    return 'Dependency hygiene: evidence incomplete; do not infer dependency declaration absence. Read `manifest.json.unusedDependencies` and `unused-deps.json`.';
+  }
+
+  const reviewUnused = n(summary.reviewUnusedCount, 0);
+  const muted = n(summary.mutedCount, 0);
+  const confidenceLimited = n(summary.confidenceLimitedCount, 0);
+  if (reviewUnused <= 0 && confidenceLimited <= 0) return null;
+
+  const reviewVerb = reviewUnused === 1 ? 'needs' : 'need';
+  const confidenceText = confidenceLimited > 0
+    ? `; ${confidenceLimited} confidence-limited ${plural(confidenceLimited, 'declaration')}`
+    : '';
+  return `Dependency hygiene: ${reviewUnused} review-only dependency ${plural(reviewUnused, 'declaration')} ${reviewVerb} inspection; ${muted} muted ${plural(muted, 'explanation')}${confidenceText}. Read \`manifest.json.unusedDependencies\` and \`unused-deps.json\` before changing package manifests.`;
+}
+
 function formatUnreachableSccCue(moduleReachability) {
   const groups = n(moduleReachability?.summary?.unreachableStronglyConnectedComponents, 0);
   const files = n(moduleReachability?.summary?.unreachableStronglyConnectedFiles, 0);
@@ -324,6 +343,13 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     );
   }
 
+  const dependencyHygieneCue = formatDependencyHygieneCue(
+    manifest?.unusedDependencies
+  );
+  if (dependencyHygieneCue) {
+    lines.push(`- ${dependencyHygieneCue}`);
+  }
+
   if (callGraph?.summary) {
     const semiDead = n(callGraph.summary.semiDead, Array.isArray(callGraph.semiDeadList) ? callGraph.semiDeadList.length : 0);
     lines.push(`- Call graph: semi-dead imports ${semiDead}. Read \`call-graph.json.semiDeadList\` and framework/test conventions before cleanup.`);
@@ -412,6 +438,9 @@ function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipl
   }
   if (produced.has('barrels.json')) {
     lines.push('- `barrels.json`: barrel discipline evidence for full-profile C7 review.');
+  }
+  if (manifest?.unusedDependencies || produced.has('unused-deps.json')) {
+    lines.push('- `unused-deps.json`: review-only dependency declaration evidence; inspect before changing package manifests.');
   }
 
   return lines;
