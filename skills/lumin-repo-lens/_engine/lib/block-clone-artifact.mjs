@@ -19,6 +19,7 @@ export const BLOCK_CLONE_NORMALIZATION_POLICY_ID =
   "block-clone-normalization-v1";
 export const BLOCK_CLONE_THRESHOLD_POLICY_ID =
   "block-clone-threshold-policy-v1";
+export const BLOCK_CLONE_NOISE_POLICY_ID = "block-clone-noise-policy-v1";
 
 export const DEFAULT_BLOCK_CLONE_THRESHOLDS = Object.freeze({
   minTokens: 50,
@@ -54,6 +55,12 @@ const BUNDLED_PATH_RE =
 
 function slashPath(value) {
   return String(value ?? "").replace(/\\/g, "/");
+}
+
+function sortCountObject(map) {
+  return Object.fromEntries(
+    [...map.entries()].sort(([a], [b]) => a.localeCompare(b)),
+  );
 }
 
 function relPath(root, filePath) {
@@ -644,6 +651,108 @@ function extractGroups(values, meta, thresholds) {
     .slice(0, thresholds.maxGroups);
 }
 
+function isTestFile(file) {
+  const rel = slashPath(file).toLowerCase();
+  const base = path.posix.basename(rel);
+  return (
+    rel.startsWith("tests/") ||
+    rel.includes("/tests/") ||
+    base.startsWith("test-") ||
+    /\.(?:test|spec)\.[cm]?[jt]sx?$/.test(base)
+  );
+}
+
+function testMirrorEntry(file) {
+  const rel = slashPath(file).toLowerCase();
+  if (!isTestFile(rel)) return null;
+  const base = path.posix.basename(rel);
+  const dir = path.posix.dirname(rel);
+  if (base.startsWith("test-")) {
+    return {
+      key: `${dir}/${base.replace(/^test-/, "").replace(/\.[cm]?[jt]sx?$/, "")}`,
+      kind: "node",
+    };
+  }
+  if (/\.(?:test|spec)\.[cm]?[jt]sx?$/.test(base)) {
+    return {
+      key: `${dir}/${base.replace(/\.(?:test|spec)\.[cm]?[jt]sx?$/, "")}`,
+      kind: "vitest",
+    };
+  }
+  return null;
+}
+
+function hasNodeVitestMirrorPair(files) {
+  const kindsByKey = new Map();
+  for (const file of files) {
+    const entry = testMirrorEntry(file);
+    if (!entry?.key) continue;
+    if (!kindsByKey.has(entry.key)) kindsByKey.set(entry.key, new Set());
+    kindsByKey.get(entry.key).add(entry.kind);
+  }
+  return [...kindsByKey.values()].some(
+    (kinds) => kinds.has("node") && kinds.has("vitest"),
+  );
+}
+
+function classifyBlockCloneGroupNoise(group) {
+  const files = [
+    ...new Set(
+      (group?.instances ?? [])
+        .map((instance) => instance?.file)
+        .filter((file) => typeof file === "string" && file.length > 0)
+        .map(slashPath),
+    ),
+  ];
+  if (files.length === 0) return { visibility: "review" };
+  const allTest = files.every(isTestFile);
+  if (allTest && hasNodeVitestMirrorPair(files)) {
+    return { visibility: "muted", muteReason: "node-vitest-mirror-pair" };
+  }
+  if (files.length === 1) {
+    return { visibility: "muted", muteReason: "same-file-repeat" };
+  }
+  if (allTest) {
+    return { visibility: "muted", muteReason: "test-scaffold-repeat" };
+  }
+  return { visibility: "review" };
+}
+
+export function applyBlockCloneNoisePolicy(groups, { thresholds = {} } = {}) {
+  const mutedByReason = new Map();
+  const classifiedGroups = (Array.isArray(groups) ? groups : []).map((group) => {
+    const classification = classifyBlockCloneGroupNoise(group);
+    if (classification.visibility !== "muted") {
+      return {
+        ...group,
+        visibility: "review",
+      };
+    }
+    const reason = classification.muteReason;
+    mutedByReason.set(reason, (mutedByReason.get(reason) ?? 0) + 1);
+    return {
+      ...group,
+      visibility: "muted",
+      muteReason: reason,
+    };
+  });
+  const mutedGroupCount = classifiedGroups.filter(
+    (group) => group.visibility === "muted",
+  ).length;
+  return {
+    groups: classifiedGroups,
+    noisePolicy: {
+      policyId: BLOCK_CLONE_NOISE_POLICY_ID,
+      reviewGroupCount: classifiedGroups.length - mutedGroupCount,
+      mutedGroupCount,
+      mutedByReason: sortCountObject(mutedByReason),
+      capSaturated:
+        typeof thresholds.maxGroups === "number" &&
+        classifiedGroups.length >= thresholds.maxGroups,
+    },
+  };
+}
+
 export function assembleBlockCloneArtifact({
   root,
   files,
@@ -679,7 +788,10 @@ export function assembleBlockCloneArtifact({
   }
 
   const { values, meta } = compressTokenValues(tokenizedFiles);
-  const groups = extractGroups(values, meta, thresholds);
+  const extractedGroups = extractGroups(values, meta, thresholds);
+  const { groups, noisePolicy } = applyBlockCloneNoisePolicy(extractedGroups, {
+    thresholds,
+  });
   const status =
     diagnostics.length > 0 || skipped.length > 0
       ? "confidence-limited"
@@ -720,7 +832,10 @@ export function assembleBlockCloneArtifact({
       ),
       skippedFileCount: skipped.length,
       unavailableFileCount,
+      reviewGroupCount: noisePolicy.reviewGroupCount,
+      mutedGroupCount: noisePolicy.mutedGroupCount,
     },
+    noisePolicy,
     groups,
     skipped,
     diagnostics,

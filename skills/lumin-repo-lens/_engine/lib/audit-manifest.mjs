@@ -446,6 +446,9 @@ function buildBlockClonesSummary(artifact) {
   const normalization = artifact.normalization && typeof artifact.normalization === 'object'
     ? artifact.normalization
     : {};
+  const noisePolicy = artifact.noisePolicy && typeof artifact.noisePolicy === 'object'
+    ? artifact.noisePolicy
+    : {};
   const groupCount = typeof summary.groupCount === 'number'
     ? summary.groupCount
     : groups.length;
@@ -464,6 +467,7 @@ function buildBlockClonesSummary(artifact) {
     normalizationPolicyId: normalization.policyId ?? null,
     normalizationMode: normalization.mode ?? null,
     thresholdPolicyId: thresholds.policyId ?? null,
+    noisePolicyId: noisePolicy.policyId ?? null,
     thresholds: {
       minTokens: thresholds.minTokens ?? null,
       minLines: thresholds.minLines ?? null,
@@ -476,6 +480,10 @@ function buildBlockClonesSummary(artifact) {
     tokenCount: summary.tokenCount ?? 0,
     groupCount,
     instanceCount,
+    reviewGroupCount: noisePolicy.reviewGroupCount ?? summary.reviewGroupCount ?? null,
+    mutedGroupCount: noisePolicy.mutedGroupCount ?? summary.mutedGroupCount ?? null,
+    mutedByReason: noisePolicy.mutedByReason ?? {},
+    capSaturated: noisePolicy.capSaturated ?? null,
     skippedFileCount: summary.skippedFileCount ?? 0,
     unavailableFileCount: summary.unavailableFileCount ?? 0,
   };
