@@ -647,6 +647,7 @@ if (!RUN_BASE_PIPELINE) {
     runStep('check-barrel-discipline.mjs', { required: false });
     runStep('build-shape-index.mjs', { required: false });
     runStep('build-function-clone-index.mjs', { required: false });
+    runStep('build-block-clone-index.mjs', { required: false });
   }
 
   // ─── Step 5: symbol graph (always, required for classify) ──

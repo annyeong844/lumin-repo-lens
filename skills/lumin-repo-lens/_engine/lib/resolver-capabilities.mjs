@@ -346,6 +346,9 @@ function buildUnresolvedImports(records) {
     source: record.source,
     targetCandidates: targetCandidates(record).length ? sortStrings(targetCandidates(record)) : undefined,
     hint: record.hint,
+    matchCount: typeof record.matchCount === 'number' ? record.matchCount : undefined,
+    cap: typeof record.cap === 'number' ? record.cap : undefined,
+    scanPolicy: record.scanPolicy,
     generatedArtifact: record.generatedArtifact,
   })), unresolvedImportKey);
 }
@@ -395,6 +398,9 @@ function blindZoneFromRecord(record) {
     relevancePolicy,
     relevance: generated ? 'generated-provider-surface' : 'unresolved-internal-surface',
     targetCandidates: targetCandidates(record).length ? sortStrings(targetCandidates(record)) : undefined,
+    matchCount: typeof record.matchCount === 'number' ? record.matchCount : undefined,
+    cap: typeof record.cap === 'number' ? record.cap : undefined,
+    scanPolicy: record.scanPolicy,
     typeOnly: typeof record.typeOnly === 'boolean' ? record.typeOnly : undefined,
     generatedArtifact: record.generatedArtifact,
   });

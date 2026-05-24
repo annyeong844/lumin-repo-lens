@@ -112,7 +112,7 @@ function opaqueDynamicImportHint(node) {
   return { kind: 'nonliteral' };
 }
 
-function importMetaGlobPattern(node) {
+function isImportMetaGlobCall(node) {
   if (node?.type !== 'CallExpression') return null;
   const callee = node.callee;
   if (callee?.type !== 'MemberExpression' || callee.computed) return null;
@@ -121,6 +121,11 @@ function importMetaGlobPattern(node) {
   if (object?.type !== 'MetaProperty') return null;
   if (object.meta?.name !== 'import' || object.property?.name !== 'meta')
     return null;
+  return true;
+}
+
+function importMetaGlobPattern(node) {
+  if (!isImportMetaGlobCall(node)) return null;
   return literalStringValue(node.arguments?.[0]);
 }
 
@@ -1432,8 +1437,25 @@ function handleFallbackImportExpression(node, state, getNodeLine) {
 }
 
 function handleImportMetaGlobExpression(node, state, getNodeLine) {
+  if (!isImportMetaGlobCall(node)) return false;
   const pattern = importMetaGlobPattern(node);
-  if (!pattern) return false;
+  if (!pattern) {
+    state.importMetaGlobUses.push({
+      fromSpec: 'import.meta.glob(<nonliteral>)',
+      name: '*',
+      kind: 'import-meta-glob',
+      typeOnly: false,
+      line: getNodeLine(node),
+      dynamic: true,
+      degraded: true,
+      reason: 'import-meta-glob-nonliteral-unsupported',
+      resolverStage: 'import-meta-glob',
+      outputLevel: 'unsupported',
+      unsupportedFamily: 'dynamic-modules',
+      hint: 'dynamic-module-surface',
+    });
+    return true;
+  }
   state.importMetaGlobUses.push({
     fromSpec: pattern,
     name: '*',

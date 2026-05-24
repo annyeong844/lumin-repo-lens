@@ -12,7 +12,7 @@ import { collectFiles } from './collect-files.mjs';
 import {
   collectHtmlModuleEntrypoints,
   collectPackagePublicSurfaceFiles,
-  collectScriptEntrypointFiles,
+  collectScriptEntrypoints,
   indexPublicSurfaceEntries,
 } from './public-surface.mjs';
 import { makeResolver } from './resolver-core.mjs';
@@ -44,7 +44,9 @@ function sortedEvidenceObject(evidenceByFile) {
 
 function sortedRecords(records) {
   return [...(records ?? [])].sort((a, b) =>
-    String(a.htmlFile ?? '').localeCompare(String(b.htmlFile ?? '')) ||
+    String(a.packageDir ?? a.htmlFile ?? '').localeCompare(String(b.packageDir ?? b.htmlFile ?? '')) ||
+    String(a.scriptName ?? '').localeCompare(String(b.scriptName ?? '')) ||
+    String(a.reason ?? '').localeCompare(String(b.reason ?? '')) ||
     String(a.src ?? '').localeCompare(String(b.src ?? '')) ||
     String(a.resolvedFile ?? '').localeCompare(String(b.resolvedFile ?? '')));
 }
@@ -169,12 +171,19 @@ function collectPublicApi({ root, repoMode, symbolsData, aliasMap, resolve }) {
 function collectScriptEntries({ root, repoMode }) {
   const files = new Set();
   const evidenceByFile = new Map();
+  const script = collectScriptEntrypoints({ root, repoMode });
   addIndexedEntries(
-    indexPublicSurfaceEntries(collectScriptEntrypointFiles({ root, repoMode })),
+    indexPublicSurfaceEntries(script.entries),
     files,
     evidenceByFile,
   );
-  return { files, evidenceByFile };
+  return {
+    files,
+    evidenceByFile,
+    unsupported: script.unsupported,
+    unsupportedRawCount: script.unsupportedRawCount,
+    unsupportedSampleLimit: script.unsupportedSampleLimit,
+  };
 }
 
 function collectHtmlEntries({ root, repoMode, includeTests, exclude }) {
@@ -292,6 +301,7 @@ export function buildEntrySurfaceArtifact({
     config.evidenceByFile,
   );
   const unresolvedHtmlEntrypoints = sortedRecords(html.unresolved);
+  const unsupportedScriptEntrypoints = sortedRecords(script.unsupported);
   const { globalCompleteness, completenessBySubmodule } =
     completenessLabels({
       entryFiles,
@@ -308,6 +318,7 @@ export function buildEntrySurfaceArtifact({
       supports: {
         publicApiFiles: true,
         scriptEntrypointFiles: true,
+        unsupportedScriptEntrypoints: true,
         htmlEntrypointFiles: true,
         unresolvedHtmlEntrypoints: true,
         frameworkEntrypointFiles: true,
@@ -320,6 +331,9 @@ export function buildEntrySurfaceArtifact({
     },
     publicApiFiles: sortedSet(publicApi.files),
     scriptEntrypointFiles: sortedSet(script.files),
+    unsupportedScriptEntrypointCount: script.unsupportedRawCount,
+    unsupportedScriptEntrypointSampleLimit: script.unsupportedSampleLimit,
+    unsupportedScriptEntrypoints,
     htmlEntrypointFiles: sortedSet(html.files),
     unresolvedHtmlEntrypoints,
     frameworkEntrypointFiles: sortedSet(framework.files),

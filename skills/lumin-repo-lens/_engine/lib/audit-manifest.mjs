@@ -29,7 +29,7 @@ const LIVING_AUDIT_DOC_CANDIDATES = [
 const ARTIFACT_CANDIDATES = [
   'triage.json', 'topology.json', 'discipline.json',
   'call-graph.json', 'barrels.json', 'shape-index.json',
-  'function-clones.json',
+  'function-clones.json', 'block-clones.json',
   'framework-resource-surfaces.json',
   'resolver-capabilities.json', 'resolver-diagnostics.json',
   'symbols.json', 'unused-deps.json', 'entry-surface.json', 'module-reachability.json',
@@ -436,6 +436,51 @@ function buildUnusedDependenciesSummary(artifact) {
   };
 }
 
+function buildBlockClonesSummary(artifact) {
+  if (!artifact || typeof artifact !== 'object') return null;
+  const summary = artifact.summary ?? {};
+  const groups = Array.isArray(artifact.groups) ? artifact.groups : [];
+  const thresholds = artifact.thresholds && typeof artifact.thresholds === 'object'
+    ? artifact.thresholds
+    : {};
+  const normalization = artifact.normalization && typeof artifact.normalization === 'object'
+    ? artifact.normalization
+    : {};
+  const groupCount = typeof summary.groupCount === 'number'
+    ? summary.groupCount
+    : groups.length;
+  const instanceCount = typeof summary.instanceCount === 'number'
+    ? summary.instanceCount
+    : groups.reduce((sum, group) =>
+        sum + (Array.isArray(group?.instances) ? group.instances.length : 0), 0);
+
+  return {
+    artifact: 'block-clones.json',
+    schemaVersion: artifact.schemaVersion ?? null,
+    policyVersion: artifact.policyVersion ?? null,
+    status: artifact.status ?? null,
+    ...(artifact.reason ? { reason: artifact.reason } : {}),
+    reviewOnly: true,
+    normalizationPolicyId: normalization.policyId ?? null,
+    normalizationMode: normalization.mode ?? null,
+    thresholdPolicyId: thresholds.policyId ?? null,
+    thresholds: {
+      minTokens: thresholds.minTokens ?? null,
+      minLines: thresholds.minLines ?? null,
+      minOccurrences: thresholds.minOccurrences ?? null,
+      maxInstancesPerGroup: thresholds.maxInstancesPerGroup ?? null,
+      maxGroups: thresholds.maxGroups ?? null,
+      maxTokensPerFile: thresholds.maxTokensPerFile ?? null,
+    },
+    fileCount: summary.fileCount ?? 0,
+    tokenCount: summary.tokenCount ?? 0,
+    groupCount,
+    instanceCount,
+    skippedFileCount: summary.skippedFileCount ?? 0,
+    unavailableFileCount: summary.unavailableFileCount ?? 0,
+  };
+}
+
 export function collectProducedArtifacts(outDir) {
   const produced = new Set();
   for (const name of ARTIFACT_CANDIDATES) {
@@ -472,6 +517,7 @@ export function buildManifestEvidence({
   const resolverDiagnostics = loadArtifact(outDir, 'resolver-diagnostics.json', { onRead: onArtifactRead });
   const frameworkResourceSurfaces = loadArtifact(outDir, 'framework-resource-surfaces.json', { onRead: onArtifactRead });
   const unusedDeps = loadArtifact(outDir, 'unused-deps.json', { onRead: onArtifactRead });
+  const blockClones = loadArtifact(outDir, 'block-clones.json', { onRead: onArtifactRead });
   const entrySurface = loadArtifact(outDir, 'entry-surface.json', { onRead: onArtifactRead });
   const deadClassify = loadArtifact(outDir, 'dead-classify.json', { onRead: onArtifactRead });
 
@@ -511,6 +557,7 @@ export function buildManifestEvidence({
     }),
     frameworkResourceSurfaces: buildFrameworkResourceSurfacesSummary(frameworkResourceSurfaces),
     unusedDependencies: buildUnusedDependenciesSummary(unusedDeps),
+    blockClones: buildBlockClonesSummary(blockClones),
     livingAudit: detectLivingAuditDocs(root),
   };
 }
@@ -524,5 +571,6 @@ export function refreshManifestEvidence(manifest, options) {
   manifest.generatedArtifacts = evidence.generatedArtifacts;
   manifest.frameworkResourceSurfaces = evidence.frameworkResourceSurfaces;
   manifest.unusedDependencies = evidence.unusedDependencies;
+  manifest.blockClones = evidence.blockClones;
   manifest.livingAudit = evidence.livingAudit;
 }

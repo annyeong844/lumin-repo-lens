@@ -28,6 +28,10 @@ import {
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
 import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
 import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
+import {
+  DEFAULT_IMPORT_META_GLOB_CAP,
+  expandImportMetaGlobPattern,
+} from '../lib/import-meta-glob-expansion.mjs';
 import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
 import { isTestLikePath } from '../lib/test-paths.mjs';
 import { relPath, buildSubmoduleResolver } from '../lib/paths.mjs';
@@ -176,6 +180,7 @@ const snapshot = phaseTimer.runPhase('snapshot', () => buildRepoSnapshot({
 }));
 const snapshotEntries = Object.values(snapshot.files);
 const files = snapshotEntries.map((entry) => entry.absPath);
+const scannedJsSourceFiles = new Set(files.filter(isJsFamilyFile));
 const jsTotal = files.filter(isJsFamilyFile).length;
 const pyTotal = files.filter((f) => f.endsWith('.py')).length;
 const goTotal = files.filter((f) => f.endsWith('.go')).length;
@@ -572,6 +577,9 @@ function recordUnresolvedInternalSpecifier(consumerFile, use) {
     ...(use.hint ? { hint: use.hint } : {}),
     ...(Array.isArray(use.targetCandidates) ? { targetCandidates: use.targetCandidates } : {}),
     ...(use.affectedPackageScope ? { affectedPackageScope: use.affectedPackageScope } : {}),
+    ...(typeof use.matchCount === 'number' ? { matchCount: use.matchCount } : {}),
+    ...(typeof use.cap === 'number' ? { cap: use.cap } : {}),
+    ...(use.scanPolicy ? { scanPolicy: use.scanPolicy } : {}),
     ...(use.affectedDir
       ? { affectedPackageScope: relPath(ROOT, path.resolve(path.dirname(consumerFile), use.affectedDir)) }
       : {}),
@@ -795,6 +803,8 @@ const sourceUseBranchCounts = {
   reExportNamespaceSkip: 0,
   broadNamespace: 0,
   directConsumer: 0,
+  importMetaGlobResolved: 0,
+  importMetaGlobUnsupported: 0,
 };
 const sourceUseResolverStatsBefore =
   typeof _resolveRaw.memoStats === 'function' ? _resolveRaw.memoStats() : null;
@@ -809,8 +819,62 @@ function incrementSourceUseBranch(name) {
   sourceUseBranchCounts[name] = (sourceUseBranchCounts[name] ?? 0) + 1;
 }
 
+function importMetaGlobDiagnosticUse(use, expansion) {
+  return {
+    ...use,
+    reason: expansion.reason ?? use.reason ?? 'import-meta-glob-unsupported',
+    resolverStage: 'import-meta-glob',
+    outputLevel: 'unsupported',
+    unsupportedFamily: 'dynamic-modules',
+    hint: use.hint ?? 'dynamic-module-surface',
+    ...(typeof expansion.matchCount === 'number' ? { matchCount: expansion.matchCount } : {}),
+    ...(typeof expansion.cap === 'number' ? { cap: expansion.cap } : {}),
+    ...(expansion.scanPolicy ? { scanPolicy: expansion.scanPolicy } : {}),
+    ...(expansion.affectedPackageScope
+      ? { affectedPackageScope: expansion.affectedPackageScope }
+      : {}),
+  };
+}
+
 for (const [consumerFile, info] of fileData) {
   for (const u of info.uses) {
+    if (u?.kind === 'import-meta-glob') {
+      const branchStarted = performance.now();
+      const expansion = expandImportMetaGlobPattern({
+        root: ROOT,
+        consumerFile,
+        pattern: u.fromSpec,
+        scannedSourceFileSet: scannedJsSourceFiles,
+        cap: DEFAULT_IMPORT_META_GLOB_CAP,
+      });
+
+      if (expansion.ok) {
+        incrementSourceUseBranch('importMetaGlobResolved');
+        for (const targetFile of expansion.targets) {
+          totalUses++;
+          resolvedInternalUses++;
+          addResolvedInternalEdge(consumerFile, targetFile, {
+            ...u,
+            kind: 'dynamic-import-meta-glob',
+            outputLevel: 'resolved',
+          });
+          if (!namespaceUsers.has(targetFile)) namespaceUsers.set(targetFile, new Set());
+          namespaceUsers.get(targetFile).add(consumerFile);
+        }
+        addSourceUseTiming('resolvedInternal', branchStarted);
+      } else {
+        incrementSourceUseBranch('importMetaGlobUnsupported');
+        unresolvedInternalUses++;
+        unresolvedUses++;
+        recordUnresolvedInternalSpecifier(
+          consumerFile,
+          importMetaGlobDiagnosticUse(u, expansion),
+        );
+        addSourceUseTiming('unresolved', branchStarted);
+      }
+      continue;
+    }
+
     const resolveStarted = performance.now();
     const target = resolveSpecifier(consumerFile, u);
     addSourceUseTiming('resolve', resolveStarted);

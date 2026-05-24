@@ -17,6 +17,18 @@ import { collectFiles, scanScopeStatusForPath } from './collect-files.mjs';
 import { fileExists } from './paths.mjs';
 import { parseOxcOrThrow } from './parse-oxc.mjs';
 
+const UNSUPPORTED_SCRIPT_ENTRYPOINT_SAMPLE_LIMIT = 50;
+const NON_ENTRY_SCRIPT_TOOLS = new Set([
+  'eslint',
+  'prettier',
+  'jest',
+  'vitest',
+  'tsc',
+  'tsserver',
+  'tailwindcss',
+  'postcss',
+]);
+
 function normalizeExportsToEntries(rawExports) {
   if (typeof rawExports === 'string') return [['.', rawExports]];
   if (rawExports && typeof rawExports === 'object' && !Array.isArray(rawExports)) {
@@ -248,6 +260,86 @@ function isRuntimeModeToken(tool, token) {
   if (tool === 'tsx') return normalized === 'watch';
   if (tool === 'bun') return normalized === 'run';
   return false;
+}
+
+function packageScriptWrapper(tokens, index) {
+  const tool = commandName(tokens[index]);
+  if (tool === 'npm') {
+    const subcommand = commandName(tokens[index + 1]);
+    if (subcommand === 'run' || subcommand === 'run-script') {
+      return { tool, targetScript: tokens[index + 2] ?? null };
+    }
+    if (['start', 'stop', 'restart', 'test'].includes(subcommand)) {
+      return { tool, targetScript: subcommand };
+    }
+    return null;
+  }
+  if (tool === 'pnpm') {
+    for (let i = index + 1; i < tokens.length; i++) {
+      const token = tokens[i];
+      if (isCommandSeparator(token)) break;
+      if (token === '--filter' || token === '-F') {
+        i++;
+        continue;
+      }
+      const subcommand = commandName(token);
+      if (subcommand === 'run') return { tool, targetScript: tokens[i + 1] ?? null };
+      if (!token.startsWith('-') && !token.includes('=')) return { tool, targetScript: token };
+    }
+    return null;
+  }
+  if (tool === 'yarn') {
+    const subcommand = commandName(tokens[index + 1]);
+    if (subcommand === 'run') return { tool, targetScript: tokens[index + 2] ?? null };
+    if (subcommand) return { tool, targetScript: tokens[index + 1] ?? null };
+  }
+  return null;
+}
+
+function extractUnsupportedScriptEntrypoints(command) {
+  const tokens = tokenizeCommand(command);
+  const out = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (!isCommandPosition(tokens, i)) continue;
+    const wrapper = packageScriptWrapper(tokens, i);
+    if (wrapper) {
+      out.push({
+        reason: 'package-script-recursion-unsupported',
+        tool: wrapper.tool,
+        targetScript: wrapper.targetScript,
+      });
+      continue;
+    }
+
+    const toolName = commandName(tokens[i]);
+    if (
+      runtimeScriptTool(tokens[i]) ||
+      isTsupToken(tokens[i]) ||
+      isRollupToken(tokens[i]) ||
+      isEsbuildToken(tokens[i]) ||
+      NON_ENTRY_SCRIPT_TOOLS.has(toolName)
+    ) {
+      continue;
+    }
+
+    const targetCandidates = [];
+    for (let j = i + 1; j < tokens.length; j++) {
+      const token = tokens[j];
+      if (isCommandSeparator(token)) break;
+      if (token.startsWith('-')) continue;
+      if (hasSourceEntrypointExtension(token) && isSourceEntrypointToken(token)) {
+        targetCandidates.push(normalizeScriptTarget(token));
+      }
+    }
+    if (targetCandidates.length > 0) {
+      out.push({
+        reason: 'unknown-script-wrapper',
+        tool: toolName || String(tokens[i] ?? ''),
+        targetCandidates,
+      });
+    }
+  }
+  return out;
 }
 
 function extractTsupEntrypoints(command) {
@@ -594,8 +686,10 @@ export function collectHtmlModuleEntrypoints({ root, repoMode, includeTests = tr
   return { entries, unresolved };
 }
 
-export function collectScriptEntrypointFiles({ root, repoMode }) {
+export function collectScriptEntrypoints({ root, repoMode }) {
   const entries = [];
+  const unsupported = [];
+  let unsupportedRawCount = 0;
 
   for (const pkgDir of listPackageDirs(root, repoMode)) {
     const pkg = readJsonFile(path.join(pkgDir, 'package.json'));
@@ -636,7 +730,25 @@ export function collectScriptEntrypointFiles({ root, repoMode }) {
     }
 
     for (const source of commandSources) {
-      for (const entry of extractScriptEntrypoints(source.command, pkgDir)) {
+      const extracted = extractScriptEntrypoints(source.command, pkgDir);
+      if (extracted.length === 0 && source.evidence.source === 'package.scripts') {
+        for (const diagnostic of extractUnsupportedScriptEntrypoints(source.command)) {
+          unsupportedRawCount++;
+          if (unsupported.length < UNSUPPORTED_SCRIPT_ENTRYPOINT_SAMPLE_LIMIT) {
+            unsupported.push({
+              ...source.evidence,
+              ...diagnostic,
+              command: source.command,
+              packageDir: normalizeRel(root, pkgDir) || '.',
+              confidence: 'advisory',
+              effect:
+                'Script command may name entrypoint-relevant code, but this extractor does not model the wrapper. ' +
+                'No concrete entry file was added.',
+            });
+          }
+        }
+      }
+      for (const entry of extracted) {
         const { target } = entry;
         const relativeTarget = target.startsWith('./') ? target : `./${target}`;
         addEntry(entries, root, pkgDir, relativeTarget, {
@@ -649,7 +761,16 @@ export function collectScriptEntrypointFiles({ root, repoMode }) {
     }
   }
 
-  return entries;
+  return {
+    entries,
+    unsupported,
+    unsupportedRawCount,
+    unsupportedSampleLimit: UNSUPPORTED_SCRIPT_ENTRYPOINT_SAMPLE_LIMIT,
+  };
+}
+
+export function collectScriptEntrypointFiles({ root, repoMode }) {
+  return collectScriptEntrypoints({ root, repoMode }).entries;
 }
 
 export function indexPublicSurfaceEntries(entries) {
