@@ -457,7 +457,27 @@ function buildBlockClonesSummary(artifact) {
     : groups.reduce((sum, group) =>
         sum + (Array.isArray(group?.instances) ? group.instances.length : 0), 0);
 
-  return {
+  const thresholdSummary = {
+    minTokens: thresholds.minTokens ?? null,
+    minLines: thresholds.minLines ?? null,
+    minOccurrences: thresholds.minOccurrences ?? null,
+    maxInstancesPerGroup: thresholds.maxInstancesPerGroup ?? null,
+    maxTokensPerFile: thresholds.maxTokensPerFile ?? null,
+  };
+  if (Object.hasOwn(thresholds, 'maxGroups')) {
+    thresholdSummary.maxGroups = thresholds.maxGroups ?? null;
+  }
+  if (Object.hasOwn(thresholds, 'maxCandidateGroups')) {
+    thresholdSummary.maxCandidateGroups = thresholds.maxCandidateGroups ?? null;
+  }
+  if (Object.hasOwn(thresholds, 'maxReviewGroups')) {
+    thresholdSummary.maxReviewGroups = thresholds.maxReviewGroups ?? null;
+  }
+  if (Object.hasOwn(thresholds, 'maxMutedGroups')) {
+    thresholdSummary.maxMutedGroups = thresholds.maxMutedGroups ?? null;
+  }
+
+  const blockClones = {
     artifact: 'block-clones.json',
     schemaVersion: artifact.schemaVersion ?? null,
     policyVersion: artifact.policyVersion ?? null,
@@ -468,14 +488,7 @@ function buildBlockClonesSummary(artifact) {
     normalizationMode: normalization.mode ?? null,
     thresholdPolicyId: thresholds.policyId ?? null,
     noisePolicyId: noisePolicy.policyId ?? null,
-    thresholds: {
-      minTokens: thresholds.minTokens ?? null,
-      minLines: thresholds.minLines ?? null,
-      minOccurrences: thresholds.minOccurrences ?? null,
-      maxInstancesPerGroup: thresholds.maxInstancesPerGroup ?? null,
-      maxGroups: thresholds.maxGroups ?? null,
-      maxTokensPerFile: thresholds.maxTokensPerFile ?? null,
-    },
+    thresholds: thresholdSummary,
     fileCount: summary.fileCount ?? 0,
     tokenCount: summary.tokenCount ?? 0,
     groupCount,
@@ -483,10 +496,22 @@ function buildBlockClonesSummary(artifact) {
     reviewGroupCount: noisePolicy.reviewGroupCount ?? summary.reviewGroupCount ?? null,
     mutedGroupCount: noisePolicy.mutedGroupCount ?? summary.mutedGroupCount ?? null,
     mutedByReason: noisePolicy.mutedByReason ?? {},
-    capSaturated: noisePolicy.capSaturated ?? null,
     skippedFileCount: summary.skippedFileCount ?? 0,
     unavailableFileCount: summary.unavailableFileCount ?? 0,
   };
+  if (Object.hasOwn(noisePolicy, 'capSaturated')) {
+    blockClones.capSaturated = noisePolicy.capSaturated ?? null;
+  }
+  if (Object.hasOwn(noisePolicy, 'candidateCapSaturated')) {
+    blockClones.candidateCapSaturated = noisePolicy.candidateCapSaturated ?? null;
+  }
+  if (Object.hasOwn(noisePolicy, 'reviewCapSaturated')) {
+    blockClones.reviewCapSaturated = noisePolicy.reviewCapSaturated ?? null;
+  }
+  if (Object.hasOwn(noisePolicy, 'mutedCapSaturated')) {
+    blockClones.mutedCapSaturated = noisePolicy.mutedCapSaturated ?? null;
+  }
+  return blockClones;
 }
 
 export function collectProducedArtifacts(outDir) {

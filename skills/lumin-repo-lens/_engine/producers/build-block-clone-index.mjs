@@ -60,6 +60,7 @@ writeFileSync(outPath, JSON.stringify(artifact, null, 2) + "\n");
 
 console.log(
   `[block-clones] ${artifact.summary.fileCount} files, ` +
-    `${artifact.summary.groupCount} review groups, status=${artifact.status}`,
+    `${artifact.summary.reviewGroupCount} review groups, ` +
+    `${artifact.summary.mutedGroupCount} muted groups, status=${artifact.status}`,
 );
 console.log(`[block-clones] saved -> ${outPath}`);

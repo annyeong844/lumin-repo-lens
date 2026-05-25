@@ -18,7 +18,7 @@ export const BLOCK_CLONE_POLICY_VERSION = "block-clone-review-policy-v1";
 export const BLOCK_CLONE_NORMALIZATION_POLICY_ID =
   "block-clone-normalization-v1";
 export const BLOCK_CLONE_THRESHOLD_POLICY_ID =
-  "block-clone-threshold-policy-v1";
+  "block-clone-threshold-policy-v2";
 export const BLOCK_CLONE_NOISE_POLICY_ID = "block-clone-noise-policy-v1";
 
 export const DEFAULT_BLOCK_CLONE_THRESHOLDS = Object.freeze({
@@ -26,7 +26,9 @@ export const DEFAULT_BLOCK_CLONE_THRESHOLDS = Object.freeze({
   minLines: 5,
   minOccurrences: 2,
   maxInstancesPerGroup: 20,
-  maxGroups: 100,
+  maxCandidateGroups: 1000,
+  maxReviewGroups: 100,
+  maxMutedGroups: 100,
   maxTokensPerFile: 200000,
 });
 
@@ -60,6 +62,67 @@ function slashPath(value) {
 function sortCountObject(map) {
   return Object.fromEntries(
     [...map.entries()].sort(([a], [b]) => a.localeCompare(b)),
+  );
+}
+
+function nonNegativeInteger(value, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return fallback;
+  return Math.floor(number);
+}
+
+function optionalNonNegativeInteger(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return Math.floor(number);
+}
+
+function normalizeBlockCloneThresholds(thresholds = {}) {
+  const input = thresholds && typeof thresholds === "object" ? thresholds : {};
+  const normalized = {
+    minTokens: nonNegativeInteger(
+      input.minTokens,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.minTokens,
+    ),
+    minLines: nonNegativeInteger(
+      input.minLines,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.minLines,
+    ),
+    minOccurrences: nonNegativeInteger(
+      input.minOccurrences,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.minOccurrences,
+    ),
+    maxInstancesPerGroup: nonNegativeInteger(
+      input.maxInstancesPerGroup,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.maxInstancesPerGroup,
+    ),
+    maxCandidateGroups: nonNegativeInteger(
+      input.maxCandidateGroups,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.maxCandidateGroups,
+    ),
+    maxReviewGroups: nonNegativeInteger(
+      input.maxReviewGroups,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.maxReviewGroups,
+    ),
+    maxMutedGroups: nonNegativeInteger(
+      input.maxMutedGroups,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.maxMutedGroups,
+    ),
+    maxTokensPerFile: nonNegativeInteger(
+      input.maxTokensPerFile,
+      DEFAULT_BLOCK_CLONE_THRESHOLDS.maxTokensPerFile,
+    ),
+  };
+  const legacyMaxGroups = optionalNonNegativeInteger(input.maxGroups);
+  if (legacyMaxGroups !== null) normalized.maxGroups = legacyMaxGroups;
+  return normalized;
+}
+
+function blockCloneGroupRank(a, b) {
+  return (
+    (b.tokenCount ?? 0) - (a.tokenCount ?? 0) ||
+    (b.occurrenceCount ?? 0) - (a.occurrenceCount ?? 0) ||
+    String(a.id ?? "").localeCompare(String(b.id ?? ""))
   );
 }
 
@@ -291,6 +354,7 @@ export function tokenizeBlockCloneSource({
   src,
   thresholds = DEFAULT_BLOCK_CLONE_THRESHOLDS,
 }) {
+  const effectiveThresholds = normalizeBlockCloneThresholds(thresholds);
   const relFile = relPath(root, filePath);
   const skipped = isGeneratedOrBundled(relFile, src);
   if (skipped) {
@@ -484,7 +548,7 @@ export function tokenizeBlockCloneSource({
     skipped: null,
     diagnostics: [],
     skippedTokenCount,
-    tokenLimitExceeded: tokens.length > thresholds.maxTokensPerFile,
+    tokenLimitExceeded: tokens.length > effectiveThresholds.maxTokensPerFile,
   };
 }
 
@@ -642,13 +706,7 @@ function extractGroups(values, meta, thresholds) {
 
   return groups
     .filter((group) => !subsetIds.has(group.id))
-    .sort(
-      (a, b) =>
-        b.tokenCount - a.tokenCount ||
-        b.occurrenceCount - a.occurrenceCount ||
-        a.id.localeCompare(b.id),
-    )
-    .slice(0, thresholds.maxGroups);
+    .sort(blockCloneGroupRank);
 }
 
 function isTestFile(file) {
@@ -719,8 +777,17 @@ function classifyBlockCloneGroupNoise(group) {
 }
 
 export function applyBlockCloneNoisePolicy(groups, { thresholds = {} } = {}) {
-  const mutedByReason = new Map();
-  const classifiedGroups = (Array.isArray(groups) ? groups : []).map((group) => {
+  const effectiveThresholds = normalizeBlockCloneThresholds(thresholds);
+  const rankedCandidates = [...(Array.isArray(groups) ? groups : [])].sort(
+    blockCloneGroupRank,
+  );
+  const candidateGroups = rankedCandidates.slice(
+    0,
+    effectiveThresholds.maxCandidateGroups,
+  );
+  const candidateCapSaturated =
+    rankedCandidates.length > candidateGroups.length;
+  const classifiedGroups = candidateGroups.map((group) => {
     const classification = classifyBlockCloneGroupNoise(group);
     if (classification.visibility !== "muted") {
       return {
@@ -729,26 +796,54 @@ export function applyBlockCloneNoisePolicy(groups, { thresholds = {} } = {}) {
       };
     }
     const reason = classification.muteReason;
-    mutedByReason.set(reason, (mutedByReason.get(reason) ?? 0) + 1);
     return {
       ...group,
       visibility: "muted",
       muteReason: reason,
     };
   });
-  const mutedGroupCount = classifiedGroups.filter(
-    (group) => group.visibility === "muted",
-  ).length;
+  const reviewCandidates = classifiedGroups
+    .filter((group) => group.visibility !== "muted")
+    .sort(blockCloneGroupRank);
+  const mutedCandidates = classifiedGroups
+    .filter((group) => group.visibility === "muted")
+    .sort(blockCloneGroupRank);
+
+  let reviewGroups = reviewCandidates.slice(
+    0,
+    effectiveThresholds.maxReviewGroups,
+  );
+  let mutedGroups = mutedCandidates.slice(0, effectiveThresholds.maxMutedGroups);
+
+  if (typeof effectiveThresholds.maxGroups === "number") {
+    reviewGroups = reviewGroups.slice(0, effectiveThresholds.maxGroups);
+    const remainingSlots = Math.max(
+      0,
+      effectiveThresholds.maxGroups - reviewGroups.length,
+    );
+    mutedGroups = mutedGroups.slice(0, remainingSlots);
+  }
+
+  const emittedMutedByReason = new Map();
+  for (const group of mutedGroups) {
+    emittedMutedByReason.set(
+      group.muteReason,
+      (emittedMutedByReason.get(group.muteReason) ?? 0) + 1,
+    );
+  }
+
+  const reviewCapSaturated = reviewCandidates.length > reviewGroups.length;
+  const mutedCapSaturated = mutedCandidates.length > mutedGroups.length;
   return {
-    groups: classifiedGroups,
+    groups: [...reviewGroups, ...mutedGroups],
     noisePolicy: {
       policyId: BLOCK_CLONE_NOISE_POLICY_ID,
-      reviewGroupCount: classifiedGroups.length - mutedGroupCount,
-      mutedGroupCount,
-      mutedByReason: sortCountObject(mutedByReason),
-      capSaturated:
-        typeof thresholds.maxGroups === "number" &&
-        classifiedGroups.length >= thresholds.maxGroups,
+      reviewGroupCount: reviewGroups.length,
+      mutedGroupCount: mutedGroups.length,
+      mutedByReason: sortCountObject(emittedMutedByReason),
+      candidateCapSaturated,
+      reviewCapSaturated,
+      mutedCapSaturated,
     },
   };
 }
@@ -761,6 +856,7 @@ export function assembleBlockCloneArtifact({
   generated = new Date().toISOString(),
   thresholds = DEFAULT_BLOCK_CLONE_THRESHOLDS,
 }) {
+  const effectiveThresholds = normalizeBlockCloneThresholds(thresholds);
   const tokenizedFiles = [];
   const skipped = [];
   const diagnostics = [];
@@ -788,14 +884,28 @@ export function assembleBlockCloneArtifact({
   }
 
   const { values, meta } = compressTokenValues(tokenizedFiles);
-  const extractedGroups = extractGroups(values, meta, thresholds);
+  const extractedGroups = extractGroups(values, meta, effectiveThresholds);
   const { groups, noisePolicy } = applyBlockCloneNoisePolicy(extractedGroups, {
-    thresholds,
+    thresholds: effectiveThresholds,
   });
   const status =
     diagnostics.length > 0 || skipped.length > 0
       ? "confidence-limited"
       : "complete";
+  const artifactThresholds = {
+    policyId: BLOCK_CLONE_THRESHOLD_POLICY_ID,
+    minTokens: effectiveThresholds.minTokens,
+    minLines: effectiveThresholds.minLines,
+    minOccurrences: effectiveThresholds.minOccurrences,
+    maxInstancesPerGroup: effectiveThresholds.maxInstancesPerGroup,
+    maxCandidateGroups: effectiveThresholds.maxCandidateGroups,
+    maxReviewGroups: effectiveThresholds.maxReviewGroups,
+    maxMutedGroups: effectiveThresholds.maxMutedGroups,
+    maxTokensPerFile: effectiveThresholds.maxTokensPerFile,
+  };
+  if (typeof effectiveThresholds.maxGroups === "number") {
+    artifactThresholds.maxGroups = effectiveThresholds.maxGroups;
+  }
 
   return {
     schemaVersion: BLOCK_CLONE_SCHEMA_VERSION,
@@ -815,10 +925,7 @@ export function assembleBlockCloneArtifact({
       literalPolicy: "classify",
       importDeclarationPolicy: "skip",
     },
-    thresholds: {
-      policyId: BLOCK_CLONE_THRESHOLD_POLICY_ID,
-      ...thresholds,
-    },
+    thresholds: artifactThresholds,
     summary: {
       fileCount: tokenizedFiles.length,
       tokenCount: tokenizedFiles.reduce(
