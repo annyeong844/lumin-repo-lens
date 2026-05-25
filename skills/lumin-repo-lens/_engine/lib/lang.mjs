@@ -42,6 +42,11 @@ const JSX_EXTS = /\.jsx$/i;
 // dual-emit package missed half its definitions; etc.
 export const JS_FAMILY_LANGS = ['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs'];
 
+// Single-file component containers are not JS-family parser inputs.
+// They are counted by triage/blind-zone reporting until dedicated script
+// extraction exists.
+export const SFC_FAMILY_LANGS = ['vue', 'svelte', 'astro'];
+
 export function langForFile(filePath) {
   if (DTS_EXTS.test(filePath)) return 'dts';
   if (TSX_EXTS.test(filePath)) return 'tsx';

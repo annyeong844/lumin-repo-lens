@@ -26,7 +26,7 @@
 // like: "This repo contains 18 Rust files; I am limiting absence
 // claims to the TS/JS graph only."
 
-import { JS_FAMILY_LANGS } from './lang.mjs';
+import { JS_FAMILY_LANGS, SFC_FAMILY_LANGS } from './lang.mjs';
 import { getThresholdPolicy, thresholdPolicySummary } from './threshold-policies.mjs';
 
 // Extractors currently registered in the pipeline. If triage reports
@@ -37,6 +37,7 @@ const SUPPORTED_LANGS = new Set([
   'py', // Python: partial — function/class/__all__ yes, method resolution no
   'go', // Go: tree-sitter-based, limited
 ]);
+const SFC_LANGS = new Set(SFC_FAMILY_LANGS);
 
 const RESOLVER_BLIND_ZONE_POLICY = getThresholdPolicy('resolver-blind-zone-policy');
 const RESOLVER_BLIND_ZONE_THRESHOLDS = RESOLVER_BLIND_ZONE_POLICY.thresholds;
@@ -120,6 +121,42 @@ function goZone(files, support) {
   };
 }
 
+function sfcCountsFromTriage(triage) {
+  const byLang = triage?.byLanguage ?? triage?.languages ?? triage?.summary?.byLanguage ?? null;
+  const languages = {};
+  if (byLang && typeof byLang === 'object') {
+    for (const lang of SFC_FAMILY_LANGS) {
+      const count = byLang[lang];
+      const n = typeof count === 'number' ? count : (count?.files ?? 0);
+      if (n > 0) languages[lang] = n;
+    }
+  }
+
+  const explicitTotal = Object.values(languages).reduce((sum, count) => sum + count, 0);
+  const shapeTotal = triage?.shape && typeof triage.shape.sfcFiles === 'number'
+    ? triage.shape.sfcFiles
+    : 0;
+  const total = Math.max(explicitTotal, shapeTotal);
+  return total > 0 ? { total, languages } : null;
+}
+
+function sfcZone(triage) {
+  const counts = sfcCountsFromTriage(triage);
+  if (!counts) return null;
+  return {
+    area: 'sfc-scan-gap',
+    severity: 'scan-gap',
+    effect:
+      'Vue/Svelte/Astro single-file components were counted by triage but are not included in the symbol graph; ' +
+      'do not make repo-wide absence claims for SFC-owned imports, exports, or template reachability.',
+    details: {
+      files: counts.total,
+      languages: counts.languages,
+      reason: 'sfc-extractor-not-registered',
+    },
+  };
+}
+
 function detectShapeZones(triage, support) {
   const shape = triage?.shape ?? null;
   if (!shape || typeof shape.totalFiles !== 'number') return [];
@@ -129,7 +166,8 @@ function detectShapeZones(triage, support) {
     (shape.tsFiles   ?? 0) +
     (shape.jsFiles   ?? 0) +
     (shape.pyFiles   ?? 0) +
-    (shape.goFiles   ?? 0);
+    (shape.goFiles   ?? 0) +
+    (shape.sfcFiles  ?? 0);
   // Note: testFiles is a SUBSET of the others, so it's already counted.
   const unknown = shape.totalFiles - known;
   if (shape.totalFiles > 0 && unknown > 0 && unknown / shape.totalFiles >= SHAPE_UNKNOWN_FILE_SHARE) {
@@ -157,6 +195,7 @@ function detectByLanguageZones(triage, support, existingZones) {
   for (const [lang, count] of Object.entries(byLang)) {
     const n = typeof count === 'number' ? count : (count?.files ?? 0);
     if (n <= 0) continue;
+    if (SFC_LANGS.has(lang)) continue;
     const allZones = [...existingZones, ...zones];
     if (!SUPPORTED_LANGS.has(lang) && !hasArea(allZones, 'unclassified-files', lang)) {
       zones.push({
@@ -454,6 +493,8 @@ export function detectBlindZones({
     ...detectShapeZones(triage, support),
   ];
 
+  const sfc = sfcZone(triage);
+  if (sfc && !hasArea(zones, 'sfc-scan-gap')) zones.push(sfc);
   zones.push(...detectByLanguageZones(triage, support, zones));
   const resolverZone = detectResolverZone(symbols, resolverDiagnostics);
   if (resolverZone) zones.push(resolverZone);

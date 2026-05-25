@@ -11,7 +11,7 @@ import { collectFiles } from '../lib/collect-files.mjs';
 import { isTestLikePath } from '../lib/test-paths.mjs';
 import { relPath } from '../lib/paths.mjs';
 import { readJsonFile, producerMetaBase } from '../lib/artifacts.mjs';
-import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
+import { JS_FAMILY_LANGS, SFC_FAMILY_LANGS } from '../lib/lang.mjs';
 
 const cli = parseCliArgs();
 const { root, output, verbose, includeTests } = cli;
@@ -32,7 +32,7 @@ const repoMode = detectRepoMode(root);
 // count, making dual-emit packages look half their actual size.
 const TS_LANGS = ['ts', 'tsx', 'mts', 'cts'];
 const JS_LANGS = JS_FAMILY_LANGS.filter((lang) => !TS_LANGS.includes(lang));
-const TRIAGE_LANGS = [...TS_LANGS, ...JS_LANGS, 'py', 'go'];
+const TRIAGE_LANGS = [...TS_LANGS, ...JS_LANGS, 'py', 'go', ...SFC_FAMILY_LANGS];
 const allFiles = collectFiles(root, { languages: TRIAGE_LANGS, includeTests, exclude: cli.exclude });
 
 function filesForLanguages(files, languages) {
@@ -40,10 +40,21 @@ function filesForLanguages(files, languages) {
   return files.filter((file) => extSet.has(path.extname(file)));
 }
 
+function countByLanguage(files, languages) {
+  const counts = {};
+  for (const lang of languages) {
+    const count = filesForLanguages(files, [lang]).length;
+    if (count > 0) counts[lang] = count;
+  }
+  return counts;
+}
+
 const tsFiles = filesForLanguages(allFiles, TS_LANGS);
 const jsFiles = filesForLanguages(allFiles, JS_LANGS);
 const pyFiles = filesForLanguages(allFiles, ['py']);
 const goFiles = filesForLanguages(allFiles, ['go']);
+const sfcFiles = filesForLanguages(allFiles, SFC_FAMILY_LANGS);
+const byLanguage = countByLanguage(allFiles, TRIAGE_LANGS);
 const fileCollectionPerformance = {
   strategy: 'single-pass-language-split',
   collectFilesCalls: 1,
@@ -54,19 +65,21 @@ const fileCollectionPerformance = {
     js: jsFiles.length,
     py: pyFiles.length,
     go: goFiles.length,
+    sfc: sfcFiles.length,
   },
 };
 
-const totalFiles = tsFiles.length + jsFiles.length + pyFiles.length + goFiles.length;
+const sourceFiles = [...tsFiles, ...jsFiles, ...pyFiles, ...goFiles, ...sfcFiles];
+const totalFiles = sourceFiles.length;
 let totalLoc = 0;
 const loc = (f) => {
   try { return readFileSync(f, 'utf8').split('\n').length; } catch { return 0; }
 };
-for (const f of [...tsFiles, ...jsFiles, ...pyFiles, ...goFiles]) totalLoc += loc(f);
+for (const f of sourceFiles) totalLoc += loc(f);
 
 // Test vs production — v1.3.0: delegate to the shared helper so the count
 // matches what `--no-include-tests` scans actually drop.
-const testFiles = [...tsFiles, ...jsFiles, ...pyFiles, ...goFiles].filter(isTestLikePath);
+const testFiles = sourceFiles.filter(isTestLikePath);
 
 // ─── Build system ─────────────────────────────────────────
 const buildSystem = { type: 'unknown' };
@@ -122,7 +135,7 @@ function findAll(dir, pattern, maxDepth) {
 // partition the pre-collected file list in-memory — no subprocess, no
 // shell-injection exposure, and consistent with the language filters used
 // above (Go is included; Python no longer gated on src/tests existence).
-const allShapeFiles = [...tsFiles, ...jsFiles, ...pyFiles, ...goFiles];
+const allShapeFiles = sourceFiles;
 const topDirs = {};
 try {
   for (const entry of readdirSync(root, { withFileTypes: true })) {
@@ -196,9 +209,11 @@ const artifact = {
     jsFiles: jsFiles.length,
     pyFiles: pyFiles.length,
     goFiles: goFiles.length,
+    sfcFiles: sfcFiles.length,
     testFiles: testFiles.length,
     meanLocPerFile: Math.round(totalLoc / Math.max(totalFiles, 1)),
   },
+  byLanguage,
   buildSystem,
   configs,
   boundaries,
