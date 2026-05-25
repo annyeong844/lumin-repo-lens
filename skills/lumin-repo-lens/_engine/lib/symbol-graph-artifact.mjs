@@ -38,6 +38,14 @@ function sortNamespaceReExportDiagnostics(items) {
   );
 }
 
+function sortSfcStyleAssetReferences(items) {
+  return [...(items ?? [])].sort((a, b) =>
+    `${a.consumerFile ?? ''}|${a.fromSpec ?? ''}|${a.source ?? ''}|${a.status ?? ''}`.localeCompare(
+      `${b.consumerFile ?? ''}|${b.fromSpec ?? ''}|${b.source ?? ''}|${b.status ?? ''}`,
+    ),
+  );
+}
+
 function buildTopUnresolvedSpecifiers({
   unresolvedInternalByPrefix,
   prefixExamples,
@@ -385,6 +393,8 @@ export function buildSymbolsArtifact({
   mdxConsumerUses,
   sfcScriptConsumerUses = 0,
   sfcScriptSrcReachabilityUses = 0,
+  sfcStyleAssetReferenceUses = 0,
+  sfcStyleAssetReferences = [],
   dead,
   trulyDead,
   deadInProd,
@@ -417,6 +427,7 @@ export function buildSymbolsArtifact({
         mdxImportConsumers: true,
         sfcScriptImportConsumers: true,
         sfcScriptSrcReachability: true,
+        sfcStyleAssetReferences: true,
         dependencyImportConsumers: true,
         resolvedInternalEdges: true,
         definitionIds: true,
@@ -455,6 +466,7 @@ export function buildSymbolsArtifact({
       mdxConsumers: mdxConsumerUses,
       sfcScriptConsumers: sfcScriptConsumerUses,
       sfcScriptSrcReachability: sfcScriptSrcReachabilityUses,
+      sfcStyleAssetReferences: sfcStyleAssetReferenceUses,
       unresolvedInternalRatio:
         resolvedInternalUses + unresolvedInternalUses > 0
           ? +(
@@ -470,6 +482,9 @@ export function buildSymbolsArtifact({
         ),
     ),
     resolvedInternalEdges: sortResolvedInternalEdges(resolvedInternalEdges),
+    sfcStyleAssetReferences: sortSfcStyleAssetReferences(
+      sfcStyleAssetReferences,
+    ),
     generatedConsumerBlindZones: sortGeneratedConsumerBlindZones(
       generatedConsumerBlindZones,
     ),

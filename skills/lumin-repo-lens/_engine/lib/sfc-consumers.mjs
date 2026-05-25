@@ -91,6 +91,25 @@ function extractScriptSrcBlocks(src, filePath) {
   return blocks;
 }
 
+function extractStyleBlocks(src, filePath) {
+  const lang = sfcLanguageForFile(filePath);
+  if (lang !== 'vue' && lang !== 'svelte' && lang !== 'astro') return [];
+
+  const blocks = [];
+  const styleRe = /<style\b([^>]*)>([\s\S]*?)<\/style>/gi;
+  let match;
+  while ((match = styleRe.exec(src))) {
+    const contentStart = match.index + match[0].indexOf(match[2]);
+    blocks.push({
+      content: match[2],
+      startOffset: contentStart,
+      kind: `${lang}-style`,
+      sfcLanguage: lang,
+    });
+  }
+  return blocks;
+}
+
 function extractAstroFrontmatter(src) {
   const open = src.match(/^---\r?\n/);
   if (!open) return [];
@@ -130,6 +149,159 @@ function parseScriptAst(script, filePath, parserLang) {
   }
 
   return null;
+}
+
+function isCssIdentChar(ch) {
+  return /[A-Za-z0-9_-]/.test(ch);
+}
+
+function skipCssWhitespace(src, index) {
+  let i = index;
+  while (i < src.length && /\s/.test(src[i])) i++;
+  return i;
+}
+
+function skipCssString(src, index) {
+  const quote = src[index];
+  let i = index + 1;
+  while (i < src.length) {
+    if (src[i] === '\\') {
+      i += 2;
+      continue;
+    }
+    if (src[i] === quote) return i + 1;
+    i++;
+  }
+  return i;
+}
+
+function parseCssQuotedValue(src, index) {
+  const quote = src[index];
+  let i = index + 1;
+  let value = '';
+  while (i < src.length) {
+    if (src[i] === '\\') {
+      if (i + 1 < src.length) value += src[i + 1];
+      i += 2;
+      continue;
+    }
+    if (src[i] === quote) return { value, end: i + 1 };
+    value += src[i];
+    i++;
+  }
+  return null;
+}
+
+function parseCssUrlFunction(src, index) {
+  let i = index + 3;
+  if (isCssIdentChar(src[index - 1] ?? '') || isCssIdentChar(src[i] ?? '')) return null;
+  i = skipCssWhitespace(src, i);
+  if (src[i] !== '(') return null;
+  i = skipCssWhitespace(src, i + 1);
+
+  let value = '';
+  if (src[i] === '"' || src[i] === "'") {
+    const parsed = parseCssQuotedValue(src, i);
+    if (!parsed) return null;
+    value = parsed.value;
+    i = skipCssWhitespace(src, parsed.end);
+    if (src[i] !== ')') return null;
+    return { value: value.trim(), end: i + 1 };
+  }
+
+  while (i < src.length && src[i] !== ')') {
+    value += src[i];
+    i++;
+  }
+  if (src[i] !== ')') return null;
+  return { value: value.trim(), end: i + 1 };
+}
+
+function parseCssImportValue(src, index) {
+  let i = index + '@import'.length;
+  if (isCssIdentChar(src[i] ?? '')) return null;
+  i = skipCssWhitespace(src, i);
+
+  if (src.slice(i, i + 3).toLowerCase() === 'url') {
+    const parsed = parseCssUrlFunction(src, i);
+    return parsed ? { ...parsed, importSyntax: 'url' } : null;
+  }
+
+  if (src[i] === '"' || src[i] === "'") {
+    const parsed = parseCssQuotedValue(src, i);
+    return parsed ? { ...parsed, value: parsed.value.trim(), importSyntax: 'string' } : null;
+  }
+
+  return null;
+}
+
+function parseStyleAssetReferences(style, {
+  filePath,
+  fileSource,
+  startOffset,
+  blockKind,
+  sfcLanguage,
+}) {
+  const out = [];
+  let i = 0;
+  while (i < style.length) {
+    if (style[i] === '/' && style[i + 1] === '*') {
+      const end = style.indexOf('*/', i + 2);
+      i = end >= 0 ? end + 2 : style.length;
+      continue;
+    }
+
+    if (style[i] === '"' || style[i] === "'") {
+      i = skipCssString(style, i);
+      continue;
+    }
+
+    if (style[i] === '@' && style.slice(i, i + '@import'.length).toLowerCase() === '@import') {
+      const parsed = parseCssImportValue(style, i);
+      if (parsed) {
+        if (isRelativeSourceSpec(parsed.value)) {
+          out.push({
+            consumerFile: filePath,
+            fromSpec: parsed.value,
+            kind: 'sfc-style-import',
+            source: 'sfc-style-import',
+            styleKind: 'import',
+            importSyntax: parsed.importSyntax,
+            confidence: 'grounded-asset-reference',
+            line: lineOf(fileSource, startOffset + i),
+            sfcBlockKind: blockKind,
+            sfcLanguage,
+          });
+        }
+        i = parsed.end;
+        continue;
+      }
+    }
+
+    if (style.slice(i, i + 3).toLowerCase() === 'url') {
+      const parsed = parseCssUrlFunction(style, i);
+      if (parsed) {
+        if (isRelativeSourceSpec(parsed.value)) {
+          out.push({
+            consumerFile: filePath,
+            fromSpec: parsed.value,
+            kind: 'sfc-style-url',
+            source: 'sfc-style-url',
+            styleKind: 'url',
+            confidence: 'grounded-asset-reference',
+            line: lineOf(fileSource, startOffset + i),
+            sfcBlockKind: blockKind,
+            sfcLanguage,
+          });
+        }
+        i = parsed.end;
+        continue;
+      }
+    }
+
+    i++;
+  }
+  return out;
 }
 
 function importedName(specifier) {
@@ -225,6 +397,20 @@ export function parseSfcScriptSources(src, filePath = '<sfc>') {
   return extractScriptSrcBlocks(src, filePath);
 }
 
+export function parseSfcStyleAssetReferences(src, filePath = '<sfc>') {
+  const out = [];
+  for (const block of extractStyleBlocks(src, filePath)) {
+    out.push(...parseStyleAssetReferences(block.content, {
+      filePath,
+      fileSource: src,
+      startOffset: block.startOffset,
+      blockKind: block.kind,
+      sfcLanguage: block.sfcLanguage,
+    }));
+  }
+  return out;
+}
+
 export function collectSfcImportConsumers({ root, includeTests = true, exclude = [] }) {
   const out = [];
   const files = collectFiles(root, {
@@ -237,6 +423,23 @@ export function collectSfcImportConsumers({ root, includeTests = true, exclude =
     let src;
     try { src = readFileSync(filePath, 'utf8'); } catch { continue; }
     out.push(...parseSfcImportConsumers(src, filePath));
+  }
+
+  return out;
+}
+
+export function collectSfcStyleAssetReferences({ root, includeTests = true, exclude = [] }) {
+  const out = [];
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: SFC_FAMILY_LANGS,
+  });
+
+  for (const filePath of files) {
+    let src;
+    try { src = readFileSync(filePath, 'utf8'); } catch { continue; }
+    out.push(...parseSfcStyleAssetReferences(src, filePath));
   }
 
   return out;
