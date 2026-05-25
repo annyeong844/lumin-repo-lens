@@ -383,6 +383,7 @@ export function buildSymbolsArtifact({
   generatedVirtualImportConsumers,
   unresolvedInternalUses,
   mdxConsumerUses,
+  sfcScriptConsumerUses = 0,
   dead,
   trulyDead,
   deadInProd,
@@ -413,6 +414,7 @@ export function buildSymbolsArtifact({
         identityFanInSpace: true,
         reExportRecords: 'file-level',
         mdxImportConsumers: true,
+        sfcScriptImportConsumers: true,
         dependencyImportConsumers: true,
         resolvedInternalEdges: true,
         definitionIds: true,
@@ -449,6 +451,7 @@ export function buildSymbolsArtifact({
       external: externalUses,
       unresolvedInternal: unresolvedInternalUses,
       mdxConsumers: mdxConsumerUses,
+      sfcScriptConsumers: sfcScriptConsumerUses,
       unresolvedInternalRatio:
         resolvedInternalUses + unresolvedInternalUses > 0
           ? +(

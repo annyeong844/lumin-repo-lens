@@ -26,6 +26,7 @@ import {
   makeResolver,
 } from '../lib/resolver-core.mjs';
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
+import { collectSfcImportConsumers } from '../lib/sfc-consumers.mjs';
 import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
 import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
 import {
@@ -508,6 +509,7 @@ let nonSourceAssetUses = 0;
 let externalUses = 0;
 let unresolvedInternalUses = 0;
 let mdxConsumerUses = 0;
+let sfcScriptConsumerUses = 0;
 const dependencyImportConsumers = [];
 // Spec-frequency counter for topUnresolvedSpecifiers artifact.
 // Keyed by "prefix" (everything up to first /) so "@/foo/a" and
@@ -1099,38 +1101,45 @@ phaseTimer.setCounter('sourceUseFilesProcessed', fileData.size);
 phaseTimer.setCounter('sourceUseRecordsProcessed', useCount);
 phaseTimer.recordPhase('assemble-source-uses', Date.now() - assembleSourceUsesStarted);
 
-const assembleMdxUsesStarted = Date.now();
-const mdxImportConsumers = collectMdxImportConsumers({
-  root: ROOT,
-  includeTests: cli.includeTests,
-  exclude: cli.exclude,
-});
-phaseTimer.setCounter('mdxImportConsumerCandidateCount', mdxImportConsumers.length);
-for (const u of mdxImportConsumers) {
-  const target = resolveSpecifier(u.consumerFile, u);
-  if (target === 'EXTERNAL') {
-    externalUses++;
-    addDependencyImportConsumer(u.consumerFile, u, 'mdx-import');
-    unresolvedUses++;
-    continue;
-  }
-  if (isNonSourceAssetResolution(target)) {
-    nonSourceAssetUses++;
-    continue;
-  }
-  if (target === 'UNRESOLVED_INTERNAL') {
-    unresolvedInternalUses++;
-    unresolvedUses++;
-    const p = prefixOf(u.fromSpec);
-    unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
-    if (!prefixExamples.has(p)) prefixExamples.set(p, u.fromSpec);
-    recordUnresolvedInternalSpecifier(u.consumerFile, u);
-    continue;
-  }
-  if (isGeneratedVirtualResolution(target)) {
-    generatedVirtualSurfaces.set(target.id, target);
-    const exported = generatedVirtualExportForUse(target, u);
-    if (!exported) {
+function processOutOfBandImportConsumers(consumers, source) {
+  let resolvedConsumerUses = 0;
+  for (const u of consumers) {
+    const target = resolveSpecifier(u.consumerFile, u);
+    if (target === 'EXTERNAL') {
+      externalUses++;
+      addDependencyImportConsumer(u.consumerFile, u, source);
+      unresolvedUses++;
+      continue;
+    }
+    if (isNonSourceAssetResolution(target)) {
+      nonSourceAssetUses++;
+      continue;
+    }
+    if (target === 'UNRESOLVED_INTERNAL') {
+      unresolvedInternalUses++;
+      unresolvedUses++;
+      const p = prefixOf(u.fromSpec);
+      unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
+      if (!prefixExamples.has(p)) prefixExamples.set(p, u.fromSpec);
+      recordUnresolvedInternalSpecifier(u.consumerFile, u);
+      continue;
+    }
+    if (isGeneratedVirtualResolution(target)) {
+      generatedVirtualSurfaces.set(target.id, target);
+      const exported = generatedVirtualExportForUse(target, u);
+      if (!exported) {
+        unresolvedInternalUses++;
+        unresolvedUses++;
+        recordUnresolvedInternalSpecifier(u.consumerFile, u);
+        continue;
+      }
+      totalUses++;
+      resolvedInternalUses++;
+      resolvedGeneratedVirtualUses++;
+      addGeneratedVirtualConsumer(u.consumerFile, u, target, exported);
+      continue;
+    }
+    if (!target) {
       unresolvedInternalUses++;
       unresolvedUses++;
       recordUnresolvedInternalSpecifier(u.consumerFile, u);
@@ -1138,28 +1147,41 @@ for (const u of mdxImportConsumers) {
     }
     totalUses++;
     resolvedInternalUses++;
-    resolvedGeneratedVirtualUses++;
-    addGeneratedVirtualConsumer(u.consumerFile, u, target, exported);
-    continue;
+    resolvedConsumerUses++;
+    addResolvedInternalEdge(u.consumerFile, target, u);
+    if (u.kind === 'import-side-effect') continue;
+    if (u.kind === 'namespace') {
+      if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
+      namespaceUsers.get(target).add(u.consumerFile);
+    } else {
+      addConsumer(target, u.name, u.consumerFile, u);
+    }
   }
-  if (!target) {
-    unresolvedInternalUses++;
-    unresolvedUses++;
-    recordUnresolvedInternalSpecifier(u.consumerFile, u);
-    continue;
-  }
-  totalUses++;
-  resolvedInternalUses++;
-  mdxConsumerUses++;
-  addResolvedInternalEdge(u.consumerFile, target, u);
-  if (u.kind === 'namespace') {
-    if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
-    namespaceUsers.get(target).add(u.consumerFile);
-  } else {
-    addConsumer(target, u.name, u.consumerFile, u);
-  }
+  return resolvedConsumerUses;
 }
+
+const assembleMdxUsesStarted = Date.now();
+const mdxImportConsumers = collectMdxImportConsumers({
+  root: ROOT,
+  includeTests: cli.includeTests,
+  exclude: cli.exclude,
+});
+phaseTimer.setCounter('mdxImportConsumerCandidateCount', mdxImportConsumers.length);
+mdxConsumerUses = processOutOfBandImportConsumers(mdxImportConsumers, 'mdx-import');
 phaseTimer.recordPhase('assemble-mdx-uses', Date.now() - assembleMdxUsesStarted);
+
+const assembleSfcScriptUsesStarted = Date.now();
+const sfcImportConsumers = collectSfcImportConsumers({
+  root: ROOT,
+  includeTests: cli.includeTests,
+  exclude: cli.exclude,
+});
+phaseTimer.setCounter('sfcScriptImportConsumerCandidateCount', sfcImportConsumers.length);
+sfcScriptConsumerUses = processOutOfBandImportConsumers(
+  sfcImportConsumers,
+  'sfc-script-import',
+);
+phaseTimer.recordPhase('assemble-sfc-script-uses', Date.now() - assembleSfcScriptUsesStarted);
 
 console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
 console.log(`[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`);
@@ -1172,6 +1194,7 @@ phaseTimer.setCounter('nonSourceAssetUses', nonSourceAssetUses);
 phaseTimer.setCounter('externalUses', externalUses);
 phaseTimer.setCounter('unresolvedInternalUses', unresolvedInternalUses);
 phaseTimer.setCounter('mdxConsumerUses', mdxConsumerUses);
+phaseTimer.setCounter('sfcScriptConsumerUses', sfcScriptConsumerUses);
 phaseTimer.setCounter('dependencyImportConsumerCount', dependencyImportConsumers.length);
 phaseTimer.setCounter('resolvedInternalEdgeCount', resolvedInternalEdges.length);
 phaseTimer.setCounter('unresolvedInternalSpecifierCount', unresolvedInternalSpecifiers.size);
@@ -1385,6 +1408,7 @@ const artifact = buildSymbolsArtifact({
   generatedVirtualImportConsumers,
   unresolvedInternalUses,
   mdxConsumerUses,
+  sfcScriptConsumerUses,
   dead,
   trulyDead,
   deadInProd,
