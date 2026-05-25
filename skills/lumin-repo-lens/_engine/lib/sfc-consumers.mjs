@@ -13,7 +13,20 @@ function lineOf(src, offset) {
 }
 
 function attrsHaveSrc(attrs) {
-  return /\bsrc\s*=/i.test(attrs ?? '');
+  return srcAttrValue(attrs) !== null;
+}
+
+function srcAttrValue(attrs) {
+  const match = `${attrs ?? ''}`.match(
+    /(?:^|\s)src\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/i,
+  );
+  if (!match) return null;
+  return match[1] ?? match[2] ?? match[3] ?? '';
+}
+
+function isRelativeSourceSpec(spec) {
+  return typeof spec === 'string' &&
+    (spec.startsWith('./') || spec.startsWith('../'));
 }
 
 function parserLangFromAttrs(attrs) {
@@ -48,6 +61,31 @@ function extractScriptBlocks(src, filePath) {
         ? 'vue-script-setup'
         : `${lang}-script`,
       parserLang: parserLangFromAttrs(attrs),
+    });
+  }
+  return blocks;
+}
+
+function extractScriptSrcBlocks(src, filePath) {
+  const lang = sfcLanguageForFile(filePath);
+  if (lang !== 'vue' && lang !== 'svelte') return [];
+
+  const blocks = [];
+  const scriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let match;
+  while ((match = scriptRe.exec(src))) {
+    const attrs = match[1] ?? '';
+    const fromSpec = srcAttrValue(attrs);
+    if (!isRelativeSourceSpec(fromSpec)) continue;
+    blocks.push({
+      consumerFile: filePath,
+      fromSpec,
+      name: '*',
+      kind: 'sfc-script-src',
+      typeOnly: false,
+      line: lineOf(src, match.index),
+      sfcBlockKind: `${lang}-script-src`,
+      sfcLanguage: lang,
     });
   }
   return blocks;
@@ -183,6 +221,10 @@ export function parseSfcImportConsumers(src, filePath = '<sfc>') {
   return out;
 }
 
+export function parseSfcScriptSources(src, filePath = '<sfc>') {
+  return extractScriptSrcBlocks(src, filePath);
+}
+
 export function collectSfcImportConsumers({ root, includeTests = true, exclude = [] }) {
   const out = [];
   const files = collectFiles(root, {
@@ -195,6 +237,23 @@ export function collectSfcImportConsumers({ root, includeTests = true, exclude =
     let src;
     try { src = readFileSync(filePath, 'utf8'); } catch { continue; }
     out.push(...parseSfcImportConsumers(src, filePath));
+  }
+
+  return out;
+}
+
+export function collectSfcScriptSources({ root, includeTests = true, exclude = [] }) {
+  const out = [];
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: SFC_FAMILY_LANGS,
+  });
+
+  for (const filePath of files) {
+    let src;
+    try { src = readFileSync(filePath, 'utf8'); } catch { continue; }
+    out.push(...parseSfcScriptSources(src, filePath));
   }
 
   return out;

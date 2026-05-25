@@ -26,7 +26,10 @@ import {
   makeResolver,
 } from '../lib/resolver-core.mjs';
 import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
-import { collectSfcImportConsumers } from '../lib/sfc-consumers.mjs';
+import {
+  collectSfcImportConsumers,
+  collectSfcScriptSources,
+} from '../lib/sfc-consumers.mjs';
 import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
 import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
 import {
@@ -510,6 +513,7 @@ let externalUses = 0;
 let unresolvedInternalUses = 0;
 let mdxConsumerUses = 0;
 let sfcScriptConsumerUses = 0;
+let sfcScriptSrcReachabilityUses = 0;
 const dependencyImportConsumers = [];
 // Spec-frequency counter for topUnresolvedSpecifiers artifact.
 // Keyed by "prefix" (everything up to first /) so "@/foo/a" and
@@ -564,6 +568,8 @@ function addResolvedInternalEdge(consumerFile, target, use) {
     kind: edgeKindForUse(use),
     source: fromSpec,
     typeOnly: typeof use === 'object' ? !!use.typeOnly : false,
+    ...(typeof use === 'object' && Number.isFinite(use.line) ? { line: use.line } : {}),
+    ...(typeof use === 'object' && use.sfcLanguage ? { sfcLanguage: use.sfcLanguage } : {}),
   });
 }
 
@@ -1160,6 +1166,45 @@ function processOutOfBandImportConsumers(consumers, source) {
   return resolvedConsumerUses;
 }
 
+function processSfcScriptSourceReachability(consumers) {
+  let resolvedReachabilityUses = 0;
+  for (const u of consumers) {
+    const target = resolveSpecifier(u.consumerFile, u);
+    if (target === 'EXTERNAL') continue;
+    if (isNonSourceAssetResolution(target)) {
+      nonSourceAssetUses++;
+      continue;
+    }
+    if (target === 'UNRESOLVED_INTERNAL' || !target) {
+      const diagnosticUse = {
+        ...u,
+        reason: 'sfc-script-src-unresolved',
+        resolverStage: 'sfc-script-src',
+        outputLevel: 'unsupported',
+        unsupportedFamily: 'sfc-script-src',
+        hint: 'sfc-script-src-reachability',
+      };
+      unresolvedInternalUses++;
+      unresolvedUses++;
+      const p = prefixOf(u.fromSpec);
+      unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
+      if (!prefixExamples.has(p)) prefixExamples.set(p, u.fromSpec);
+      recordUnresolvedInternalSpecifier(u.consumerFile, diagnosticUse);
+      continue;
+    }
+    if (isGeneratedVirtualResolution(target)) {
+      generatedVirtualSurfaces.set(target.id, target);
+      continue;
+    }
+
+    totalUses++;
+    resolvedInternalUses++;
+    resolvedReachabilityUses++;
+    addResolvedInternalEdge(u.consumerFile, target, u);
+  }
+  return resolvedReachabilityUses;
+}
+
 const assembleMdxUsesStarted = Date.now();
 const mdxImportConsumers = collectMdxImportConsumers({
   root: ROOT,
@@ -1183,6 +1228,16 @@ sfcScriptConsumerUses = processOutOfBandImportConsumers(
 );
 phaseTimer.recordPhase('assemble-sfc-script-uses', Date.now() - assembleSfcScriptUsesStarted);
 
+const assembleSfcScriptSrcStarted = Date.now();
+const sfcScriptSources = collectSfcScriptSources({
+  root: ROOT,
+  includeTests: cli.includeTests,
+  exclude: cli.exclude,
+});
+phaseTimer.setCounter('sfcScriptSrcCandidateCount', sfcScriptSources.length);
+sfcScriptSrcReachabilityUses = processSfcScriptSourceReachability(sfcScriptSources);
+phaseTimer.recordPhase('assemble-sfc-script-src-uses', Date.now() - assembleSfcScriptSrcStarted);
+
 console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
 console.log(`[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`);
 console.log(`[defs] total symbols: ${[...defIndex.values()].reduce((a, m) => a + m.size, 0)}`);
@@ -1195,6 +1250,7 @@ phaseTimer.setCounter('externalUses', externalUses);
 phaseTimer.setCounter('unresolvedInternalUses', unresolvedInternalUses);
 phaseTimer.setCounter('mdxConsumerUses', mdxConsumerUses);
 phaseTimer.setCounter('sfcScriptConsumerUses', sfcScriptConsumerUses);
+phaseTimer.setCounter('sfcScriptSrcReachabilityUses', sfcScriptSrcReachabilityUses);
 phaseTimer.setCounter('dependencyImportConsumerCount', dependencyImportConsumers.length);
 phaseTimer.setCounter('resolvedInternalEdgeCount', resolvedInternalEdges.length);
 phaseTimer.setCounter('unresolvedInternalSpecifierCount', unresolvedInternalSpecifiers.size);
@@ -1409,6 +1465,7 @@ const artifact = buildSymbolsArtifact({
   unresolvedInternalUses,
   mdxConsumerUses,
   sfcScriptConsumerUses,
+  sfcScriptSrcReachabilityUses,
   dead,
   trulyDead,
   deadInProd,

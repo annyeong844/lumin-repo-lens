@@ -384,6 +384,7 @@ export function buildSymbolsArtifact({
   unresolvedInternalUses,
   mdxConsumerUses,
   sfcScriptConsumerUses = 0,
+  sfcScriptSrcReachabilityUses = 0,
   dead,
   trulyDead,
   deadInProd,
@@ -415,6 +416,7 @@ export function buildSymbolsArtifact({
         reExportRecords: 'file-level',
         mdxImportConsumers: true,
         sfcScriptImportConsumers: true,
+        sfcScriptSrcReachability: true,
         dependencyImportConsumers: true,
         resolvedInternalEdges: true,
         definitionIds: true,
@@ -452,6 +454,7 @@ export function buildSymbolsArtifact({
       unresolvedInternal: unresolvedInternalUses,
       mdxConsumers: mdxConsumerUses,
       sfcScriptConsumers: sfcScriptConsumerUses,
+      sfcScriptSrcReachability: sfcScriptSrcReachabilityUses,
       unresolvedInternalRatio:
         resolvedInternalUses + unresolvedInternalUses > 0
           ? +(
