@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.0-beta.65 - 2026-05-26
+
+### SFC style asset evidence
+
+- Record literal relative SFC style `url()` and `@import` references in
+  `symbols.json.sfcStyleAssetReferences[]`.
+- Keep style assets out of JS/TS graph edges and named export fan-in; missing
+  relative style assets stay diagnostic-only.
+- Update the generated skill and plugin package versions for a fresh
+  installable beta.
+
 ### Write-gate feedback fixes
 
 - Load absolute `preWrite.anyInventoryPath` values as exact paths during
