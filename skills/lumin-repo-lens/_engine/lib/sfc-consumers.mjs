@@ -175,14 +175,38 @@ function skipCssString(src, index) {
   return i;
 }
 
+function parseCssEscapeValue(src, index) {
+  if (src[index] !== '\\') return null;
+  let i = index + 1;
+  if (i >= src.length) return { value: '', end: i };
+
+  if (src[i] === '\r' && src[i + 1] === '\n') return { value: '', end: i + 2 };
+  if (src[i] === '\n' || src[i] === '\r' || src[i] === '\f') return { value: '', end: i + 1 };
+
+  if (/[0-9A-Fa-f]/.test(src[i])) {
+    let hex = '';
+    while (i < src.length && hex.length < 6 && /[0-9A-Fa-f]/.test(src[i])) {
+      hex += src[i];
+      i++;
+    }
+    if (/\s/.test(src[i] ?? '')) i++;
+    const codePoint = Number.parseInt(hex, 16);
+    const validCodePoint = Number.isFinite(codePoint) && codePoint > 0 && codePoint <= 0x10ffff;
+    return { value: validCodePoint ? String.fromCodePoint(codePoint) : '\uFFFD', end: i };
+  }
+
+  return { value: src[i], end: i + 1 };
+}
+
 function parseCssQuotedValue(src, index) {
   const quote = src[index];
   let i = index + 1;
   let value = '';
   while (i < src.length) {
     if (src[i] === '\\') {
-      if (i + 1 < src.length) value += src[i + 1];
-      i += 2;
+      const escaped = parseCssEscapeValue(src, i);
+      value += escaped?.value ?? '';
+      i = escaped?.end ?? i + 1;
       continue;
     }
     if (src[i] === quote) return { value, end: i + 1 };
@@ -210,6 +234,12 @@ function parseCssUrlFunction(src, index) {
   }
 
   while (i < src.length && src[i] !== ')') {
+    if (src[i] === '\\') {
+      const escaped = parseCssEscapeValue(src, i);
+      value += escaped?.value ?? '';
+      i = escaped?.end ?? i + 1;
+      continue;
+    }
     value += src[i];
     i++;
   }
