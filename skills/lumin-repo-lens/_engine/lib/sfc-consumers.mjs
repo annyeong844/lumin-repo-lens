@@ -42,6 +42,18 @@ function sfcLanguageForFile(filePath) {
   return path.extname(filePath).replace(/^\./, '').toLowerCase();
 }
 
+function stripHtmlComments(src) {
+  return `${src ?? ''}`.replace(/<!--[\s\S]*?-->/g, (match) =>
+    ' '.repeat(match.length));
+}
+
+function stripSvelteNonTemplateBlocks(src) {
+  return `${src ?? ''}`.replace(
+    /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    (match) => ' '.repeat(match.length),
+  );
+}
+
 function extractScriptBlocks(src, filePath) {
   const lang = sfcLanguageForFile(filePath);
   if (lang === 'astro') return extractAstroFrontmatter(src);
@@ -64,6 +76,46 @@ function extractScriptBlocks(src, filePath) {
     });
   }
   return blocks;
+}
+
+function extractTemplateBlocks(src, filePath) {
+  const lang = sfcLanguageForFile(filePath);
+  if (lang === 'astro') {
+    const frontmatter = extractAstroFrontmatter(src)[0];
+    const startOffset = frontmatter
+      ? frontmatter.startOffset + frontmatter.content.length + 4
+      : 0;
+    return [{
+      content: src.slice(startOffset),
+      startOffset,
+      kind: 'astro-template',
+      sfcLanguage: 'astro',
+    }];
+  }
+  if (lang === 'vue') {
+    const blocks = [];
+    const templateRe = /<template\b([^>]*)>([\s\S]*?)<\/template>/gi;
+    let match;
+    while ((match = templateRe.exec(src))) {
+      const contentStart = match.index + match[0].indexOf(match[2]);
+      blocks.push({
+        content: match[2],
+        startOffset: contentStart,
+        kind: 'vue-template',
+        sfcLanguage: 'vue',
+      });
+    }
+    return blocks;
+  }
+  if (lang === 'svelte') {
+    return [{
+      content: stripSvelteNonTemplateBlocks(src),
+      startOffset: 0,
+      kind: 'svelte-template',
+      sfcLanguage: 'svelte',
+    }];
+  }
+  return [];
 }
 
 function extractScriptSrcBlocks(src, filePath) {
@@ -338,6 +390,14 @@ function importedName(specifier) {
   return specifier?.imported?.name ?? specifier?.imported?.value ?? null;
 }
 
+function astPropertyName(node) {
+  const key = node?.key ?? node;
+  if (!key) return null;
+  if (typeof key.name === 'string') return key.name;
+  if (typeof key.value === 'string') return key.value;
+  return null;
+}
+
 function parseScriptImportConsumers(script, {
   filePath,
   fileSource,
@@ -409,6 +469,256 @@ function parseScriptImportConsumers(script, {
   return out;
 }
 
+function importLocalName(specifier) {
+  return specifier?.local?.name ?? null;
+}
+
+function collectComponentRegistrations(program) {
+  const out = new Map();
+  for (const node of program.body ?? []) {
+    if (node?.type !== 'ExportDefaultDeclaration') continue;
+    const declaration = node.declaration;
+    if (declaration?.type !== 'ObjectExpression') continue;
+    for (const prop of declaration.properties ?? []) {
+      if (prop?.type !== 'Property') continue;
+      if (astPropertyName(prop) !== 'components') continue;
+      if (prop.value?.type !== 'ObjectExpression') continue;
+      for (const componentProp of prop.value.properties ?? []) {
+        if (componentProp?.type !== 'Property') continue;
+        const tagName = astPropertyName(componentProp);
+        const bindingName = componentProp.value?.type === 'Identifier'
+          ? componentProp.value.name
+          : null;
+        if (tagName && bindingName) out.set(tagName, bindingName);
+      }
+    }
+  }
+  return out;
+}
+
+function collectScriptComponentBindings(src, filePath) {
+  const imports = new Map();
+  const namespaceImports = new Map();
+  const exposedNames = new Map();
+  const lang = sfcLanguageForFile(filePath);
+
+  for (const block of extractScriptBlocks(src, filePath)) {
+    const program = parseScriptAst(block.content, filePath, block.parserLang);
+    if (!program) continue;
+    const blockImports = new Map();
+    const blockNamespaceImports = new Map();
+
+    for (const node of program.body ?? []) {
+      if (node?.type !== 'ImportDeclaration') continue;
+      const fromSpec = node.source?.value;
+      if (typeof fromSpec !== 'string' || fromSpec.length === 0) continue;
+      if (node.importKind === 'type') continue;
+      for (const specifier of node.specifiers ?? []) {
+        if (specifier.importKind === 'type') continue;
+        const bindingName = importLocalName(specifier);
+        if (!bindingName) continue;
+        if (specifier.type === 'ImportNamespaceSpecifier') {
+          const record = {
+            bindingName,
+            bindingSource: fromSpec,
+            bindingKind: 'namespace',
+            line: lineOf(src, block.startOffset + node.start),
+            sfcBlockKind: block.kind,
+          };
+          namespaceImports.set(bindingName, record);
+          blockNamespaceImports.set(bindingName, record);
+          continue;
+        }
+        if (
+          specifier.type !== 'ImportDefaultSpecifier' &&
+          specifier.type !== 'ImportSpecifier'
+        ) {
+          continue;
+        }
+        const record = {
+          bindingName,
+          bindingSource: fromSpec,
+          bindingKind: specifier.type === 'ImportDefaultSpecifier'
+            ? 'default'
+            : 'named',
+          importedName: specifier.type === 'ImportDefaultSpecifier'
+            ? 'default'
+            : importedName(specifier),
+          line: lineOf(src, block.startOffset + node.start),
+          sfcBlockKind: block.kind,
+        };
+        imports.set(bindingName, record);
+        blockImports.set(bindingName, record);
+      }
+    }
+
+    if (lang === 'vue' && !block.kind.includes('setup')) {
+      const registrations = collectComponentRegistrations(program);
+      for (const [tagName, bindingName] of registrations) {
+        const record = blockImports.get(bindingName);
+        if (record) exposedNames.set(tagName, record);
+      }
+    } else {
+      for (const [bindingName, record] of blockImports) {
+        exposedNames.set(bindingName, record);
+      }
+    }
+
+    for (const [bindingName, record] of blockNamespaceImports) {
+      namespaceImports.set(bindingName, record);
+    }
+  }
+
+  return { imports, namespaceImports, exposedNames };
+}
+
+function pascalFromKebab(value) {
+  if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(value)) return null;
+  return value
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1))
+    .join('');
+}
+
+function isPascalTag(value) {
+  return /^[A-Z][A-Za-z0-9]*$/.test(value);
+}
+
+function templateTagCandidates(tagName) {
+  if (isPascalTag(tagName)) return [tagName];
+  const pascal = pascalFromKebab(tagName);
+  return pascal ? [pascal, tagName] : [];
+}
+
+function dynamicTemplateBindingName(tagName, attrs) {
+  const tag = `${tagName ?? ''}`.toLowerCase();
+  if (tag === 'component') {
+    const match = `${attrs ?? ''}`.match(/(?:^|\s)(?::is|v-bind:is)\s*=\s*(?:"([^"]+)"|'([^']+)')/i);
+    const value = match?.[1] ?? match?.[2] ?? '';
+    return /^[A-Za-z_$][\w$]*$/.test(value) ? value : null;
+  }
+  if (tag === 'svelte:component') {
+    const match = `${attrs ?? ''}`.match(/\bthis\s*=\s*\{\s*([A-Za-z_$][\w$]*)\s*\}/i);
+    return match?.[1] ?? null;
+  }
+  return null;
+}
+
+function templateRefRecord({
+  filePath,
+  tagName,
+  normalizedTagName,
+  binding,
+  line,
+  blockKind,
+  sfcLanguage,
+  templateKind,
+  status = 'binding',
+  reason = null,
+  extra = {},
+}) {
+  return {
+    consumerFile: filePath,
+    tagName,
+    normalizedTagName,
+    bindingName: binding.bindingName,
+    bindingSource: binding.bindingSource,
+    fromSpec: binding.bindingSource,
+    bindingKind: binding.bindingKind,
+    ...(binding.importedName ? { importedName: binding.importedName } : {}),
+    source: 'sfc-template-component-ref',
+    language: sfcLanguage,
+    templateKind,
+    confidence: status === 'muted' ? 'muted-review' : 'binding-review',
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status,
+    ...(reason ? { reason } : {}),
+    line,
+    sfcBlockKind: blockKind,
+    ...extra,
+  };
+}
+
+function parseTemplateTags(template, {
+  filePath,
+  fileSource,
+  startOffset,
+  blockKind,
+  sfcLanguage,
+  bindings,
+}) {
+  const out = [];
+  const cleaned = stripHtmlComments(template);
+  const tagRe = /<\s*([A-Za-z][A-Za-z0-9.:-]*)([^<>]*?)(?:\/?)>/g;
+  let match;
+  while ((match = tagRe.exec(cleaned))) {
+    const tagName = match[1];
+    const attrs = match[2] ?? '';
+    const line = lineOf(fileSource, startOffset + match.index);
+
+    const dynamicName = dynamicTemplateBindingName(tagName, attrs);
+    if (dynamicName) {
+      const binding = bindings.imports.get(dynamicName) ??
+        bindings.exposedNames.get(dynamicName);
+      if (binding) {
+        out.push(templateRefRecord({
+          filePath,
+          tagName,
+          normalizedTagName: dynamicName,
+          binding,
+          line,
+          blockKind,
+          sfcLanguage,
+          templateKind: 'dynamic-component',
+          status: 'muted',
+          reason: 'sfc-template-dynamic-component',
+        }));
+      }
+      continue;
+    }
+
+    if (tagName.includes('.')) {
+      const [namespaceName, memberName] = tagName.split('.', 2);
+      const binding = bindings.namespaceImports.get(namespaceName);
+      if (binding && memberName) {
+        out.push(templateRefRecord({
+          filePath,
+          tagName,
+          normalizedTagName: tagName,
+          binding,
+          line,
+          blockKind,
+          sfcLanguage,
+          templateKind: 'namespace-component-tag',
+          status: 'muted',
+          reason: 'sfc-template-namespace-component',
+          extra: { memberName },
+        }));
+      }
+      continue;
+    }
+
+    for (const candidate of templateTagCandidates(tagName)) {
+      const binding = bindings.exposedNames.get(candidate);
+      if (!binding) continue;
+      out.push(templateRefRecord({
+        filePath,
+        tagName,
+        normalizedTagName: candidate,
+        binding,
+        line,
+        blockKind,
+        sfcLanguage,
+        templateKind: 'component-tag',
+      }));
+      break;
+    }
+  }
+  return out;
+}
+
 export function parseSfcImportConsumers(src, filePath = '<sfc>') {
   const out = [];
   for (const block of extractScriptBlocks(src, filePath)) {
@@ -418,6 +728,22 @@ export function parseSfcImportConsumers(src, filePath = '<sfc>') {
       startOffset: block.startOffset,
       blockKind: block.kind,
       parserLang: block.parserLang,
+    }));
+  }
+  return out;
+}
+
+export function parseSfcTemplateComponentRefs(src, filePath = '<sfc>') {
+  const out = [];
+  const bindings = collectScriptComponentBindings(src, filePath);
+  for (const block of extractTemplateBlocks(src, filePath)) {
+    out.push(...parseTemplateTags(block.content, {
+      filePath,
+      fileSource: src,
+      startOffset: block.startOffset,
+      blockKind: block.kind,
+      sfcLanguage: block.sfcLanguage,
+      bindings,
     }));
   }
   return out;
@@ -453,6 +779,23 @@ export function collectSfcImportConsumers({ root, includeTests = true, exclude =
     let src;
     try { src = readFileSync(filePath, 'utf8'); } catch { continue; }
     out.push(...parseSfcImportConsumers(src, filePath));
+  }
+
+  return out;
+}
+
+export function collectSfcTemplateComponentRefs({ root, includeTests = true, exclude = [] }) {
+  const out = [];
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: SFC_FAMILY_LANGS,
+  });
+
+  for (const filePath of files) {
+    let src;
+    try { src = readFileSync(filePath, 'utf8'); } catch { continue; }
+    out.push(...parseSfcTemplateComponentRefs(src, filePath));
   }
 
   return out;

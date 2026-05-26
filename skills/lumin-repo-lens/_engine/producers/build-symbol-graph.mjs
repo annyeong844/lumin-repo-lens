@@ -30,6 +30,7 @@ import {
   collectSfcImportConsumers,
   collectSfcScriptSources,
   collectSfcStyleAssetReferences,
+  collectSfcTemplateComponentRefs,
 } from '../lib/sfc-consumers.mjs';
 import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
 import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
@@ -516,6 +517,7 @@ let mdxConsumerUses = 0;
 let sfcScriptConsumerUses = 0;
 let sfcScriptSrcReachabilityUses = 0;
 let sfcStyleAssetReferenceUses = 0;
+let sfcTemplateComponentRefUses = 0;
 const dependencyImportConsumers = [];
 // Spec-frequency counter for topUnresolvedSpecifiers artifact.
 // Keyed by "prefix" (everything up to first /) so "@/foo/a" and
@@ -531,6 +533,7 @@ const unresolvedInternalSpecifiers = new Set();
 const unresolvedInternalSpecifierRecords = [];
 const resolvedInternalEdges = [];
 const sfcStyleAssetReferences = [];
+const sfcTemplateComponentRefs = [];
 const generatedVirtualSurfaces = new Map();
 const generatedVirtualImportConsumers = [];
 function prefixOf(spec) {
@@ -600,6 +603,30 @@ function addSfcStyleAssetReference(use, { status, resolvedFile = null, reason = 
     ...(Number.isFinite(use.line) ? { line: use.line } : {}),
     ...(use.sfcBlockKind ? { sfcBlockKind: use.sfcBlockKind } : {}),
     ...(use.sfcLanguage ? { sfcLanguage: use.sfcLanguage } : {}),
+  });
+}
+
+function addSfcTemplateComponentRef(use, { status, resolvedFile = null, reason = null }) {
+  sfcTemplateComponentRefs.push({
+    consumerFile: relPath(ROOT, use.consumerFile),
+    tagName: use.tagName,
+    normalizedTagName: use.normalizedTagName,
+    bindingName: use.bindingName,
+    bindingSource: use.bindingSource,
+    source: use.source,
+    language: use.language,
+    templateKind: use.templateKind,
+    confidence: use.confidence,
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status,
+    ...(resolvedFile ? { resolvedFile: relPath(ROOT, resolvedFile) } : {}),
+    ...(reason ? { reason } : {}),
+    ...(use.bindingKind ? { bindingKind: use.bindingKind } : {}),
+    ...(use.importedName ? { importedName: use.importedName } : {}),
+    ...(use.memberName ? { memberName: use.memberName } : {}),
+    ...(Number.isFinite(use.line) ? { line: use.line } : {}),
+    ...(use.sfcBlockKind ? { sfcBlockKind: use.sfcBlockKind } : {}),
   });
 }
 
@@ -1256,6 +1283,55 @@ function processSfcStyleAssetReferences(consumers) {
   return resolvedAssetUses;
 }
 
+function processSfcTemplateComponentRefs(consumers) {
+  let recordedRefs = 0;
+  for (const use of consumers) {
+    recordedRefs++;
+    if (use.status === 'muted') {
+      addSfcTemplateComponentRef(use, {
+        status: 'muted',
+        reason: use.reason ?? 'sfc-template-component-muted',
+      });
+      continue;
+    }
+
+    const target = resolveSpecifier(use.consumerFile, {
+      ...use,
+      fromSpec: use.bindingSource,
+      kind: 'sfc-template-component-ref',
+      name: '*',
+      typeOnly: false,
+    });
+    if (target === 'EXTERNAL') {
+      addSfcTemplateComponentRef(use, {
+        status: 'external',
+        reason: 'sfc-template-component-external-binding',
+      });
+      continue;
+    }
+    if (isNonSourceAssetResolution(target) || isGeneratedVirtualResolution(target)) {
+      addSfcTemplateComponentRef(use, {
+        status: 'muted',
+        reason: 'sfc-template-component-non-source-binding',
+      });
+      continue;
+    }
+    if (target === 'UNRESOLVED_INTERNAL' || !target) {
+      addSfcTemplateComponentRef(use, {
+        status: 'unresolved',
+        reason: 'sfc-template-component-unresolved',
+      });
+      continue;
+    }
+
+    addSfcTemplateComponentRef(use, {
+      status: 'resolved',
+      resolvedFile: target,
+    });
+  }
+  return recordedRefs;
+}
+
 const assembleMdxUsesStarted = Date.now();
 const mdxImportConsumers = collectMdxImportConsumers({
   root: ROOT,
@@ -1299,6 +1375,16 @@ phaseTimer.setCounter('sfcStyleAssetCandidateCount', sfcStyleAssets.length);
 sfcStyleAssetReferenceUses = processSfcStyleAssetReferences(sfcStyleAssets);
 phaseTimer.recordPhase('assemble-sfc-style-assets', Date.now() - assembleSfcStyleAssetsStarted);
 
+const assembleSfcTemplateRefsStarted = Date.now();
+const sfcTemplateRefs = collectSfcTemplateComponentRefs({
+  root: ROOT,
+  includeTests: cli.includeTests,
+  exclude: cli.exclude,
+});
+phaseTimer.setCounter('sfcTemplateComponentRefCandidateCount', sfcTemplateRefs.length);
+sfcTemplateComponentRefUses = processSfcTemplateComponentRefs(sfcTemplateRefs);
+phaseTimer.recordPhase('assemble-sfc-template-component-refs', Date.now() - assembleSfcTemplateRefsStarted);
+
 console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
 console.log(`[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`);
 console.log(`[defs] total symbols: ${[...defIndex.values()].reduce((a, m) => a + m.size, 0)}`);
@@ -1314,6 +1400,8 @@ phaseTimer.setCounter('sfcScriptConsumerUses', sfcScriptConsumerUses);
 phaseTimer.setCounter('sfcScriptSrcReachabilityUses', sfcScriptSrcReachabilityUses);
 phaseTimer.setCounter('sfcStyleAssetReferenceUses', sfcStyleAssetReferenceUses);
 phaseTimer.setCounter('sfcStyleAssetReferenceCount', sfcStyleAssetReferences.length);
+phaseTimer.setCounter('sfcTemplateComponentRefUses', sfcTemplateComponentRefUses);
+phaseTimer.setCounter('sfcTemplateComponentRefCount', sfcTemplateComponentRefs.length);
 phaseTimer.setCounter('dependencyImportConsumerCount', dependencyImportConsumers.length);
 phaseTimer.setCounter('resolvedInternalEdgeCount', resolvedInternalEdges.length);
 phaseTimer.setCounter('unresolvedInternalSpecifierCount', unresolvedInternalSpecifiers.size);
@@ -1530,7 +1618,9 @@ const artifact = buildSymbolsArtifact({
   sfcScriptConsumerUses,
   sfcScriptSrcReachabilityUses,
   sfcStyleAssetReferenceUses,
+  sfcTemplateComponentRefUses,
   sfcStyleAssetReferences,
+  sfcTemplateComponentRefs,
   dead,
   trulyDead,
   deadInProd,
