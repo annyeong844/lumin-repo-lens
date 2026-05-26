@@ -3,10 +3,10 @@
 // Pure builders for symbols.json. The producer still owns scanning and graph
 // construction; this module keeps the artifact-shape contract in one place.
 
-import path from 'node:path';
+import path from "node:path";
 
-import { producerMetaBase } from './artifacts.mjs';
-import { relPath } from './paths.mjs';
+import { producerMetaBase } from "./artifacts.mjs";
+import { relPath } from "./paths.mjs";
 
 function buildReExportsByFile({ root, fileData }) {
   const reExportsByFile = {};
@@ -32,24 +32,32 @@ function buildFilesWithParseErrors({ root, entries }) {
 
 function sortNamespaceReExportDiagnostics(items) {
   return [...(items ?? [])].sort((a, b) =>
-    `${a.consumerFile ?? ''}|${a.exportedName ?? ''}|${a.targetFile ?? ''}|${a.kind ?? ''}|${a.line ?? ''}`.localeCompare(
-      `${b.consumerFile ?? ''}|${b.exportedName ?? ''}|${b.targetFile ?? ''}|${b.kind ?? ''}|${b.line ?? ''}`,
+    `${a.consumerFile ?? ""}|${a.exportedName ?? ""}|${a.targetFile ?? ""}|${a.kind ?? ""}|${a.line ?? ""}`.localeCompare(
+      `${b.consumerFile ?? ""}|${b.exportedName ?? ""}|${b.targetFile ?? ""}|${b.kind ?? ""}|${b.line ?? ""}`,
     ),
   );
 }
 
 function sortSfcStyleAssetReferences(items) {
   return [...(items ?? [])].sort((a, b) =>
-    `${a.consumerFile ?? ''}|${a.fromSpec ?? ''}|${a.source ?? ''}|${a.status ?? ''}`.localeCompare(
-      `${b.consumerFile ?? ''}|${b.fromSpec ?? ''}|${b.source ?? ''}|${b.status ?? ''}`,
+    `${a.consumerFile ?? ""}|${a.fromSpec ?? ""}|${a.source ?? ""}|${a.status ?? ""}`.localeCompare(
+      `${b.consumerFile ?? ""}|${b.fromSpec ?? ""}|${b.source ?? ""}|${b.status ?? ""}`,
     ),
   );
 }
 
 function sortSfcTemplateComponentRefs(items) {
   return [...(items ?? [])].sort((a, b) =>
-    `${a.consumerFile ?? ''}|${a.tagName ?? ''}|${a.bindingName ?? ''}|${a.status ?? ''}|${a.reason ?? ''}`.localeCompare(
-      `${b.consumerFile ?? ''}|${b.tagName ?? ''}|${b.bindingName ?? ''}|${b.status ?? ''}|${b.reason ?? ''}`,
+    `${a.consumerFile ?? ""}|${a.tagName ?? ""}|${a.bindingName ?? ""}|${a.status ?? ""}|${a.reason ?? ""}`.localeCompare(
+      `${b.consumerFile ?? ""}|${b.tagName ?? ""}|${b.bindingName ?? ""}|${b.status ?? ""}|${b.reason ?? ""}`,
+    ),
+  );
+}
+
+function sortSfcGlobalComponentRegistrations(items) {
+  return [...(items ?? [])].sort((a, b) =>
+    `${a.registrationFile ?? ""}|${a.componentName ?? ""}|${a.bindingName ?? ""}|${a.status ?? ""}|${a.reason ?? ""}`.localeCompare(
+      `${b.registrationFile ?? ""}|${b.componentName ?? ""}|${b.bindingName ?? ""}|${b.status ?? ""}|${b.reason ?? ""}`,
     ),
   );
 }
@@ -69,9 +77,9 @@ function buildTopUnresolvedSpecifiers({
         /^@[^/]+\//.test(specifierPrefix)
       ) {
         likelyCause =
-          'possible unresolved tsconfig paths alias. Check per-app ' +
-          'tsconfig.json for a compilerOptions.paths entry matching this prefix. ' +
-          'See FP-36 in references/false-positive-index.md.';
+          "possible unresolved tsconfig paths alias. Check per-app " +
+          "tsconfig.json for a compilerOptions.paths entry matching this prefix. " +
+          "See FP-36 in references/false-positive-index.md.";
       }
       return {
         specifierPrefix,
@@ -87,7 +95,7 @@ function compactUnresolvedExample(record = {}) {
     specifier: record.specifier,
     consumerFile: record.consumerFile,
     kind: record.kind,
-    ...(typeof record.typeOnly === 'boolean'
+    ...(typeof record.typeOnly === "boolean"
       ? { typeOnly: record.typeOnly }
       : {}),
     ...(record.resolverStage ? { resolverStage: record.resolverStage } : {}),
@@ -100,9 +108,9 @@ function compactUnresolvedExample(record = {}) {
 }
 
 function unresolvedSpace(record = {}) {
-  if (record.typeOnly === true) return 'type';
-  if (record.typeOnly === false) return 'value';
-  return 'unknown';
+  if (record.typeOnly === true) return "type";
+  if (record.typeOnly === false) return "value";
+  return "unknown";
 }
 
 function sortedCounterObject(counter) {
@@ -115,8 +123,8 @@ function buildUnresolvedInternalSummaryByReason(records) {
   const groups = new Map();
 
   for (const rawRecord of records ?? []) {
-    const record = rawRecord && typeof rawRecord === 'object' ? rawRecord : {};
-    const reason = record?.reason ?? 'unknown-internal-resolution';
+    const record = rawRecord && typeof rawRecord === "object" ? rawRecord : {};
+    const reason = record?.reason ?? "unknown-internal-resolution";
     if (!groups.has(reason)) {
       groups.set(reason, {
         count: 0,
@@ -162,8 +170,8 @@ function buildUnresolvedInternalSummaryByReason(records) {
             : {}),
           examples: group.examples
             .sort((a, b) =>
-              `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`.localeCompare(
-                `${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`,
+              `${a.consumerFile ?? ""}|${a.specifier ?? ""}|${a.kind ?? ""}`.localeCompare(
+                `${b.consumerFile ?? ""}|${b.specifier ?? ""}|${b.kind ?? ""}`,
               ),
             )
             .slice(0, 5),
@@ -185,22 +193,22 @@ function buildDynamicImportOpacity({ root, fileData }) {
       if (item.prefix) {
         const targetDirAbs = path.resolve(path.dirname(absFile), item.prefix);
         rec.prefix = item.prefix;
-        rec.targetDir = relPath(root, targetDirAbs).replace(/\/?$/, '/');
+        rec.targetDir = relPath(root, targetDirAbs).replace(/\/?$/, "/");
       }
       dynamicImportOpacity.push(rec);
     }
   }
   return dynamicImportOpacity.sort((a, b) =>
-    `${a.consumerFile}|${String(a.line).padStart(6, '0')}|${a.prefix ?? ''}`.localeCompare(
-      `${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.prefix ?? ''}`,
+    `${a.consumerFile}|${String(a.line).padStart(6, "0")}|${a.prefix ?? ""}`.localeCompare(
+      `${b.consumerFile}|${String(b.line).padStart(6, "0")}|${b.prefix ?? ""}`,
     ),
   );
 }
 
 function sortCjsSurfaceList(entries = []) {
   return [...entries].sort((a, b) =>
-    `${a.name ?? ''}|${a.kind ?? ''}|${String(a.line ?? '').padStart(6, '0')}`.localeCompare(
-      `${b.name ?? ''}|${b.kind ?? ''}|${String(b.line ?? '').padStart(6, '0')}`,
+    `${a.name ?? ""}|${a.kind ?? ""}|${String(a.line ?? "").padStart(6, "0")}`.localeCompare(
+      `${b.name ?? ""}|${b.kind ?? ""}|${String(b.line ?? "").padStart(6, "0")}`,
     ),
   );
 }
@@ -231,8 +239,8 @@ function buildCjsRequireOpacity({ root, fileData }) {
     }
   }
   return cjsRequireOpacity.sort((a, b) =>
-    `${a.consumerFile}|${String(a.line).padStart(6, '0')}|${a.kind ?? ''}`.localeCompare(
-      `${b.consumerFile}|${String(b.line).padStart(6, '0')}|${b.kind ?? ''}`,
+    `${a.consumerFile}|${String(a.line).padStart(6, "0")}|${a.kind ?? ""}`.localeCompare(
+      `${b.consumerFile}|${String(b.line).padStart(6, "0")}|${b.kind ?? ""}`,
     ),
   );
 }
@@ -247,8 +255,8 @@ function buildPlainDefIndex({ root, defIndex }) {
 
 function sortClassMethodRecords(records = []) {
   return [...records].sort((a, b) =>
-    `${a.className ?? ''}|${a.name ?? ''}|${String(a.line ?? '').padStart(6, '0')}|${a.identity ?? ''}`.localeCompare(
-      `${b.className ?? ''}|${b.name ?? ''}|${String(b.line ?? '').padStart(6, '0')}|${b.identity ?? ''}`,
+    `${a.className ?? ""}|${a.name ?? ""}|${String(a.line ?? "").padStart(6, "0")}|${a.identity ?? ""}`.localeCompare(
+      `${b.className ?? ""}|${b.name ?? ""}|${String(b.line ?? "").padStart(6, "0")}|${b.identity ?? ""}`,
     ),
   );
 }
@@ -270,9 +278,9 @@ function buildClassMethodIndex({ root, fileData }) {
         className: method.className,
         name,
         methodName: method.methodName ?? name,
-        kind: method.kind ?? 'ClassMethod',
-        memberKind: method.memberKind ?? 'method',
-        visibility: method.visibility ?? 'public',
+        kind: method.kind ?? "ClassMethod",
+        memberKind: method.memberKind ?? "method",
+        visibility: method.visibility ?? "public",
         static: method.static === true,
         computed: method.computed === true,
         line: method.line,
@@ -286,8 +294,8 @@ function buildClassMethodIndex({ root, fileData }) {
 
 function sortPreWriteLocalOperationRecords(records = []) {
   return [...records].sort((a, b) =>
-    `${a.containerName ?? ''}|${a.name ?? ''}|${String(a.line ?? '').padStart(6, '0')}|${a.identity ?? ''}`.localeCompare(
-      `${b.containerName ?? ''}|${b.name ?? ''}|${String(b.line ?? '').padStart(6, '0')}|${b.identity ?? ''}`,
+    `${a.containerName ?? ""}|${a.name ?? ""}|${String(a.line ?? "").padStart(6, "0")}|${a.identity ?? ""}`.localeCompare(
+      `${b.containerName ?? ""}|${b.name ?? ""}|${String(b.line ?? "").padStart(6, "0")}|${b.identity ?? ""}`,
     ),
   );
 }
@@ -308,12 +316,12 @@ function buildPreWriteLocalOperationIndex({ root, fileData }) {
       ownerFile: operation.ownerFile ?? rel,
       containerName: operation.containerName,
       containerKind: operation.containerKind,
-      scopeKind: operation.scopeKind ?? 'nested-function',
-      matchedField: operation.matchedField ?? 'preWriteLocalOperationIndex',
+      scopeKind: operation.scopeKind ?? "nested-function",
+      matchedField: operation.matchedField ?? "preWriteLocalOperationIndex",
       line: operation.line,
       operationFamily: operation.operationFamily,
       domainTokens: [...(operation.domainTokens ?? [])].sort(),
-      visibility: operation.visibility ?? 'local-only',
+      visibility: operation.visibility ?? "local-only",
       eligibleForDeadExportRanking: false,
       eligibleForSafeFix: false,
     }));
@@ -321,8 +329,8 @@ function buildPreWriteLocalOperationIndex({ root, fileData }) {
   }
 
   return {
-    schemaVersion: 'pre-write-local-operations.v1',
-    status: 'complete',
+    schemaVersion: "pre-write-local-operations.v1",
+    status: "complete",
     meta: {
       supports: {
         nestedLocalOperationIndex: true,
@@ -338,8 +346,8 @@ function buildPreWriteLocalOperationIndex({ root, fileData }) {
 
 function sortResolvedInternalEdges(edges) {
   return [...(edges ?? [])].sort((a, b) =>
-    `${a.from ?? ''}|${a.to ?? ''}|${a.kind ?? ''}|${a.source ?? ''}|${a.typeOnly ? '1' : '0'}`.localeCompare(
-      `${b.from ?? ''}|${b.to ?? ''}|${b.kind ?? ''}|${b.source ?? ''}|${b.typeOnly ? '1' : '0'}`,
+    `${a.from ?? ""}|${a.to ?? ""}|${a.kind ?? ""}|${a.source ?? ""}|${a.typeOnly ? "1" : "0"}`.localeCompare(
+      `${b.from ?? ""}|${b.to ?? ""}|${b.kind ?? ""}|${b.source ?? ""}|${b.typeOnly ? "1" : "0"}`,
     ),
   );
 }
@@ -349,26 +357,26 @@ function sortGeneratedVirtualSurfaces(surfaces) {
     .map((surface) => ({
       ...surface,
       exports: [...(surface.exports ?? [])].sort((a, b) =>
-        `${a.name ?? ''}|${a.kind ?? ''}`.localeCompare(
-          `${b.name ?? ''}|${b.kind ?? ''}`,
+        `${a.name ?? ""}|${a.kind ?? ""}`.localeCompare(
+          `${b.name ?? ""}|${b.kind ?? ""}`,
         ),
       ),
     }))
-    .sort((a, b) => `${a.id ?? ''}`.localeCompare(`${b.id ?? ''}`));
+    .sort((a, b) => `${a.id ?? ""}`.localeCompare(`${b.id ?? ""}`));
 }
 
 function sortGeneratedVirtualImportConsumers(consumers) {
   return [...(consumers ?? [])].sort((a, b) =>
-    `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.name ?? ''}|${a.kind ?? ''}|${a.surfaceId ?? ''}`.localeCompare(
-      `${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.name ?? ''}|${b.kind ?? ''}|${b.surfaceId ?? ''}`,
+    `${a.consumerFile ?? ""}|${a.specifier ?? ""}|${a.name ?? ""}|${a.kind ?? ""}|${a.surfaceId ?? ""}`.localeCompare(
+      `${b.consumerFile ?? ""}|${b.specifier ?? ""}|${b.name ?? ""}|${b.kind ?? ""}|${b.surfaceId ?? ""}`,
     ),
   );
 }
 
 function sortGeneratedConsumerBlindZones(zones) {
   return [...(zones ?? [])].sort((a, b) =>
-    `${a.scopePackageRoot ?? ''}|${a.candidatePath ?? ''}|${a.specifier ?? ''}|${a.consumerFile ?? ''}`.localeCompare(
-      `${b.scopePackageRoot ?? ''}|${b.candidatePath ?? ''}|${b.specifier ?? ''}|${b.consumerFile ?? ''}`,
+    `${a.scopePackageRoot ?? ""}|${a.candidatePath ?? ""}|${a.specifier ?? ""}|${a.consumerFile ?? ""}`.localeCompare(
+      `${b.scopePackageRoot ?? ""}|${b.candidatePath ?? ""}|${b.specifier ?? ""}|${b.consumerFile ?? ""}`,
     ),
   );
 }
@@ -403,8 +411,10 @@ export function buildSymbolsArtifact({
   sfcScriptSrcReachabilityUses = 0,
   sfcStyleAssetReferenceUses = 0,
   sfcTemplateComponentRefUses = 0,
+  sfcGlobalComponentRegistrationUses = 0,
   sfcStyleAssetReferences = [],
   sfcTemplateComponentRefs = [],
+  sfcGlobalComponentRegistrations = [],
   dead,
   trulyDead,
   deadInProd,
@@ -419,7 +429,7 @@ export function buildSymbolsArtifact({
   const artifactWarnings = [...(warnings ?? [])];
   if (parseErrors > 0) {
     artifactWarnings.push({
-      code: 'parse-errors',
+      code: "parse-errors",
       count: parseErrors,
       message: `${parseErrors} file(s) failed to parse; their defs/uses are missing from the graph`,
     });
@@ -427,18 +437,19 @@ export function buildSymbolsArtifact({
 
   return {
     meta: {
-      ...producerMetaBase({ tool: 'build-symbol-graph.mjs', root }),
+      ...producerMetaBase({ tool: "build-symbol-graph.mjs", root }),
       schemaVersion: 3,
       supports: {
         anyContamination: true,
         identityFanIn: true,
         identityFanInSpace: true,
-        reExportRecords: 'file-level',
+        reExportRecords: "file-level",
         mdxImportConsumers: true,
         sfcScriptImportConsumers: true,
         sfcScriptSrcReachability: true,
         sfcStyleAssetReferences: true,
         sfcTemplateComponentRefs: true,
+        sfcGlobalComponentRegistrations: true,
         dependencyImportConsumers: true,
         resolvedInternalEdges: true,
         definitionIds: true,
@@ -479,6 +490,7 @@ export function buildSymbolsArtifact({
       sfcScriptSrcReachability: sfcScriptSrcReachabilityUses,
       sfcStyleAssetReferences: sfcStyleAssetReferenceUses,
       sfcTemplateComponentRefs: sfcTemplateComponentRefUses,
+      sfcGlobalComponentRegistrations: sfcGlobalComponentRegistrationUses,
       unresolvedInternalRatio:
         resolvedInternalUses + unresolvedInternalUses > 0
           ? +(
@@ -489,8 +501,8 @@ export function buildSymbolsArtifact({
     },
     dependencyImportConsumers: [...(dependencyImportConsumers ?? [])].sort(
       (a, b) =>
-        `${a.depRoot ?? ''}|${a.fromSpec ?? ''}|${a.file ?? ''}|${a.kind ?? ''}`.localeCompare(
-          `${b.depRoot ?? ''}|${b.fromSpec ?? ''}|${b.file ?? ''}|${b.kind ?? ''}`,
+        `${a.depRoot ?? ""}|${a.fromSpec ?? ""}|${a.file ?? ""}|${a.kind ?? ""}`.localeCompare(
+          `${b.depRoot ?? ""}|${b.fromSpec ?? ""}|${b.file ?? ""}|${b.kind ?? ""}`,
         ),
     ),
     resolvedInternalEdges: sortResolvedInternalEdges(resolvedInternalEdges),
@@ -499,6 +511,9 @@ export function buildSymbolsArtifact({
     ),
     sfcTemplateComponentRefs: sortSfcTemplateComponentRefs(
       sfcTemplateComponentRefs,
+    ),
+    sfcGlobalComponentRegistrations: sortSfcGlobalComponentRegistrations(
+      sfcGlobalComponentRegistrations,
     ),
     generatedConsumerBlindZones: sortGeneratedConsumerBlindZones(
       generatedConsumerBlindZones,
@@ -520,8 +535,8 @@ export function buildSymbolsArtifact({
     unresolvedInternalSpecifierRecords: [
       ...(unresolvedInternalSpecifierRecords ?? []),
     ].sort((a, b) =>
-      `${a.consumerFile ?? ''}|${a.specifier ?? ''}|${a.kind ?? ''}`.localeCompare(
-        `${b.consumerFile ?? ''}|${b.specifier ?? ''}|${b.kind ?? ''}`,
+      `${a.consumerFile ?? ""}|${a.specifier ?? ""}|${a.kind ?? ""}`.localeCompare(
+        `${b.consumerFile ?? ""}|${b.specifier ?? ""}|${b.kind ?? ""}`,
       ),
     ),
     unresolvedInternalSummaryByReason: buildUnresolvedInternalSummaryByReason(

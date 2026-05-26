@@ -8,46 +8,47 @@
 //
 // Usage: node build-symbol-graph.mjs --root <repo> [--output <dir>]
 
-import { writeFileSync } from 'node:fs';
-import path from 'node:path';
-import { performance } from 'node:perf_hooks';
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+import { performance } from "node:perf_hooks";
 
-import { detectBarrelFiles } from '../lib/alias-map.mjs';
-import { extractDefinitionsAndUses } from '../lib/extract-ts.mjs';
-import { goExtractShape } from '../lib/extract-go.mjs';
-import { pythonExtractShape } from '../lib/extract-py.mjs';
-import { parseCliArgs } from '../lib/cli.mjs';
-import { detectRepoMode } from '../lib/repo-mode.mjs';
-import { buildAliasMap } from '../lib/alias-map.mjs';
+import { detectBarrelFiles } from "../lib/alias-map.mjs";
+import { extractDefinitionsAndUses } from "../lib/extract-ts.mjs";
+import { goExtractShape } from "../lib/extract-go.mjs";
+import { pythonExtractShape } from "../lib/extract-py.mjs";
+import { parseCliArgs } from "../lib/cli.mjs";
+import { detectRepoMode } from "../lib/repo-mode.mjs";
+import { buildAliasMap } from "../lib/alias-map.mjs";
 import {
   explainUnresolvedSpecifier,
   isGeneratedVirtualResolution,
   isNonSourceAssetResolution,
   makeResolver,
-} from '../lib/resolver-core.mjs';
-import { collectMdxImportConsumers } from '../lib/mdx-consumers.mjs';
+} from "../lib/resolver-core.mjs";
+import { collectMdxImportConsumers } from "../lib/mdx-consumers.mjs";
 import {
+  collectSfcGlobalComponentRegistrations,
   collectSfcImportConsumers,
   collectSfcScriptSources,
   collectSfcStyleAssetReferences,
   collectSfcTemplateComponentRefs,
-} from '../lib/sfc-consumers.mjs';
-import { buildGeneratedConsumerBlindZones } from '../lib/generated-blind-zone-relevance.mjs';
-import { normalizeGeneratedArtifactsMode } from '../lib/generated-artifact-mode.mjs';
+} from "../lib/sfc-consumers.mjs";
+import { buildGeneratedConsumerBlindZones } from "../lib/generated-blind-zone-relevance.mjs";
+import { normalizeGeneratedArtifactsMode } from "../lib/generated-artifact-mode.mjs";
 import {
   DEFAULT_IMPORT_META_GLOB_CAP,
   expandImportMetaGlobPattern,
-} from '../lib/import-meta-glob-expansion.mjs';
-import { JS_FAMILY_LANGS } from '../lib/lang.mjs';
-import { isTestLikePath } from '../lib/test-paths.mjs';
-import { fileExists, relPath, buildSubmoduleResolver } from '../lib/paths.mjs';
-import { buildSymbolsArtifact } from '../lib/symbol-graph-artifact.mjs';
-import { buildAnyContaminationFacts } from '../lib/any-contamination.mjs';
+} from "../lib/import-meta-glob-expansion.mjs";
+import { JS_FAMILY_LANGS } from "../lib/lang.mjs";
+import { isTestLikePath } from "../lib/test-paths.mjs";
+import { fileExists, relPath, buildSubmoduleResolver } from "../lib/paths.mjs";
+import { buildSymbolsArtifact } from "../lib/symbol-graph-artifact.mjs";
+import { buildAnyContaminationFacts } from "../lib/any-contamination.mjs";
 import {
   buildContextFingerprint,
   buildRepoSnapshot,
   STRICT_IDENTITY_MODE,
-} from '../lib/incremental-snapshot.mjs';
+} from "../lib/incremental-snapshot.mjs";
 import {
   clearIncrementalCache,
   getReusableFact,
@@ -56,35 +57,37 @@ import {
   putFact,
   saveProducerCache,
   strictCacheKeyForEntry,
-} from '../lib/incremental-cache-store.mjs';
+} from "../lib/incremental-cache-store.mjs";
 import {
   isPythonAvailable,
   extractPythonBatch,
   resolvePythonImport,
-} from '../lib/python.mjs';
+} from "../lib/python.mjs";
 import {
   isTreeSitterAvailable,
   extractTreeSitterBatch,
   findGoModule,
   resolveGoImport,
-} from '../lib/tree-sitter-langs.mjs';
-import { createProducerPhaseTimer } from '../lib/producer-phase-timing.mjs';
+} from "../lib/tree-sitter-langs.mjs";
+import { createProducerPhaseTimer } from "../lib/producer-phase-timing.mjs";
 
 const cli = parseCliArgs({
-  incremental: { type: 'boolean', default: false },
-  'no-incremental': { type: 'boolean', default: false },
-  'cache-root': { type: 'string' },
-  'clear-incremental-cache': { type: 'boolean', default: false },
-  'generated-artifacts': { type: 'string', default: 'default' },
+  incremental: { type: "boolean", default: false },
+  "no-incremental": { type: "boolean", default: false },
+  "cache-root": { type: "string" },
+  "clear-incremental-cache": { type: "boolean", default: false },
+  "generated-artifacts": { type: "string", default: "default" },
 });
 const { root: ROOT, output, verbose } = cli;
 const phaseTimer = createProducerPhaseTimer({
-  producer: 'build-symbol-graph.mjs',
+  producer: "build-symbol-graph.mjs",
   output,
 });
-let GENERATED_ARTIFACTS_MODE = 'default';
+let GENERATED_ARTIFACTS_MODE = "default";
 try {
-  GENERATED_ARTIFACTS_MODE = normalizeGeneratedArtifactsMode(cli.raw?.['generated-artifacts']);
+  GENERATED_ARTIFACTS_MODE = normalizeGeneratedArtifactsMode(
+    cli.raw?.["generated-artifacts"],
+  );
 } catch (error) {
   console.error(`[symbols] ${error.message}`);
   process.exit(2);
@@ -96,11 +99,11 @@ const languageSupport = {
   ts: { enabled: true, reason: null },
   js: { enabled: true, reason: null },
   python: pyEnabled
-    ? { enabled: true, reason: null, extractor: 'python-ast-batch' }
-    : { enabled: false, reason: 'python executable unavailable' },
+    ? { enabled: true, reason: null, extractor: "python-ast-batch" }
+    : { enabled: false, reason: "python executable unavailable" },
   go: tsEnabled
-    ? { enabled: true, reason: null, extractor: 'tree-sitter-wasm' }
-    : { enabled: false, reason: 'tree-sitter unavailable' },
+    ? { enabled: true, reason: null, extractor: "tree-sitter-wasm" }
+    : { enabled: false, reason: "tree-sitter unavailable" },
 };
 
 const repoMode = detectRepoMode(ROOT);
@@ -112,16 +115,23 @@ const _resolveRaw = makeResolver(ROOT, aliasMap);
 function resolveSpecifier(from, use) {
   // `use` is the richer import record; callers that only have spec string can
   // pass { fromSpec: spec } for legacy behavior.
-  const spec = typeof use === 'string' ? use : use.fromSpec;
-  if (from.endsWith('.py')) {
-    const isFromImport = typeof use === 'object' ? !!use.pyIsFromImport : false;
-    const level = typeof use === 'object' ? (use.pyLevel ?? 0) : 0;
+  const spec = typeof use === "string" ? use : use.fromSpec;
+  if (from.endsWith(".py")) {
+    const isFromImport = typeof use === "object" ? !!use.pyIsFromImport : false;
+    const level = typeof use === "object" ? (use.pyLevel ?? 0) : 0;
     const names =
-      typeof use === 'object' && use.name && use.name !== '*' ? [use.name] : [];
-    const hits = resolvePythonImport(ROOT, from, spec, isFromImport, names, level);
+      typeof use === "object" && use.name && use.name !== "*" ? [use.name] : [];
+    const hits = resolvePythonImport(
+      ROOT,
+      from,
+      spec,
+      isFromImport,
+      names,
+      level,
+    );
     return hits[0] ?? null;
   }
-  if (from.endsWith('.go')) {
+  if (from.endsWith(".go")) {
     const hits = resolveGoImport(ROOT, goModule, spec);
     return hits[0] ?? null;
   }
@@ -142,19 +152,20 @@ if (verbose) console.error(`[symbols] root: ${ROOT}, mode: ${repoMode.mode}`);
 // {filePath, defs, uses, reExports, loc, [pyDunderAll]} shape — the
 // main scan loop below doesn't switch on language after this point.
 
-
 // ─── 전체 스캔 (incremental-aware, multi-language) ───────
 const langList = [...JS_FAMILY_LANGS];
-if (pyEnabled) langList.push('py');
-if (tsEnabled) langList.push('go');
+if (pyEnabled) langList.push("py");
+if (tsEnabled) langList.push("go");
 
-const PRODUCER_ID = 'symbols';
+const PRODUCER_ID = "symbols";
 const PRODUCER_VERSION = 1;
 const FACT_SCHEMA_VERSION = 5;
-const PARSER_IDENTITY = 'symbol-graph-extractors:v3';
+const PARSER_IDENTITY = "symbol-graph-extractors:v3";
 
 function isJsFamilyFile(filePath) {
-  return JS_FAMILY_LANGS.includes(path.extname(filePath).slice(1).toLowerCase());
+  return JS_FAMILY_LANGS.includes(
+    path.extname(filePath).slice(1).toLowerCase(),
+  );
 }
 
 function countNestedMapEntries(map) {
@@ -177,35 +188,43 @@ const contextFingerprint = buildContextFingerprint({
     treeSitterEnabled: tsEnabled,
   },
 });
-const snapshot = phaseTimer.runPhase('snapshot', () => buildRepoSnapshot({
-  root: ROOT,
-  includeTests: cli.includeTests,
-  exclude: cli.exclude,
-  languages: langList,
-  contextFingerprint,
-}));
+const snapshot = phaseTimer.runPhase("snapshot", () =>
+  buildRepoSnapshot({
+    root: ROOT,
+    includeTests: cli.includeTests,
+    exclude: cli.exclude,
+    languages: langList,
+    contextFingerprint,
+  }),
+);
 const snapshotEntries = Object.values(snapshot.files);
 const files = snapshotEntries.map((entry) => entry.absPath);
 const scannedJsSourceFiles = new Set(files.filter(isJsFamilyFile));
 const jsTotal = files.filter(isJsFamilyFile).length;
-const pyTotal = files.filter((f) => f.endsWith('.py')).length;
-const goTotal = files.filter((f) => f.endsWith('.go')).length;
-phaseTimer.setCounter('snapshotFiles', files.length);
-phaseTimer.setCounter('snapshotReadableFiles', snapshotEntries.filter((entry) => entry.readable).length);
-phaseTimer.setCounter('snapshotUnreadableFiles', snapshotEntries.filter((entry) => !entry.readable).length);
-phaseTimer.setCounter('snapshotJsFiles', jsTotal);
-phaseTimer.setCounter('snapshotPythonFiles', pyTotal);
-phaseTimer.setCounter('snapshotGoFiles', goTotal);
+const pyTotal = files.filter((f) => f.endsWith(".py")).length;
+const goTotal = files.filter((f) => f.endsWith(".go")).length;
+phaseTimer.setCounter("snapshotFiles", files.length);
+phaseTimer.setCounter(
+  "snapshotReadableFiles",
+  snapshotEntries.filter((entry) => entry.readable).length,
+);
+phaseTimer.setCounter(
+  "snapshotUnreadableFiles",
+  snapshotEntries.filter((entry) => !entry.readable).length,
+);
+phaseTimer.setCounter("snapshotJsFiles", jsTotal);
+phaseTimer.setCounter("snapshotPythonFiles", pyTotal);
+phaseTimer.setCounter("snapshotGoFiles", goTotal);
 console.error(
-  `[symbols] scanning ${files.length} files (python=${pyEnabled ? `on, ${pyTotal} .py` : 'off'}, go=${tsEnabled ? `on, ${goTotal} .go` : 'off'})`
+  `[symbols] scanning ${files.length} files (python=${pyEnabled ? `on, ${pyTotal} .py` : "off"}, go=${tsEnabled ? `on, ${goTotal} .go` : "off"})`,
 );
 
-const incrementalEnabled = cli.raw?.['no-incremental'] !== true;
+const incrementalEnabled = cli.raw?.["no-incremental"] !== true;
 const cacheStore = openIncrementalCacheStore({
   root: ROOT,
-  cacheRoot: cli.raw?.['cache-root'],
+  cacheRoot: cli.raw?.["cache-root"],
 });
-if (cli.raw?.['clear-incremental-cache'] === true) {
+if (cli.raw?.["clear-incremental-cache"] === true) {
   clearIncrementalCache(cacheStore);
 }
 
@@ -219,8 +238,8 @@ const producerCacheMeta = {
 };
 const priorCache = incrementalEnabled
   ? loadProducerCache(cacheStore, PRODUCER_ID)
-  : { entries: {}, meta: { loadStatus: 'disabled' } };
-const nextProducerCache = { entries: {}, meta: { loadStatus: 'new' } };
+  : { entries: {}, meta: { loadStatus: "disabled" } };
+const nextProducerCache = { entries: {}, meta: { loadStatus: "new" } };
 const nextCache = { version: 1, entries: {} };
 const currentStrictKeys = new Set();
 const changed = [];
@@ -239,10 +258,13 @@ for (const entry of snapshotEntries) {
   }
 
   const reuse = incrementalEnabled
-    ? getReusableFact(priorCache, { snapshotEntry: entry, producerMeta: producerCacheMeta })
-    : { status: 'miss', reason: 'disabled-by-flag' };
+    ? getReusableFact(priorCache, {
+        snapshotEntry: entry,
+        producerMeta: producerCacheMeta,
+      })
+    : { status: "miss", reason: "disabled-by-flag" };
 
-  if (reuse.status === 'hit') {
+  if (reuse.status === "hit") {
     reusedFiles++;
     nextCache.entries[entry.absPath] = reuse.payload;
     putFact(nextProducerCache, {
@@ -253,30 +275,34 @@ for (const entry of snapshotEntries) {
     continue;
   }
 
-  if (reuse.reason !== 'missing-entry' && reuse.reason !== 'disabled-by-flag') {
+  if (reuse.reason !== "missing-entry" && reuse.reason !== "disabled-by-flag") {
     invalidatedFiles++;
   }
   changedFiles++;
   changed.push(entry.absPath);
 }
-phaseTimer.recordPhase('cache-classification', Date.now() - cacheClassificationStarted);
+phaseTimer.recordPhase(
+  "cache-classification",
+  Date.now() - cacheClassificationStarted,
+);
 
-const droppedFiles = Object.keys(priorCache.entries ?? {})
-  .filter((key) => !currentStrictKeys.has(key)).length;
-phaseTimer.setCounter('changedFiles', changedFiles);
-phaseTimer.setCounter('reusedFiles', reusedFiles);
-phaseTimer.setCounter('droppedFiles', droppedFiles);
-phaseTimer.setCounter('invalidatedFiles', invalidatedFiles);
+const droppedFiles = Object.keys(priorCache.entries ?? {}).filter(
+  (key) => !currentStrictKeys.has(key),
+).length;
+phaseTimer.setCounter("changedFiles", changedFiles);
+phaseTimer.setCounter("reusedFiles", reusedFiles);
+phaseTimer.setCounter("droppedFiles", droppedFiles);
+phaseTimer.setCounter("invalidatedFiles", invalidatedFiles);
 
 if (incrementalEnabled) {
   console.error(
-    `[symbols-incremental] changed=${changedFiles} reused=${reusedFiles} dropped=${droppedFiles} invalidated=${invalidatedFiles}`
+    `[symbols-incremental] changed=${changedFiles} reused=${reusedFiles} dropped=${droppedFiles} invalidated=${invalidatedFiles}`,
   );
 }
 
 // Pre-batch Python files among the changed set.
 const extractChangedFilesStarted = Date.now();
-const changedPy = changed.filter((f) => f.endsWith('.py'));
+const changedPy = changed.filter((f) => f.endsWith(".py"));
 const changedJs = changed.filter(isJsFamilyFile);
 // v1.8.2: collect non-fatal failure records for explicit inclusion in
 // the artifact. Previously these went to stderr (or got silently
@@ -291,19 +317,19 @@ if (changedPy.length > 0 && pyEnabled) {
   try {
     pyBatch = extractPythonBatch(changedPy) ?? new Map();
     // Python extractor surfaces stream-parse failures via a __meta__ key.
-    const pyMeta = pyBatch.get('__meta__');
+    const pyMeta = pyBatch.get("__meta__");
     if (pyMeta?.parseFailures > 0) {
       warnings.push({
-        code: 'python-ndjson-parse-failure',
+        code: "python-ndjson-parse-failure",
         count: pyMeta.parseFailures,
         message: `${pyMeta.parseFailures} stray non-JSON lines in extractor stdout`,
       });
     }
-    pyBatch.delete('__meta__');
+    pyBatch.delete("__meta__");
   } catch (e) {
     console.error(`[symbols] python batch failed: ${e.message}`);
     warnings.push({
-      code: 'python-batch-crashed',
+      code: "python-batch-crashed",
       message: e.message,
       affected: changedPy.length,
     });
@@ -311,10 +337,10 @@ if (changedPy.length > 0 && pyEnabled) {
 }
 
 // Pre-batch Go files (and any other tree-sitter languages).
-const changedTs = changed.filter((f) => f.endsWith('.go'));
-phaseTimer.setCounter('changedJsFiles', changedJs.length);
-phaseTimer.setCounter('changedPythonFiles', changedPy.length);
-phaseTimer.setCounter('changedGoFiles', changedTs.length);
+const changedTs = changed.filter((f) => f.endsWith(".go"));
+phaseTimer.setCounter("changedJsFiles", changedJs.length);
+phaseTimer.setCounter("changedPythonFiles", changedPy.length);
+phaseTimer.setCounter("changedGoFiles", changedTs.length);
 let tsBatch = new Map();
 if (changedTs.length > 0 && tsEnabled) {
   try {
@@ -322,7 +348,7 @@ if (changedTs.length > 0 && tsEnabled) {
   } catch (e) {
     console.error(`[symbols] tree-sitter batch failed: ${e.message}`);
     warnings.push({
-      code: 'tree-sitter-batch-crashed',
+      code: "tree-sitter-batch-crashed",
       message: e.message,
       affected: changedTs.length,
     });
@@ -338,11 +364,12 @@ for (const f of changed) {
   const entry = snapshot.files[relPath(ROOT, f)];
   try {
     let payload;
-    if (f.endsWith('.py')) {
+    if (f.endsWith(".py")) {
       const pyRec = pyBatch.get(f);
       if (!pyRec || pyRec.error) {
         parseErrors++;
-        if (pyRec?.error && verbose) console.error(`py fail: ${f}: ${pyRec.error}`);
+        if (pyRec?.error && verbose)
+          console.error(`py fail: ${f}: ${pyRec.error}`);
         nextCache.entries[f] = { parseError: true };
         if (incrementalEnabled && entry) {
           putFact(nextProducerCache, {
@@ -354,11 +381,12 @@ for (const f of changed) {
         continue;
       }
       payload = pythonExtractShape(f, pyRec);
-    } else if (f.endsWith('.go')) {
+    } else if (f.endsWith(".go")) {
       const goRec = tsBatch.get(f);
       if (!goRec || goRec.error) {
         parseErrors++;
-        if (goRec?.error && verbose) console.error(`go fail: ${f}: ${goRec.error}`);
+        if (goRec?.error && verbose)
+          console.error(`go fail: ${f}: ${goRec.error}`);
         nextCache.entries[f] = { parseError: true };
         if (incrementalEnabled && entry) {
           putFact(nextProducerCache, {
@@ -371,13 +399,15 @@ for (const f of changed) {
       }
       payload = goExtractShape(f, goRec);
     } else {
-      payload = extractDefinitionsAndUses(f, { artifactFilePath: relPath(ROOT, f) });
+      payload = extractDefinitionsAndUses(f, {
+        artifactFilePath: relPath(ROOT, f),
+      });
     }
     nextCache.entries[f] = { ...payload, parseError: false };
     extractedFiles++;
-    if (f.endsWith('.py')) {
+    if (f.endsWith(".py")) {
       extractedPythonFiles++;
-    } else if (f.endsWith('.go')) {
+    } else if (f.endsWith(".go")) {
       extractedGoFiles++;
     } else if (isJsFamilyFile(f)) {
       extractedJsFiles++;
@@ -402,16 +432,19 @@ for (const f of changed) {
     }
   }
 }
-phaseTimer.recordPhase('extract-changed-files', Date.now() - extractChangedFilesStarted);
+phaseTimer.recordPhase(
+  "extract-changed-files",
+  Date.now() - extractChangedFilesStarted,
+);
 // Cached parse errors still count in aggregate.
 for (const [f, entry] of Object.entries(nextCache.entries)) {
   if (!changed.includes(f) && entry?.parseError) parseErrors++;
 }
-phaseTimer.setCounter('extractedFiles', extractedFiles);
-phaseTimer.setCounter('extractedJsFiles', extractedJsFiles);
-phaseTimer.setCounter('extractedPythonFiles', extractedPythonFiles);
-phaseTimer.setCounter('extractedGoFiles', extractedGoFiles);
-phaseTimer.setCounter('parseErrorCount', parseErrors);
+phaseTimer.setCounter("extractedFiles", extractedFiles);
+phaseTimer.setCounter("extractedJsFiles", extractedJsFiles);
+phaseTimer.setCounter("extractedPythonFiles", extractedPythonFiles);
+phaseTimer.setCounter("extractedGoFiles", extractedGoFiles);
+phaseTimer.setCounter("parseErrorCount", parseErrors);
 
 const assembleSymbolGraphStarted = Date.now();
 const assembleFileDataStarted = Date.now();
@@ -450,21 +483,27 @@ for (const [f, entry] of Object.entries(nextCache.entries)) {
     // files where the module declared `__all__ = [...]`. When present,
     // only the listed names are considered exported; other top-level
     // names are module-private and excluded from the dead-list.
-    ...(entry.pyDunderAll !== undefined ? { pyDunderAll: entry.pyDunderAll } : {}),
+    ...(entry.pyDunderAll !== undefined
+      ? { pyDunderAll: entry.pyDunderAll }
+      : {}),
   });
 }
 
-if (incrementalEnabled) saveProducerCache(cacheStore, PRODUCER_ID, nextProducerCache);
-phaseTimer.setCounter('fileDataFiles', fileData.size);
-phaseTimer.setCounter('definitionCount', definitionCount);
-phaseTimer.setCounter('useCount', useCount);
-phaseTimer.setCounter('reExportCount', reExportCount);
-phaseTimer.setCounter('typeEscapeCount', typeEscapeCount);
-phaseTimer.setCounter('dynamicImportOpacityCount', dynamicImportOpacityCount);
-phaseTimer.setCounter('cjsRequireOpacityCount', cjsRequireOpacityCount);
-phaseTimer.setCounter('classMethodCount', classMethodCount);
-phaseTimer.setCounter('localOperationCount', localOperationCount);
-phaseTimer.recordPhase('assemble-file-data', Date.now() - assembleFileDataStarted);
+if (incrementalEnabled)
+  saveProducerCache(cacheStore, PRODUCER_ID, nextProducerCache);
+phaseTimer.setCounter("fileDataFiles", fileData.size);
+phaseTimer.setCounter("definitionCount", definitionCount);
+phaseTimer.setCounter("useCount", useCount);
+phaseTimer.setCounter("reExportCount", reExportCount);
+phaseTimer.setCounter("typeEscapeCount", typeEscapeCount);
+phaseTimer.setCounter("dynamicImportOpacityCount", dynamicImportOpacityCount);
+phaseTimer.setCounter("cjsRequireOpacityCount", cjsRequireOpacityCount);
+phaseTimer.setCounter("classMethodCount", classMethodCount);
+phaseTimer.setCounter("localOperationCount", localOperationCount);
+phaseTimer.recordPhase(
+  "assemble-file-data",
+  Date.now() - assembleFileDataStarted,
+);
 console.log(`[parse] errors: ${parseErrors}`);
 
 // ─── 심볼 그래프 구축 ─────────────────────────────────────
@@ -478,7 +517,10 @@ for (const [f, info] of fileData) {
   }
   defIndex.set(f, m);
 }
-phaseTimer.recordPhase('assemble-def-index', Date.now() - assembleDefIndexStarted);
+phaseTimer.recordPhase(
+  "assemble-def-index",
+  Date.now() - assembleDefIndexStarted,
+);
 
 // consumers: Map<filePath, Map<symbolName, Set<consumerFile>>>
 const consumers = new Map();
@@ -497,7 +539,8 @@ function addConsumer(defFile, name, consumerFile, use = null) {
       type: new Set(),
     });
   }
-  const space = use && typeof use === 'object' && use.typeOnly === true ? 'type' : 'value';
+  const space =
+    use && typeof use === "object" && use.typeOnly === true ? "type" : "value";
   bySymbol.get(name)[space].add(consumerFile);
 }
 
@@ -518,6 +561,7 @@ let sfcScriptConsumerUses = 0;
 let sfcScriptSrcReachabilityUses = 0;
 let sfcStyleAssetReferenceUses = 0;
 let sfcTemplateComponentRefUses = 0;
+let sfcGlobalComponentRegistrationUses = 0;
 const dependencyImportConsumers = [];
 // Spec-frequency counter for topUnresolvedSpecifiers artifact.
 // Keyed by "prefix" (everything up to first /) so "@/foo/a" and
@@ -534,54 +578,62 @@ const unresolvedInternalSpecifierRecords = [];
 const resolvedInternalEdges = [];
 const sfcStyleAssetReferences = [];
 const sfcTemplateComponentRefs = [];
+const sfcGlobalComponentRegistrations = [];
 const generatedVirtualSurfaces = new Map();
 const generatedVirtualImportConsumers = [];
 function prefixOf(spec) {
-  const slash = spec.indexOf('/');
+  const slash = spec.indexOf("/");
   return slash > 0 ? spec.slice(0, slash + 1) : spec;
 }
 
 function edgeKindForUse(use) {
-  const kind = typeof use === 'object' ? use.kind : 'import';
-  if (kind === 'import') return 'import-named';
-  if (kind === 'default') return 'import-default';
-  if (kind === 'namespace' || kind === 'namespace-member') return 'import-namespace';
-  if (kind === 'import-side-effect') return 'import-side-effect';
-  if (kind === 'reExport') return 'reexport-named';
-  if (kind === 'reExportAll') return 'reexport-broad';
-  if (kind === 'reExportNamespace') return 'reexport-namespace';
-  if (kind === 'imported-namespace-member') return 'reexport-namespace-member';
-  if (kind === 'imported-namespace-escape') return 'reexport-namespace-escape';
-  if (kind === 'dynamic' || kind === 'dynamic-member') return 'dynamic-literal';
-  if (kind === 'cjs-side-effect-only') return 'cjs-side-effect';
-  if (kind === 'cjs-require-exact') return 'cjs-require-exact';
-  if (kind === 'cjs-namespace-member') return 'cjs-namespace-member';
-  if (kind === 'cjs-namespace-escape') return 'cjs-namespace-escape';
-  if (kind === 'cjs-reexport-broad') return 'cjs-reexport-broad';
+  const kind = typeof use === "object" ? use.kind : "import";
+  if (kind === "import") return "import-named";
+  if (kind === "default") return "import-default";
+  if (kind === "namespace" || kind === "namespace-member")
+    return "import-namespace";
+  if (kind === "import-side-effect") return "import-side-effect";
+  if (kind === "reExport") return "reexport-named";
+  if (kind === "reExportAll") return "reexport-broad";
+  if (kind === "reExportNamespace") return "reexport-namespace";
+  if (kind === "imported-namespace-member") return "reexport-namespace-member";
+  if (kind === "imported-namespace-escape") return "reexport-namespace-escape";
+  if (kind === "dynamic" || kind === "dynamic-member") return "dynamic-literal";
+  if (kind === "cjs-side-effect-only") return "cjs-side-effect";
+  if (kind === "cjs-require-exact") return "cjs-require-exact";
+  if (kind === "cjs-namespace-member") return "cjs-namespace-member";
+  if (kind === "cjs-namespace-escape") return "cjs-namespace-escape";
+  if (kind === "cjs-reexport-broad") return "cjs-reexport-broad";
   return kind;
 }
 
 function isImportedNamespaceAliasUse(use) {
-  return use?.kind === 'imported-namespace-member' ||
-    use?.kind === 'imported-namespace-escape';
+  return (
+    use?.kind === "imported-namespace-member" ||
+    use?.kind === "imported-namespace-escape"
+  );
 }
 
 function addResolvedInternalEdge(consumerFile, target, use) {
-  const fromSpec = typeof use === 'string' ? use : use.fromSpec;
+  const fromSpec = typeof use === "string" ? use : use.fromSpec;
   resolvedInternalEdges.push({
     from: relPath(ROOT, consumerFile),
     to: relPath(ROOT, target),
     kind: edgeKindForUse(use),
     source: fromSpec,
-    typeOnly: typeof use === 'object' ? !!use.typeOnly : false,
-    ...(typeof use === 'object' && Number.isFinite(use.line) ? { line: use.line } : {}),
-    ...(typeof use === 'object' && use.sfcLanguage ? { sfcLanguage: use.sfcLanguage } : {}),
+    typeOnly: typeof use === "object" ? !!use.typeOnly : false,
+    ...(typeof use === "object" && Number.isFinite(use.line)
+      ? { line: use.line }
+      : {}),
+    ...(typeof use === "object" && use.sfcLanguage
+      ? { sfcLanguage: use.sfcLanguage }
+      : {}),
   });
 }
 
 function stripStyleAssetResourceQuery(spec) {
-  const q = spec.indexOf('?');
-  const h = spec.indexOf('#');
+  const q = spec.indexOf("?");
+  const h = spec.indexOf("#");
   const candidates = [];
   if (q >= 0) candidates.push(q);
   if (h > 0) candidates.push(h);
@@ -589,13 +641,19 @@ function stripStyleAssetResourceQuery(spec) {
 }
 
 function existingRelativeSpecifierTarget(consumerFile, spec) {
-  if (typeof spec !== 'string') return null;
-  if (!spec.startsWith('./') && !spec.startsWith('../')) return null;
-  const target = path.resolve(path.dirname(consumerFile), stripStyleAssetResourceQuery(spec));
+  if (typeof spec !== "string") return null;
+  if (!spec.startsWith("./") && !spec.startsWith("../")) return null;
+  const target = path.resolve(
+    path.dirname(consumerFile),
+    stripStyleAssetResourceQuery(spec),
+  );
   return fileExists(target) ? target : null;
 }
 
-function addSfcStyleAssetReference(use, { status, resolvedFile = null, reason = null }) {
+function addSfcStyleAssetReference(
+  use,
+  { status, resolvedFile = null, reason = null },
+) {
   sfcStyleAssetReferences.push({
     consumerFile: relPath(ROOT, use.consumerFile),
     fromSpec: use.fromSpec,
@@ -613,7 +671,10 @@ function addSfcStyleAssetReference(use, { status, resolvedFile = null, reason = 
   });
 }
 
-function addSfcTemplateComponentRef(use, { status, resolvedFile = null, reason = null }) {
+function addSfcTemplateComponentRef(
+  use,
+  { status, resolvedFile = null, reason = null },
+) {
   sfcTemplateComponentRefs.push({
     consumerFile: relPath(ROOT, use.consumerFile),
     tagName: use.tagName,
@@ -637,32 +698,81 @@ function addSfcTemplateComponentRef(use, { status, resolvedFile = null, reason =
   });
 }
 
-function recordUnresolvedInternalSpecifier(consumerFile, use) {
-  const spec = typeof use === 'string' ? use : use.fromSpec;
-  if (typeof spec !== 'string' || spec.length === 0) return;
-  const explanation = explainUnresolvedSpecifier(ROOT, aliasMap, consumerFile, spec) ?? {};
-  const diagnostic = typeof use === 'object' ? {
-    ...(use.reason ? { reason: use.reason } : {}),
-    ...(use.resolverStage ? { resolverStage: use.resolverStage } : {}),
-    ...(use.outputLevel ? { outputLevel: use.outputLevel } : {}),
-    ...(use.unsupportedFamily ? { unsupportedFamily: use.unsupportedFamily } : {}),
-    ...(use.hint ? { hint: use.hint } : {}),
-    ...(Array.isArray(use.targetCandidates) ? { targetCandidates: use.targetCandidates } : {}),
-    ...(use.affectedPackageScope ? { affectedPackageScope: use.affectedPackageScope } : {}),
-    ...(typeof use.matchCount === 'number' ? { matchCount: use.matchCount } : {}),
-    ...(typeof use.cap === 'number' ? { cap: use.cap } : {}),
-    ...(use.scanPolicy ? { scanPolicy: use.scanPolicy } : {}),
-    ...(use.affectedDir
-      ? { affectedPackageScope: relPath(ROOT, path.resolve(path.dirname(consumerFile), use.affectedDir)) }
+function addSfcGlobalComponentRegistration(
+  use,
+  { status, resolvedFile = null, reason = null },
+) {
+  sfcGlobalComponentRegistrations.push({
+    registrationFile: relPath(ROOT, use.registrationFile),
+    framework: use.framework,
+    api: use.api,
+    ...(use.componentName ? { componentName: use.componentName } : {}),
+    ...(Array.isArray(use.normalizedTagNames)
+      ? { normalizedTagNames: [...use.normalizedTagNames].sort() }
       : {}),
-  } : {};
+    ...(use.bindingName ? { bindingName: use.bindingName } : {}),
+    ...(use.bindingSource
+      ? {
+          bindingSource: use.bindingSource,
+          fromSpec: use.bindingSource,
+        }
+      : {}),
+    source: use.source,
+    confidence: status === "muted" ? "muted-review" : "registration-review",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status,
+    ...(resolvedFile ? { resolvedFile: relPath(ROOT, resolvedFile) } : {}),
+    ...(reason ? { reason } : {}),
+    ...(use.bindingKind ? { bindingKind: use.bindingKind } : {}),
+    ...(use.importedName ? { importedName: use.importedName } : {}),
+    ...(Number.isFinite(use.line) ? { line: use.line } : {}),
+  });
+}
+
+function recordUnresolvedInternalSpecifier(consumerFile, use) {
+  const spec = typeof use === "string" ? use : use.fromSpec;
+  if (typeof spec !== "string" || spec.length === 0) return;
+  const explanation =
+    explainUnresolvedSpecifier(ROOT, aliasMap, consumerFile, spec) ?? {};
+  const diagnostic =
+    typeof use === "object"
+      ? {
+          ...(use.reason ? { reason: use.reason } : {}),
+          ...(use.resolverStage ? { resolverStage: use.resolverStage } : {}),
+          ...(use.outputLevel ? { outputLevel: use.outputLevel } : {}),
+          ...(use.unsupportedFamily
+            ? { unsupportedFamily: use.unsupportedFamily }
+            : {}),
+          ...(use.hint ? { hint: use.hint } : {}),
+          ...(Array.isArray(use.targetCandidates)
+            ? { targetCandidates: use.targetCandidates }
+            : {}),
+          ...(use.affectedPackageScope
+            ? { affectedPackageScope: use.affectedPackageScope }
+            : {}),
+          ...(typeof use.matchCount === "number"
+            ? { matchCount: use.matchCount }
+            : {}),
+          ...(typeof use.cap === "number" ? { cap: use.cap } : {}),
+          ...(use.scanPolicy ? { scanPolicy: use.scanPolicy } : {}),
+          ...(use.affectedDir
+            ? {
+                affectedPackageScope: relPath(
+                  ROOT,
+                  path.resolve(path.dirname(consumerFile), use.affectedDir),
+                ),
+              }
+            : {}),
+        }
+      : {};
   unresolvedInternalSpecifiers.add(spec);
   unresolvedInternalSpecifierRecords.push({
     specifier: spec,
     consumerFile: relPath(ROOT, consumerFile),
     fromHint: relPath(ROOT, consumerFile),
-    kind: typeof use === 'object' ? (use.kind ?? 'import') : 'import',
-    ...(typeof use === 'object' && typeof use.typeOnly === 'boolean'
+    kind: typeof use === "object" ? (use.kind ?? "import") : "import",
+    ...(typeof use === "object" && typeof use.typeOnly === "boolean"
       ? { typeOnly: use.typeOnly }
       : {}),
     ...explanation,
@@ -671,24 +781,24 @@ function recordUnresolvedInternalSpecifier(consumerFile, use) {
 }
 
 function generatedVirtualExportForUse(surface, use) {
-  const kind = typeof use === 'object' ? use.kind : 'import';
-  if (kind === 'import-side-effect') return null;
-  if (kind === 'namespace') return { name: '*', spaces: ['value', 'type'] };
-  const name = typeof use === 'object' ? use.name : null;
-  if (!name || name === '*') return null;
+  const kind = typeof use === "object" ? use.kind : "import";
+  if (kind === "import-side-effect") return null;
+  if (kind === "namespace") return { name: "*", spaces: ["value", "type"] };
+  const name = typeof use === "object" ? use.name : null;
+  if (!name || name === "*") return null;
   const exported = (surface.exports ?? []).find((item) => item.name === name);
   if (!exported) return null;
-  const wantedSpace = use?.typeOnly === true ? 'type' : 'value';
+  const wantedSpace = use?.typeOnly === true ? "type" : "value";
   return exported.spaces?.includes(wantedSpace) ? exported : null;
 }
 
 function addGeneratedVirtualConsumer(consumerFile, use, surface, exported) {
   generatedVirtualSurfaces.set(surface.id, surface);
-  const fromSpec = typeof use === 'string' ? use : use.fromSpec;
+  const fromSpec = typeof use === "string" ? use : use.fromSpec;
   const record = {
     consumerFile: relPath(ROOT, consumerFile),
     specifier: fromSpec,
-    kind: typeof use === 'object' ? (use.kind ?? 'import') : 'import',
+    kind: typeof use === "object" ? (use.kind ?? "import") : "import",
     surfaceId: surface.id,
     source: surface.source,
   };
@@ -696,7 +806,7 @@ function addGeneratedVirtualConsumer(consumerFile, use, surface, exported) {
   if (Array.isArray(exported?.spaces) && exported.spaces.length > 0) {
     record.spaces = exported.spaces;
   }
-  if (typeof use === 'object' && typeof use.typeOnly === 'boolean') {
+  if (typeof use === "object" && typeof use.typeOnly === "boolean") {
     record.typeOnly = use.typeOnly;
   }
   generatedVirtualImportConsumers.push(record);
@@ -706,7 +816,12 @@ const namespaceReExportsByFile = new Map();
 const namedReExportsByFile = new Map();
 const namespaceReExportDiagnostics = [];
 
-function addNamespaceReExport(barrelFile, exportedName, targetFile, sourceSpec) {
+function addNamespaceReExport(
+  barrelFile,
+  exportedName,
+  targetFile,
+  sourceSpec,
+) {
   if (!namespaceReExportsByFile.has(barrelFile)) {
     namespaceReExportsByFile.set(barrelFile, new Map());
   }
@@ -734,7 +849,13 @@ function getNamedReExport(barrelFile, exportedName) {
   return namedReExportsByFile.get(barrelFile)?.get(exportedName) ?? null;
 }
 
-function namespaceReExportChainEntry(kind, barrelFile, exportedName, targetFile, sourceSpec) {
+function namespaceReExportChainEntry(
+  kind,
+  barrelFile,
+  exportedName,
+  targetFile,
+  sourceSpec,
+) {
   return {
     kind,
     file: relPath(ROOT, barrelFile),
@@ -756,7 +877,7 @@ function resolveNamespaceReExport(barrelFile, exportedName, seen = new Set()) {
       sourceSpec: direct.sourceSpec,
       chain: [
         namespaceReExportChainEntry(
-          'namespace-reexport',
+          "namespace-reexport",
           barrelFile,
           exportedName,
           direct.targetFile,
@@ -775,7 +896,7 @@ function resolveNamespaceReExport(barrelFile, exportedName, seen = new Set()) {
     sourceSpec: nested.sourceSpec,
     chain: [
       namespaceReExportChainEntry(
-        'named-reexport',
+        "named-reexport",
         barrelFile,
         exportedName,
         named.targetFile,
@@ -786,64 +907,88 @@ function resolveNamespaceReExport(barrelFile, exportedName, seen = new Set()) {
   };
 }
 
-function addNamespaceReExportDiagnostic(consumerFile, importFile, use, reExport) {
+function addNamespaceReExportDiagnostic(
+  consumerFile,
+  importFile,
+  use,
+  reExport,
+) {
   namespaceReExportDiagnostics.push({
-    kind: 'opaque-namespace-escape',
-    reason: 'namespace-object-escaped',
+    kind: "opaque-namespace-escape",
+    reason: "namespace-object-escaped",
     consumerFile: relPath(ROOT, consumerFile),
     importFile: relPath(ROOT, importFile),
     exportedName: use.name,
     targetFile: relPath(ROOT, reExport.targetFile),
     source: use.fromSpec,
-    ...(typeof use.line === 'number' ? { line: use.line } : {}),
-    ...(Array.isArray(reExport.chain) && reExport.chain.length > 0 ? { chain: reExport.chain } : {}),
+    ...(typeof use.line === "number" ? { line: use.line } : {}),
+    ...(Array.isArray(reExport.chain) && reExport.chain.length > 0
+      ? { chain: reExport.chain }
+      : {}),
   });
 }
 
 const assembleNamespaceReExportsStarted = Date.now();
 for (const [barrelFile, info] of fileData) {
   for (const use of info.uses ?? []) {
-    if (use?.kind !== 'reExportNamespace' && use?.kind !== 'reExport') continue;
-    if (!use.name || use.name === '*' || use.typeOnly === true) continue;
+    if (use?.kind !== "reExportNamespace" && use?.kind !== "reExport") continue;
+    if (!use.name || use.name === "*" || use.typeOnly === true) continue;
     const target = resolveSpecifier(barrelFile, use);
-    if (!target || target === 'EXTERNAL' || target === 'UNRESOLVED_INTERNAL') continue;
-    if (isGeneratedVirtualResolution(target) || isNonSourceAssetResolution(target)) continue;
-    if (use.kind === 'reExportNamespace') {
+    if (!target || target === "EXTERNAL" || target === "UNRESOLVED_INTERNAL")
+      continue;
+    if (
+      isGeneratedVirtualResolution(target) ||
+      isNonSourceAssetResolution(target)
+    )
+      continue;
+    if (use.kind === "reExportNamespace") {
       addNamespaceReExport(barrelFile, use.name, target, use.fromSpec);
     } else {
       addNamedReExport(barrelFile, use.name, target, use.fromSpec);
     }
   }
 }
-phaseTimer.setCounter('namespaceReExportFileCount', namespaceReExportsByFile.size);
-phaseTimer.setCounter('namespaceReExportEntryCount', countNestedMapEntries(namespaceReExportsByFile));
-phaseTimer.setCounter('namedReExportFileCount', namedReExportsByFile.size);
-phaseTimer.setCounter('namedReExportEntryCount', countNestedMapEntries(namedReExportsByFile));
-phaseTimer.recordPhase('assemble-namespace-reexports', Date.now() - assembleNamespaceReExportsStarted);
+phaseTimer.setCounter(
+  "namespaceReExportFileCount",
+  namespaceReExportsByFile.size,
+);
+phaseTimer.setCounter(
+  "namespaceReExportEntryCount",
+  countNestedMapEntries(namespaceReExportsByFile),
+);
+phaseTimer.setCounter("namedReExportFileCount", namedReExportsByFile.size);
+phaseTimer.setCounter(
+  "namedReExportEntryCount",
+  countNestedMapEntries(namedReExportsByFile),
+);
+phaseTimer.recordPhase(
+  "assemble-namespace-reexports",
+  Date.now() - assembleNamespaceReExportsStarted,
+);
 
 function packageRootFromSpec(spec) {
-  if (typeof spec !== 'string' || spec.length === 0) return null;
-  if (spec.startsWith('.') || spec.startsWith('/')) return null;
-  if (spec.startsWith('@')) {
-    const parts = spec.split('/');
+  if (typeof spec !== "string" || spec.length === 0) return null;
+  if (spec.startsWith(".") || spec.startsWith("/")) return null;
+  if (spec.startsWith("@")) {
+    const parts = spec.split("/");
     if (parts.length < 2 || parts[1].length === 0) return null;
     return `${parts[0]}/${parts[1]}`;
   }
-  return spec.split('/')[0];
+  return spec.split("/")[0];
 }
 
 function addDependencyImportConsumer(consumerFile, use, source) {
-  const fromSpec = typeof use === 'string' ? use : use.fromSpec;
+  const fromSpec = typeof use === "string" ? use : use.fromSpec;
   const depRoot = packageRootFromSpec(fromSpec);
   if (!depRoot) return;
   const rec = {
     file: relPath(ROOT, consumerFile),
     fromSpec,
     depRoot,
-    kind: typeof use === 'object' ? (use.kind ?? 'import') : 'import',
+    kind: typeof use === "object" ? (use.kind ?? "import") : "import",
     source,
   };
-  if (typeof use === 'object' && typeof use.typeOnly === 'boolean') {
+  if (typeof use === "object" && typeof use.typeOnly === "boolean") {
     rec.typeOnly = use.typeOnly;
   }
   dependencyImportConsumers.push(rec);
@@ -879,9 +1024,11 @@ const sourceUseBranchCounts = {
   importMetaGlobUnsupported: 0,
 };
 const sourceUseResolverStatsBefore =
-  typeof _resolveRaw.memoStats === 'function' ? _resolveRaw.memoStats() : null;
+  typeof _resolveRaw.memoStats === "function" ? _resolveRaw.memoStats() : null;
 const sourceUseResolverStageStatsBefore =
-  typeof _resolveRaw.stageStats === 'function' ? _resolveRaw.stageStats() : null;
+  typeof _resolveRaw.stageStats === "function"
+    ? _resolveRaw.stageStats()
+    : null;
 
 function addSourceUseTiming(name, started) {
   sourceUseTimings[name] += performance.now() - started;
@@ -894,13 +1041,15 @@ function incrementSourceUseBranch(name) {
 function importMetaGlobDiagnosticUse(use, expansion) {
   return {
     ...use,
-    reason: expansion.reason ?? use.reason ?? 'import-meta-glob-unsupported',
-    resolverStage: 'import-meta-glob',
-    outputLevel: 'unsupported',
-    unsupportedFamily: 'dynamic-modules',
-    hint: use.hint ?? 'dynamic-module-surface',
-    ...(typeof expansion.matchCount === 'number' ? { matchCount: expansion.matchCount } : {}),
-    ...(typeof expansion.cap === 'number' ? { cap: expansion.cap } : {}),
+    reason: expansion.reason ?? use.reason ?? "import-meta-glob-unsupported",
+    resolverStage: "import-meta-glob",
+    outputLevel: "unsupported",
+    unsupportedFamily: "dynamic-modules",
+    hint: use.hint ?? "dynamic-module-surface",
+    ...(typeof expansion.matchCount === "number"
+      ? { matchCount: expansion.matchCount }
+      : {}),
+    ...(typeof expansion.cap === "number" ? { cap: expansion.cap } : {}),
     ...(expansion.scanPolicy ? { scanPolicy: expansion.scanPolicy } : {}),
     ...(expansion.affectedPackageScope
       ? { affectedPackageScope: expansion.affectedPackageScope }
@@ -910,7 +1059,7 @@ function importMetaGlobDiagnosticUse(use, expansion) {
 
 for (const [consumerFile, info] of fileData) {
   for (const u of info.uses) {
-    if (u?.kind === 'import-meta-glob') {
+    if (u?.kind === "import-meta-glob") {
       const branchStarted = performance.now();
       const expansion = expandImportMetaGlobPattern({
         root: ROOT,
@@ -921,64 +1070,65 @@ for (const [consumerFile, info] of fileData) {
       });
 
       if (expansion.ok) {
-        incrementSourceUseBranch('importMetaGlobResolved');
+        incrementSourceUseBranch("importMetaGlobResolved");
         for (const targetFile of expansion.targets) {
           totalUses++;
           resolvedInternalUses++;
           addResolvedInternalEdge(consumerFile, targetFile, {
             ...u,
-            kind: 'dynamic-import-meta-glob',
-            outputLevel: 'resolved',
+            kind: "dynamic-import-meta-glob",
+            outputLevel: "resolved",
           });
-          if (!namespaceUsers.has(targetFile)) namespaceUsers.set(targetFile, new Set());
+          if (!namespaceUsers.has(targetFile))
+            namespaceUsers.set(targetFile, new Set());
           namespaceUsers.get(targetFile).add(consumerFile);
         }
-        addSourceUseTiming('resolvedInternal', branchStarted);
+        addSourceUseTiming("resolvedInternal", branchStarted);
       } else {
-        incrementSourceUseBranch('importMetaGlobUnsupported');
+        incrementSourceUseBranch("importMetaGlobUnsupported");
         unresolvedInternalUses++;
         unresolvedUses++;
         recordUnresolvedInternalSpecifier(
           consumerFile,
           importMetaGlobDiagnosticUse(u, expansion),
         );
-        addSourceUseTiming('unresolved', branchStarted);
+        addSourceUseTiming("unresolved", branchStarted);
       }
       continue;
     }
 
     const resolveStarted = performance.now();
     const target = resolveSpecifier(consumerFile, u);
-    addSourceUseTiming('resolve', resolveStarted);
-    if (target === 'EXTERNAL') {
+    addSourceUseTiming("resolve", resolveStarted);
+    if (target === "EXTERNAL") {
       const branchStarted = performance.now();
-      incrementSourceUseBranch('external');
+      incrementSourceUseBranch("external");
       if (isImportedNamespaceAliasUse(u)) {
-        incrementSourceUseBranch('skippedNamespaceAlias');
-        addSourceUseTiming('external', branchStarted);
+        incrementSourceUseBranch("skippedNamespaceAlias");
+        addSourceUseTiming("external", branchStarted);
         continue;
       }
       // External npm package. NOT a blind spot for dead-export
       // analysis — external packages don't consume internal exports.
       externalUses++;
-      addDependencyImportConsumer(consumerFile, u, 'source-import');
+      addDependencyImportConsumer(consumerFile, u, "source-import");
       unresolvedUses++; // legacy counter for backward-compat
-      addSourceUseTiming('external', branchStarted);
+      addSourceUseTiming("external", branchStarted);
       continue;
     }
     if (isNonSourceAssetResolution(target)) {
       const branchStarted = performance.now();
-      incrementSourceUseBranch('asset');
+      incrementSourceUseBranch("asset");
       nonSourceAssetUses++;
-      addSourceUseTiming('asset', branchStarted);
+      addSourceUseTiming("asset", branchStarted);
       continue;
     }
-    if (target === 'UNRESOLVED_INTERNAL') {
+    if (target === "UNRESOLVED_INTERNAL") {
       const branchStarted = performance.now();
-      incrementSourceUseBranch('unresolved');
+      incrementSourceUseBranch("unresolved");
       if (isImportedNamespaceAliasUse(u)) {
-        incrementSourceUseBranch('skippedNamespaceAlias');
-        addSourceUseTiming('unresolved', branchStarted);
+        incrementSourceUseBranch("skippedNamespaceAlias");
+        addSourceUseTiming("unresolved", branchStarted);
         continue;
       }
       // Local alias matched (e.g. `@/*` from tsconfig paths) but no
@@ -986,45 +1136,48 @@ for (const [consumerFile, info] of fileData) {
       // a legitimate consumer.
       unresolvedInternalUses++;
       unresolvedUses++;
-      const spec = typeof u === 'string' ? u : u.fromSpec;
+      const spec = typeof u === "string" ? u : u.fromSpec;
       const p = prefixOf(spec);
-      unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
+      unresolvedInternalByPrefix.set(
+        p,
+        (unresolvedInternalByPrefix.get(p) ?? 0) + 1,
+      );
       if (!prefixExamples.has(p)) prefixExamples.set(p, spec);
       recordUnresolvedInternalSpecifier(consumerFile, u);
-      addSourceUseTiming('unresolved', branchStarted);
+      addSourceUseTiming("unresolved", branchStarted);
       continue;
     }
     if (isGeneratedVirtualResolution(target)) {
       const branchStarted = performance.now();
-      incrementSourceUseBranch('generatedVirtual');
+      incrementSourceUseBranch("generatedVirtual");
       if (isImportedNamespaceAliasUse(u)) {
-        incrementSourceUseBranch('skippedNamespaceAlias');
-        addSourceUseTiming('generatedVirtual', branchStarted);
+        incrementSourceUseBranch("skippedNamespaceAlias");
+        addSourceUseTiming("generatedVirtual", branchStarted);
         continue;
       }
       generatedVirtualSurfaces.set(target.id, target);
       const exported = generatedVirtualExportForUse(target, u);
       if (!exported) {
-        incrementSourceUseBranch('generatedVirtualUnresolved');
+        incrementSourceUseBranch("generatedVirtualUnresolved");
         unresolvedInternalUses++;
         unresolvedUses++;
         recordUnresolvedInternalSpecifier(consumerFile, u);
-        addSourceUseTiming('generatedVirtual', branchStarted);
+        addSourceUseTiming("generatedVirtual", branchStarted);
         continue;
       }
       totalUses++;
       resolvedInternalUses++;
       resolvedGeneratedVirtualUses++;
       addGeneratedVirtualConsumer(consumerFile, u, target, exported);
-      addSourceUseTiming('generatedVirtual', branchStarted);
+      addSourceUseTiming("generatedVirtual", branchStarted);
       continue;
     }
     if (!target) {
       const branchStarted = performance.now();
-      incrementSourceUseBranch('unresolved');
+      incrementSourceUseBranch("unresolved");
       if (isImportedNamespaceAliasUse(u)) {
-        incrementSourceUseBranch('skippedNamespaceAlias');
-        addSourceUseTiming('unresolved', branchStarted);
+        incrementSourceUseBranch("skippedNamespaceAlias");
+        addSourceUseTiming("unresolved", branchStarted);
         continue;
       }
       // null — relative path that didn't resolve, or malformed spec.
@@ -1034,38 +1187,42 @@ for (const [consumerFile, info] of fileData) {
       unresolvedInternalUses++;
       unresolvedUses++;
       recordUnresolvedInternalSpecifier(consumerFile, u);
-      addSourceUseTiming('unresolved', branchStarted);
+      addSourceUseTiming("unresolved", branchStarted);
       continue;
     }
-    if (u.kind === 'imported-namespace-member' || u.kind === 'imported-namespace-escape') {
+    if (
+      u.kind === "imported-namespace-member" ||
+      u.kind === "imported-namespace-escape"
+    ) {
       const branchStarted = performance.now();
-      incrementSourceUseBranch('namespaceReExport');
+      incrementSourceUseBranch("namespaceReExport");
       const reExport = resolveNamespaceReExport(target, u.name);
       if (!reExport) {
-        incrementSourceUseBranch('namespaceReExportMiss');
-        addSourceUseTiming('namespaceReExport', branchStarted);
+        incrementSourceUseBranch("namespaceReExportMiss");
+        addSourceUseTiming("namespaceReExport", branchStarted);
         continue;
       }
       totalUses++;
       resolvedInternalUses++;
       addResolvedInternalEdge(consumerFile, reExport.targetFile, u);
-      if (u.kind === 'imported-namespace-escape') {
-        incrementSourceUseBranch('namespaceReExportEscape');
+      if (u.kind === "imported-namespace-escape") {
+        incrementSourceUseBranch("namespaceReExportEscape");
         addNamespaceReExportDiagnostic(consumerFile, target, u, reExport);
-        if (!namespaceUsers.has(reExport.targetFile)) namespaceUsers.set(reExport.targetFile, new Set());
+        if (!namespaceUsers.has(reExport.targetFile))
+          namespaceUsers.set(reExport.targetFile, new Set());
         namespaceUsers.get(reExport.targetFile).add(consumerFile);
       } else if (u.memberName) {
-        incrementSourceUseBranch('namespaceReExportMember');
+        incrementSourceUseBranch("namespaceReExportMember");
         addConsumer(reExport.targetFile, u.memberName, consumerFile, {
           ...u,
           name: u.memberName,
         });
       }
-      addSourceUseTiming('namespaceReExport', branchStarted);
+      addSourceUseTiming("namespaceReExport", branchStarted);
       continue;
     }
     const branchStarted = performance.now();
-    incrementSourceUseBranch('resolvedInternal');
+    incrementSourceUseBranch("resolvedInternal");
     totalUses++;
     resolvedInternalUses++;
     addResolvedInternalEdge(consumerFile, target, u);
@@ -1073,109 +1230,166 @@ for (const [consumerFile, info] of fileData) {
     // consumer, since we can't statically know which symbol the caller uses.
     // PCEF P0: CJS side-effect-only imports evaluate the file but do not
     // consume named exports, while CJS namespace escapes/re-exports are broad.
-    if (u.kind === 'cjs-side-effect-only' || u.kind === 'import-side-effect') {
-      incrementSourceUseBranch('sideEffectOnly');
-      addSourceUseTiming('resolvedInternal', branchStarted);
+    if (u.kind === "cjs-side-effect-only" || u.kind === "import-side-effect") {
+      incrementSourceUseBranch("sideEffectOnly");
+      addSourceUseTiming("resolvedInternal", branchStarted);
       continue;
     }
-    if (u.kind === 'reExportNamespace') {
-      incrementSourceUseBranch('reExportNamespaceSkip');
-      addSourceUseTiming('resolvedInternal', branchStarted);
+    if (u.kind === "reExportNamespace") {
+      incrementSourceUseBranch("reExportNamespaceSkip");
+      addSourceUseTiming("resolvedInternal", branchStarted);
       continue;
     }
-    if (u.kind === 'namespace' ||
-        u.kind === 'reExportAll' ||
-        u.kind === 'dynamic' ||
-        u.kind === 'cjs-namespace-escape' ||
-        u.kind === 'cjs-reexport-broad') {
-      incrementSourceUseBranch('broadNamespace');
+    if (
+      u.kind === "namespace" ||
+      u.kind === "reExportAll" ||
+      u.kind === "dynamic" ||
+      u.kind === "cjs-namespace-escape" ||
+      u.kind === "cjs-reexport-broad"
+    ) {
+      incrementSourceUseBranch("broadNamespace");
       if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
       namespaceUsers.get(target).add(consumerFile);
     } else {
-      incrementSourceUseBranch('directConsumer');
+      incrementSourceUseBranch("directConsumer");
       addConsumer(target, u.name, consumerFile, u);
     }
-    addSourceUseTiming('resolvedInternal', branchStarted);
+    addSourceUseTiming("resolvedInternal", branchStarted);
   }
 }
 const sourceUseResolverStatsAfter =
-  typeof _resolveRaw.memoStats === 'function' ? _resolveRaw.memoStats() : null;
+  typeof _resolveRaw.memoStats === "function" ? _resolveRaw.memoStats() : null;
 const sourceUseResolverStageStatsAfter =
-  typeof _resolveRaw.stageStats === 'function' ? _resolveRaw.stageStats() : null;
-phaseTimer.recordPhase('assemble-source-use-resolve', sourceUseTimings.resolve);
-phaseTimer.recordPhase('assemble-source-use-external', sourceUseTimings.external);
-phaseTimer.recordPhase('assemble-source-use-asset', sourceUseTimings.asset);
-phaseTimer.recordPhase('assemble-source-use-unresolved', sourceUseTimings.unresolved);
-phaseTimer.recordPhase('assemble-source-use-generated-virtual', sourceUseTimings.generatedVirtual);
-phaseTimer.recordPhase('assemble-source-use-namespace-reexport', sourceUseTimings.namespaceReExport);
-phaseTimer.recordPhase('assemble-source-use-resolved-internal', sourceUseTimings.resolvedInternal);
-phaseTimer.setCounter('sourceUseResolveMs', sourceUseTimings.resolve);
-phaseTimer.setCounter('sourceUseExternalMs', sourceUseTimings.external);
-phaseTimer.setCounter('sourceUseAssetMs', sourceUseTimings.asset);
-phaseTimer.setCounter('sourceUseUnresolvedMs', sourceUseTimings.unresolved);
-phaseTimer.setCounter('sourceUseGeneratedVirtualMs', sourceUseTimings.generatedVirtual);
-phaseTimer.setCounter('sourceUseNamespaceReExportMs', sourceUseTimings.namespaceReExport);
-phaseTimer.setCounter('sourceUseResolvedInternalMs', sourceUseTimings.resolvedInternal);
+  typeof _resolveRaw.stageStats === "function"
+    ? _resolveRaw.stageStats()
+    : null;
+phaseTimer.recordPhase("assemble-source-use-resolve", sourceUseTimings.resolve);
+phaseTimer.recordPhase(
+  "assemble-source-use-external",
+  sourceUseTimings.external,
+);
+phaseTimer.recordPhase("assemble-source-use-asset", sourceUseTimings.asset);
+phaseTimer.recordPhase(
+  "assemble-source-use-unresolved",
+  sourceUseTimings.unresolved,
+);
+phaseTimer.recordPhase(
+  "assemble-source-use-generated-virtual",
+  sourceUseTimings.generatedVirtual,
+);
+phaseTimer.recordPhase(
+  "assemble-source-use-namespace-reexport",
+  sourceUseTimings.namespaceReExport,
+);
+phaseTimer.recordPhase(
+  "assemble-source-use-resolved-internal",
+  sourceUseTimings.resolvedInternal,
+);
+phaseTimer.setCounter("sourceUseResolveMs", sourceUseTimings.resolve);
+phaseTimer.setCounter("sourceUseExternalMs", sourceUseTimings.external);
+phaseTimer.setCounter("sourceUseAssetMs", sourceUseTimings.asset);
+phaseTimer.setCounter("sourceUseUnresolvedMs", sourceUseTimings.unresolved);
+phaseTimer.setCounter(
+  "sourceUseGeneratedVirtualMs",
+  sourceUseTimings.generatedVirtual,
+);
+phaseTimer.setCounter(
+  "sourceUseNamespaceReExportMs",
+  sourceUseTimings.namespaceReExport,
+);
+phaseTimer.setCounter(
+  "sourceUseResolvedInternalMs",
+  sourceUseTimings.resolvedInternal,
+);
 for (const [name, count] of Object.entries(sourceUseBranchCounts)) {
-  phaseTimer.setCounter(`sourceUse${name[0].toUpperCase()}${name.slice(1)}BranchCount`, count);
+  phaseTimer.setCounter(
+    `sourceUse${name[0].toUpperCase()}${name.slice(1)}BranchCount`,
+    count,
+  );
 }
 if (sourceUseResolverStatsBefore && sourceUseResolverStatsAfter) {
   phaseTimer.setCounter(
-    'sourceUseResolverMemoHits',
-    sourceUseResolverStatsAfter.hits - sourceUseResolverStatsBefore.hits);
+    "sourceUseResolverMemoHits",
+    sourceUseResolverStatsAfter.hits - sourceUseResolverStatsBefore.hits,
+  );
   phaseTimer.setCounter(
-    'sourceUseResolverMemoMisses',
-    sourceUseResolverStatsAfter.misses - sourceUseResolverStatsBefore.misses);
-  phaseTimer.setCounter('sourceUseResolverMemoSize', sourceUseResolverStatsAfter.size);
-  phaseTimer.setCounter('symbolResolverMemoHits', sourceUseResolverStatsAfter.hits);
-  phaseTimer.setCounter('symbolResolverMemoMisses', sourceUseResolverStatsAfter.misses);
-  phaseTimer.setCounter('symbolResolverMemoSize', sourceUseResolverStatsAfter.size);
+    "sourceUseResolverMemoMisses",
+    sourceUseResolverStatsAfter.misses - sourceUseResolverStatsBefore.misses,
+  );
+  phaseTimer.setCounter(
+    "sourceUseResolverMemoSize",
+    sourceUseResolverStatsAfter.size,
+  );
+  phaseTimer.setCounter(
+    "symbolResolverMemoHits",
+    sourceUseResolverStatsAfter.hits,
+  );
+  phaseTimer.setCounter(
+    "symbolResolverMemoMisses",
+    sourceUseResolverStatsAfter.misses,
+  );
+  phaseTimer.setCounter(
+    "symbolResolverMemoSize",
+    sourceUseResolverStatsAfter.size,
+  );
 }
 if (sourceUseResolverStageStatsBefore && sourceUseResolverStageStatsAfter) {
   const extraStageCounterFields = [
-    ['PatternMatches', 'patternMatches'],
-    ['ProbeHits', 'probeHits'],
-    ['ProbeMisses', 'probeMisses'],
-    ['FallbackHits', 'fallbackHits'],
-    ['UnresolvedInternalResults', 'unresolvedInternalResults'],
+    ["PatternMatches", "patternMatches"],
+    ["ProbeHits", "probeHits"],
+    ["ProbeMisses", "probeMisses"],
+    ["FallbackHits", "fallbackHits"],
+    ["UnresolvedInternalResults", "unresolvedInternalResults"],
   ];
-  for (const [stageName, after] of Object.entries(sourceUseResolverStageStatsAfter)) {
+  for (const [stageName, after] of Object.entries(
+    sourceUseResolverStageStatsAfter,
+  )) {
     const before = sourceUseResolverStageStatsBefore[stageName] ?? {};
     const stem = `${stageName[0].toUpperCase()}${stageName.slice(1)}`;
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}Attempts`,
-      (after.attempts ?? 0) - (before.attempts ?? 0));
+      (after.attempts ?? 0) - (before.attempts ?? 0),
+    );
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}Results`,
-      (after.terminalResults ?? 0) - (before.terminalResults ?? 0));
+      (after.terminalResults ?? 0) - (before.terminalResults ?? 0),
+    );
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}Count`,
-      (after.count ?? 0) - (before.count ?? 0));
+      (after.count ?? 0) - (before.count ?? 0),
+    );
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}CacheHits`,
-      (after.cacheHits ?? 0) - (before.cacheHits ?? 0));
+      (after.cacheHits ?? 0) - (before.cacheHits ?? 0),
+    );
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}CacheMisses`,
-      (after.cacheMisses ?? 0) - (before.cacheMisses ?? 0));
+      (after.cacheMisses ?? 0) - (before.cacheMisses ?? 0),
+    );
     for (const [suffix, key] of extraStageCounterFields) {
       phaseTimer.setCounter(
         `sourceUseResolverStage${stem}${suffix}`,
-        (after[key] ?? 0) - (before[key] ?? 0));
+        (after[key] ?? 0) - (before[key] ?? 0),
+      );
     }
     phaseTimer.setCounter(
       `sourceUseResolverStage${stem}Ms`,
-      (after.wallMs ?? 0) - (before.wallMs ?? 0));
+      (after.wallMs ?? 0) - (before.wallMs ?? 0),
+    );
   }
 }
-phaseTimer.setCounter('sourceUseFilesProcessed', fileData.size);
-phaseTimer.setCounter('sourceUseRecordsProcessed', useCount);
-phaseTimer.recordPhase('assemble-source-uses', Date.now() - assembleSourceUsesStarted);
+phaseTimer.setCounter("sourceUseFilesProcessed", fileData.size);
+phaseTimer.setCounter("sourceUseRecordsProcessed", useCount);
+phaseTimer.recordPhase(
+  "assemble-source-uses",
+  Date.now() - assembleSourceUsesStarted,
+);
 
 function processOutOfBandImportConsumers(consumers, source) {
   let resolvedConsumerUses = 0;
   for (const u of consumers) {
     const target = resolveSpecifier(u.consumerFile, u);
-    if (target === 'EXTERNAL') {
+    if (target === "EXTERNAL") {
       externalUses++;
       addDependencyImportConsumer(u.consumerFile, u, source);
       unresolvedUses++;
@@ -1185,11 +1399,14 @@ function processOutOfBandImportConsumers(consumers, source) {
       nonSourceAssetUses++;
       continue;
     }
-    if (target === 'UNRESOLVED_INTERNAL') {
+    if (target === "UNRESOLVED_INTERNAL") {
       unresolvedInternalUses++;
       unresolvedUses++;
       const p = prefixOf(u.fromSpec);
-      unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
+      unresolvedInternalByPrefix.set(
+        p,
+        (unresolvedInternalByPrefix.get(p) ?? 0) + 1,
+      );
       if (!prefixExamples.has(p)) prefixExamples.set(p, u.fromSpec);
       recordUnresolvedInternalSpecifier(u.consumerFile, u);
       continue;
@@ -1219,8 +1436,8 @@ function processOutOfBandImportConsumers(consumers, source) {
     resolvedInternalUses++;
     resolvedConsumerUses++;
     addResolvedInternalEdge(u.consumerFile, target, u);
-    if (u.kind === 'import-side-effect') continue;
-    if (u.kind === 'namespace') {
+    if (u.kind === "import-side-effect") continue;
+    if (u.kind === "namespace") {
       if (!namespaceUsers.has(target)) namespaceUsers.set(target, new Set());
       namespaceUsers.get(target).add(u.consumerFile);
     } else {
@@ -1234,24 +1451,27 @@ function processSfcScriptSourceReachability(consumers) {
   let resolvedReachabilityUses = 0;
   for (const u of consumers) {
     const target = resolveSpecifier(u.consumerFile, u);
-    if (target === 'EXTERNAL') continue;
+    if (target === "EXTERNAL") continue;
     if (isNonSourceAssetResolution(target)) {
       nonSourceAssetUses++;
       continue;
     }
-    if (target === 'UNRESOLVED_INTERNAL' || !target) {
+    if (target === "UNRESOLVED_INTERNAL" || !target) {
       const diagnosticUse = {
         ...u,
-        reason: 'sfc-script-src-unresolved',
-        resolverStage: 'sfc-script-src',
-        outputLevel: 'unsupported',
-        unsupportedFamily: 'sfc-script-src',
-        hint: 'sfc-script-src-reachability',
+        reason: "sfc-script-src-unresolved",
+        resolverStage: "sfc-script-src",
+        outputLevel: "unsupported",
+        unsupportedFamily: "sfc-script-src",
+        hint: "sfc-script-src-reachability",
       };
       unresolvedInternalUses++;
       unresolvedUses++;
       const p = prefixOf(u.fromSpec);
-      unresolvedInternalByPrefix.set(p, (unresolvedInternalByPrefix.get(p) ?? 0) + 1);
+      unresolvedInternalByPrefix.set(
+        p,
+        (unresolvedInternalByPrefix.get(p) ?? 0) + 1,
+      );
       if (!prefixExamples.has(p)) prefixExamples.set(p, u.fromSpec);
       recordUnresolvedInternalSpecifier(u.consumerFile, diagnosticUse);
       continue;
@@ -1277,13 +1497,13 @@ function processSfcStyleAssetReferences(consumers) {
     if (fileExists(target)) {
       resolvedAssetUses++;
       addSfcStyleAssetReference(use, {
-        status: 'resolved',
+        status: "resolved",
         resolvedFile: target,
       });
     } else {
       addSfcStyleAssetReference(use, {
-        status: 'unresolved',
-        reason: 'sfc-style-asset-unresolved',
+        status: "unresolved",
+        reason: "sfc-style-asset-unresolved",
       });
     }
   }
@@ -1294,10 +1514,10 @@ function processSfcTemplateComponentRefs(consumers) {
   let recordedRefs = 0;
   for (const use of consumers) {
     recordedRefs++;
-    if (use.status === 'muted') {
+    if (use.status === "muted") {
       addSfcTemplateComponentRef(use, {
-        status: 'muted',
-        reason: use.reason ?? 'sfc-template-component-muted',
+        status: "muted",
+        reason: use.reason ?? "sfc-template-component-muted",
       });
       continue;
     }
@@ -1305,41 +1525,102 @@ function processSfcTemplateComponentRefs(consumers) {
     const target = resolveSpecifier(use.consumerFile, {
       ...use,
       fromSpec: use.bindingSource,
-      kind: 'sfc-template-component-ref',
-      name: '*',
+      kind: "sfc-template-component-ref",
+      name: "*",
       typeOnly: false,
     });
-    if (target === 'EXTERNAL') {
+    if (target === "EXTERNAL") {
       addSfcTemplateComponentRef(use, {
-        status: 'external',
-        reason: 'sfc-template-component-external-binding',
+        status: "external",
+        reason: "sfc-template-component-external-binding",
       });
       continue;
     }
-    if (isNonSourceAssetResolution(target) || isGeneratedVirtualResolution(target)) {
+    if (
+      isNonSourceAssetResolution(target) ||
+      isGeneratedVirtualResolution(target)
+    ) {
       addSfcTemplateComponentRef(use, {
-        status: 'muted',
+        status: "muted",
         resolvedFile: isNonSourceAssetResolution(target)
           ? existingRelativeSpecifierTarget(use.consumerFile, use.bindingSource)
           : null,
-        reason: 'sfc-template-component-non-source-binding',
+        reason: "sfc-template-component-non-source-binding",
       });
       continue;
     }
-    if (target === 'UNRESOLVED_INTERNAL' || !target) {
+    if (target === "UNRESOLVED_INTERNAL" || !target) {
       addSfcTemplateComponentRef(use, {
-        status: 'unresolved',
-        reason: 'sfc-template-component-unresolved',
+        status: "unresolved",
+        reason: "sfc-template-component-unresolved",
       });
       continue;
     }
 
     addSfcTemplateComponentRef(use, {
-      status: 'resolved',
+      status: "resolved",
       resolvedFile: target,
     });
   }
   return recordedRefs;
+}
+
+function processSfcGlobalComponentRegistrations(consumers) {
+  let recordedRegistrations = 0;
+  for (const use of consumers) {
+    recordedRegistrations++;
+    if (use.status === "muted") {
+      addSfcGlobalComponentRegistration(use, {
+        status: "muted",
+        reason: use.reason ?? "sfc-global-component-muted",
+      });
+      continue;
+    }
+
+    const target = resolveSpecifier(use.registrationFile, {
+      ...use,
+      fromSpec: use.bindingSource,
+      kind: "sfc-global-component-registration",
+      name: "*",
+      typeOnly: false,
+    });
+    if (target === "EXTERNAL") {
+      addSfcGlobalComponentRegistration(use, {
+        status: "external",
+        reason: "sfc-global-component-external-binding",
+      });
+      continue;
+    }
+    if (
+      isNonSourceAssetResolution(target) ||
+      isGeneratedVirtualResolution(target)
+    ) {
+      addSfcGlobalComponentRegistration(use, {
+        status: "muted",
+        resolvedFile: isNonSourceAssetResolution(target)
+          ? existingRelativeSpecifierTarget(
+              use.registrationFile,
+              use.bindingSource,
+            )
+          : null,
+        reason: "sfc-global-component-non-source-binding",
+      });
+      continue;
+    }
+    if (target === "UNRESOLVED_INTERNAL" || !target) {
+      addSfcGlobalComponentRegistration(use, {
+        status: "unresolved",
+        reason: "sfc-global-component-unresolved",
+      });
+      continue;
+    }
+
+    addSfcGlobalComponentRegistration(use, {
+      status: "resolved",
+      resolvedFile: target,
+    });
+  }
+  return recordedRegistrations;
 }
 
 const assembleMdxUsesStarted = Date.now();
@@ -1348,9 +1629,18 @@ const mdxImportConsumers = collectMdxImportConsumers({
   includeTests: cli.includeTests,
   exclude: cli.exclude,
 });
-phaseTimer.setCounter('mdxImportConsumerCandidateCount', mdxImportConsumers.length);
-mdxConsumerUses = processOutOfBandImportConsumers(mdxImportConsumers, 'mdx-import');
-phaseTimer.recordPhase('assemble-mdx-uses', Date.now() - assembleMdxUsesStarted);
+phaseTimer.setCounter(
+  "mdxImportConsumerCandidateCount",
+  mdxImportConsumers.length,
+);
+mdxConsumerUses = processOutOfBandImportConsumers(
+  mdxImportConsumers,
+  "mdx-import",
+);
+phaseTimer.recordPhase(
+  "assemble-mdx-uses",
+  Date.now() - assembleMdxUsesStarted,
+);
 
 const assembleSfcScriptUsesStarted = Date.now();
 const sfcImportConsumers = collectSfcImportConsumers({
@@ -1358,12 +1648,18 @@ const sfcImportConsumers = collectSfcImportConsumers({
   includeTests: cli.includeTests,
   exclude: cli.exclude,
 });
-phaseTimer.setCounter('sfcScriptImportConsumerCandidateCount', sfcImportConsumers.length);
+phaseTimer.setCounter(
+  "sfcScriptImportConsumerCandidateCount",
+  sfcImportConsumers.length,
+);
 sfcScriptConsumerUses = processOutOfBandImportConsumers(
   sfcImportConsumers,
-  'sfc-script-import',
+  "sfc-script-import",
 );
-phaseTimer.recordPhase('assemble-sfc-script-uses', Date.now() - assembleSfcScriptUsesStarted);
+phaseTimer.recordPhase(
+  "assemble-sfc-script-uses",
+  Date.now() - assembleSfcScriptUsesStarted,
+);
 
 const assembleSfcScriptSrcStarted = Date.now();
 const sfcScriptSources = collectSfcScriptSources({
@@ -1371,9 +1667,13 @@ const sfcScriptSources = collectSfcScriptSources({
   includeTests: cli.includeTests,
   exclude: cli.exclude,
 });
-phaseTimer.setCounter('sfcScriptSrcCandidateCount', sfcScriptSources.length);
-sfcScriptSrcReachabilityUses = processSfcScriptSourceReachability(sfcScriptSources);
-phaseTimer.recordPhase('assemble-sfc-script-src-uses', Date.now() - assembleSfcScriptSrcStarted);
+phaseTimer.setCounter("sfcScriptSrcCandidateCount", sfcScriptSources.length);
+sfcScriptSrcReachabilityUses =
+  processSfcScriptSourceReachability(sfcScriptSources);
+phaseTimer.recordPhase(
+  "assemble-sfc-script-src-uses",
+  Date.now() - assembleSfcScriptSrcStarted,
+);
 
 const assembleSfcStyleAssetsStarted = Date.now();
 const sfcStyleAssets = collectSfcStyleAssetReferences({
@@ -1381,9 +1681,12 @@ const sfcStyleAssets = collectSfcStyleAssetReferences({
   includeTests: cli.includeTests,
   exclude: cli.exclude,
 });
-phaseTimer.setCounter('sfcStyleAssetCandidateCount', sfcStyleAssets.length);
+phaseTimer.setCounter("sfcStyleAssetCandidateCount", sfcStyleAssets.length);
 sfcStyleAssetReferenceUses = processSfcStyleAssetReferences(sfcStyleAssets);
-phaseTimer.recordPhase('assemble-sfc-style-assets', Date.now() - assembleSfcStyleAssetsStarted);
+phaseTimer.recordPhase(
+  "assemble-sfc-style-assets",
+  Date.now() - assembleSfcStyleAssetsStarted,
+);
 
 const assembleSfcTemplateRefsStarted = Date.now();
 const sfcTemplateRefs = collectSfcTemplateComponentRefs({
@@ -1391,44 +1694,119 @@ const sfcTemplateRefs = collectSfcTemplateComponentRefs({
   includeTests: cli.includeTests,
   exclude: cli.exclude,
 });
-phaseTimer.setCounter('sfcTemplateComponentRefCandidateCount', sfcTemplateRefs.length);
+phaseTimer.setCounter(
+  "sfcTemplateComponentRefCandidateCount",
+  sfcTemplateRefs.length,
+);
 sfcTemplateComponentRefUses = processSfcTemplateComponentRefs(sfcTemplateRefs);
-phaseTimer.recordPhase('assemble-sfc-template-component-refs', Date.now() - assembleSfcTemplateRefsStarted);
+phaseTimer.recordPhase(
+  "assemble-sfc-template-component-refs",
+  Date.now() - assembleSfcTemplateRefsStarted,
+);
 
-console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
-console.log(`[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`);
-console.log(`[defs] total symbols: ${[...defIndex.values()].reduce((a, m) => a + m.size, 0)}`);
-phaseTimer.setCounter('totalUses', totalUses);
-phaseTimer.setCounter('unresolvedUses', unresolvedUses);
-phaseTimer.setCounter('resolvedInternalUses', resolvedInternalUses);
-phaseTimer.setCounter('resolvedGeneratedVirtualUses', resolvedGeneratedVirtualUses);
-phaseTimer.setCounter('nonSourceAssetUses', nonSourceAssetUses);
-phaseTimer.setCounter('externalUses', externalUses);
-phaseTimer.setCounter('unresolvedInternalUses', unresolvedInternalUses);
-phaseTimer.setCounter('mdxConsumerUses', mdxConsumerUses);
-phaseTimer.setCounter('sfcScriptConsumerUses', sfcScriptConsumerUses);
-phaseTimer.setCounter('sfcScriptSrcReachabilityUses', sfcScriptSrcReachabilityUses);
-phaseTimer.setCounter('sfcStyleAssetReferenceUses', sfcStyleAssetReferenceUses);
-phaseTimer.setCounter('sfcStyleAssetReferenceCount', sfcStyleAssetReferences.length);
-phaseTimer.setCounter('sfcTemplateComponentRefUses', sfcTemplateComponentRefUses);
-phaseTimer.setCounter('sfcTemplateComponentRefCount', sfcTemplateComponentRefs.length);
-phaseTimer.setCounter('dependencyImportConsumerCount', dependencyImportConsumers.length);
-phaseTimer.setCounter('resolvedInternalEdgeCount', resolvedInternalEdges.length);
-phaseTimer.setCounter('unresolvedInternalSpecifierCount', unresolvedInternalSpecifiers.size);
-phaseTimer.setCounter('unresolvedInternalSpecifierRecordCount', unresolvedInternalSpecifierRecords.length);
-phaseTimer.setCounter('generatedVirtualSurfaceCount', generatedVirtualSurfaces.size);
-phaseTimer.setCounter('generatedVirtualImportConsumerCount', generatedVirtualImportConsumers.length);
-
-const assembleGeneratedBlindZonesStarted = Date.now();
-const generatedConsumerBlindZones = buildGeneratedConsumerBlindZones({
-  unresolvedInternalSpecifierRecords,
-}, {
+const assembleSfcGlobalRegistrationsStarted = Date.now();
+const sfcGlobalRegistrations = collectSfcGlobalComponentRegistrations({
   root: ROOT,
   includeTests: cli.includeTests,
   exclude: cli.exclude,
-  mode: GENERATED_ARTIFACTS_MODE,
 });
-phaseTimer.recordPhase('assemble-generated-blind-zones', Date.now() - assembleGeneratedBlindZonesStarted);
+phaseTimer.setCounter(
+  "sfcGlobalComponentRegistrationCandidateCount",
+  sfcGlobalRegistrations.length,
+);
+sfcGlobalComponentRegistrationUses = processSfcGlobalComponentRegistrations(
+  sfcGlobalRegistrations,
+);
+phaseTimer.recordPhase(
+  "assemble-sfc-global-component-registrations",
+  Date.now() - assembleSfcGlobalRegistrationsStarted,
+);
+
+console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
+console.log(
+  `[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`,
+);
+console.log(
+  `[defs] total symbols: ${[...defIndex.values()].reduce((a, m) => a + m.size, 0)}`,
+);
+phaseTimer.setCounter("totalUses", totalUses);
+phaseTimer.setCounter("unresolvedUses", unresolvedUses);
+phaseTimer.setCounter("resolvedInternalUses", resolvedInternalUses);
+phaseTimer.setCounter(
+  "resolvedGeneratedVirtualUses",
+  resolvedGeneratedVirtualUses,
+);
+phaseTimer.setCounter("nonSourceAssetUses", nonSourceAssetUses);
+phaseTimer.setCounter("externalUses", externalUses);
+phaseTimer.setCounter("unresolvedInternalUses", unresolvedInternalUses);
+phaseTimer.setCounter("mdxConsumerUses", mdxConsumerUses);
+phaseTimer.setCounter("sfcScriptConsumerUses", sfcScriptConsumerUses);
+phaseTimer.setCounter(
+  "sfcScriptSrcReachabilityUses",
+  sfcScriptSrcReachabilityUses,
+);
+phaseTimer.setCounter("sfcStyleAssetReferenceUses", sfcStyleAssetReferenceUses);
+phaseTimer.setCounter(
+  "sfcStyleAssetReferenceCount",
+  sfcStyleAssetReferences.length,
+);
+phaseTimer.setCounter(
+  "sfcTemplateComponentRefUses",
+  sfcTemplateComponentRefUses,
+);
+phaseTimer.setCounter(
+  "sfcTemplateComponentRefCount",
+  sfcTemplateComponentRefs.length,
+);
+phaseTimer.setCounter(
+  "sfcGlobalComponentRegistrationUses",
+  sfcGlobalComponentRegistrationUses,
+);
+phaseTimer.setCounter(
+  "sfcGlobalComponentRegistrationCount",
+  sfcGlobalComponentRegistrations.length,
+);
+phaseTimer.setCounter(
+  "dependencyImportConsumerCount",
+  dependencyImportConsumers.length,
+);
+phaseTimer.setCounter(
+  "resolvedInternalEdgeCount",
+  resolvedInternalEdges.length,
+);
+phaseTimer.setCounter(
+  "unresolvedInternalSpecifierCount",
+  unresolvedInternalSpecifiers.size,
+);
+phaseTimer.setCounter(
+  "unresolvedInternalSpecifierRecordCount",
+  unresolvedInternalSpecifierRecords.length,
+);
+phaseTimer.setCounter(
+  "generatedVirtualSurfaceCount",
+  generatedVirtualSurfaces.size,
+);
+phaseTimer.setCounter(
+  "generatedVirtualImportConsumerCount",
+  generatedVirtualImportConsumers.length,
+);
+
+const assembleGeneratedBlindZonesStarted = Date.now();
+const generatedConsumerBlindZones = buildGeneratedConsumerBlindZones(
+  {
+    unresolvedInternalSpecifierRecords,
+  },
+  {
+    root: ROOT,
+    includeTests: cli.includeTests,
+    exclude: cli.exclude,
+    mode: GENERATED_ARTIFACTS_MODE,
+  },
+);
+phaseTimer.recordPhase(
+  "assemble-generated-blind-zones",
+  Date.now() - assembleGeneratedBlindZonesStarted,
+);
 
 // ─── Dead export 탐지 ─────────────────────────────────────
 // Barrel files (workspace package main entries) are skipped —
@@ -1438,7 +1816,7 @@ phaseTimer.recordPhase('assemble-generated-blind-zones', Date.now() - assembleGe
 // `.dist/index.mjs → src/index.ts` mapping consistent, FP-40 class).
 const assembleDeadCandidatesStarted = Date.now();
 const BARREL_FILES = detectBarrelFiles(ROOT, repoMode);
-phaseTimer.setCounter('barrelFileCount', BARREL_FILES.size);
+phaseTimer.setCounter("barrelFileCount", BARREL_FILES.size);
 
 const dead = [];
 for (const [defFile, defs] of defIndex) {
@@ -1451,7 +1829,7 @@ for (const [defFile, defs] of defIndex) {
   // zero cross-file consumers. Mirrors Python's own import semantics
   // (`from m import *` only imports __all__ when declared).
   const fileInfo = fileData.get(defFile);
-  const dunderAll = fileInfo?.pyDunderAll;   // array | undefined
+  const dunderAll = fileInfo?.pyDunderAll; // array | undefined
   const hasDunderAll = Array.isArray(dunderAll);
   const publicSet = hasDunderAll ? new Set(dunderAll) : null;
 
@@ -1479,7 +1857,10 @@ for (const [defFile, defs] of defIndex) {
     });
   }
 }
-phaseTimer.recordPhase('assemble-dead-candidates', Date.now() - assembleDeadCandidatesStarted);
+phaseTimer.recordPhase(
+  "assemble-dead-candidates",
+  Date.now() - assembleDeadCandidatesStarted,
+);
 
 // ─── Symbol fan-in Top-N ─────────────────────────────────
 const assembleFanInStarted = Date.now();
@@ -1502,7 +1883,11 @@ for (const [defFile, m] of defIndex) {
   const relFile = relPath(ROOT, defFile);
   for (const symbol of m.keys()) {
     fanInByIdentity[`${relFile}::${symbol}`] = 0;
-    fanInByIdentitySpace[`${relFile}::${symbol}`] = { value: 0, type: 0, broad: 0 };
+    fanInByIdentitySpace[`${relFile}::${symbol}`] = {
+      value: 0,
+      type: 0,
+      broad: 0,
+    };
   }
 }
 // Pass 2: overlay actual consumer counts.
@@ -1513,7 +1898,7 @@ for (const [defFile, m] of consumers) {
       defFile: relFile,
       symbol,
       count: cs.size,
-      kind: defIndex.get(defFile)?.get(symbol)?.kind ?? 'unknown',
+      kind: defIndex.get(defFile)?.get(symbol)?.kind ?? "unknown",
     });
     fanInByIdentity[`${relFile}::${symbol}`] = cs.size;
     const spaceConsumers = consumerSpaces.get(defFile)?.get(symbol);
@@ -1528,7 +1913,11 @@ for (const [defFile, broadConsumers] of namespaceUsers) {
   const relFile = relPath(ROOT, defFile);
   for (const symbol of defIndex.get(defFile)?.keys() ?? []) {
     const identity = `${relFile}::${symbol}`;
-    const existing = fanInByIdentitySpace[identity] ?? { value: 0, type: 0, broad: 0 };
+    const existing = fanInByIdentitySpace[identity] ?? {
+      value: 0,
+      type: 0,
+      broad: 0,
+    };
     fanInByIdentitySpace[identity] = {
       ...existing,
       broad: broadConsumers.size,
@@ -1536,7 +1925,7 @@ for (const [defFile, broadConsumers] of namespaceUsers) {
   }
 }
 symbolFanIn.sort((a, b) => b.count - a.count);
-phaseTimer.recordPhase('assemble-fan-in', Date.now() - assembleFanInStarted);
+phaseTimer.recordPhase("assemble-fan-in", Date.now() - assembleFanInStarted);
 
 const assembleAnyContaminationStarted = Date.now();
 const anyContaminationFacts = buildAnyContaminationFacts({
@@ -1544,12 +1933,17 @@ const anyContaminationFacts = buildAnyContaminationFacts({
   defIndex,
   fileData,
 });
-phaseTimer.recordPhase('assemble-any-contamination', Date.now() - assembleAnyContaminationStarted);
+phaseTimer.recordPhase(
+  "assemble-any-contamination",
+  Date.now() - assembleAnyContaminationStarted,
+);
 
 // ─── 리포트 ───────────────────────────────────────────────
 console.log(`\n\n════════ 1. Top 25 심볼 fan-in ════════`);
 for (const s of symbolFanIn.slice(0, 25)) {
-  console.log(`  ${s.count.toString().padStart(3)}  ${s.symbol.padEnd(28)}  ${s.kind.padEnd(22)}  ${s.defFile}`);
+  console.log(
+    `  ${s.count.toString().padStart(3)}  ${s.symbol.padEnd(28)}  ${s.kind.padEnd(22)}  ${s.defFile}`,
+  );
 }
 
 // ─── Dead 요약 ───────────────────────────────────────────
@@ -1558,7 +1952,9 @@ console.log(`총 ${dead.length}건 (namespace 사용에 가려진 것 포함)`);
 const trulyDead = dead.filter((d) => !d.namespaceShadowed);
 const namespaceShadowed = dead.filter((d) => d.namespaceShadowed);
 console.log(`  순수 dead (namespace로도 접근 못함): ${trulyDead.length}`);
-console.log(`  namespace import로 접근 가능성 있음: ${namespaceShadowed.length}`);
+console.log(
+  `  namespace import로 접근 가능성 있음: ${namespaceShadowed.length}`,
+);
 
 // 순수 dead 세부 (submodule별 분포) — shared workspace-aware classifier.
 const submoduleOf = buildSubmoduleResolver(ROOT, repoMode);
@@ -1570,7 +1966,9 @@ for (const d of trulyDead) {
   deadByPkg.get(p).push(d);
 }
 console.log(`\n  순수 dead package별 분포:`);
-for (const [p, list] of [...deadByPkg.entries()].sort((a, b) => b[1].length - a[1].length)) {
+for (const [p, list] of [...deadByPkg.entries()].sort(
+  (a, b) => b[1].length - a[1].length,
+)) {
   console.log(`    ${p.padEnd(14)}  ${list.length}건`);
 }
 
@@ -1585,20 +1983,35 @@ console.log(`\n  ─ production dead 샘플 (최대 25) ─`);
 for (const d of deadInProd.slice(0, 25)) {
   console.log(`    ${d.file}:${d.line}  ${d.symbol}  (${d.kind})`);
 }
-phaseTimer.setCounter('deadCandidateCount', dead.length);
-phaseTimer.setCounter('trulyDeadCount', trulyDead.length);
-phaseTimer.setCounter('namespaceShadowedDeadCount', namespaceShadowed.length);
-phaseTimer.setCounter('deadProductionCount', deadInProd.length);
-phaseTimer.setCounter('deadTestCount', deadInTest.length);
-phaseTimer.setCounter('symbolFanInCount', symbolFanIn.length);
-phaseTimer.setCounter('fanInIdentityCount', Object.keys(fanInByIdentity).length);
-phaseTimer.setCounter('fanInIdentitySpaceCount', Object.keys(fanInByIdentitySpace).length);
-phaseTimer.setCounter('namespaceReExportDiagnosticCount', namespaceReExportDiagnostics.length);
-phaseTimer.setCounter('generatedConsumerBlindZoneCount', generatedConsumerBlindZones.length);
-phaseTimer.recordPhase('assemble-symbol-graph', Date.now() - assembleSymbolGraphStarted);
+phaseTimer.setCounter("deadCandidateCount", dead.length);
+phaseTimer.setCounter("trulyDeadCount", trulyDead.length);
+phaseTimer.setCounter("namespaceShadowedDeadCount", namespaceShadowed.length);
+phaseTimer.setCounter("deadProductionCount", deadInProd.length);
+phaseTimer.setCounter("deadTestCount", deadInTest.length);
+phaseTimer.setCounter("symbolFanInCount", symbolFanIn.length);
+phaseTimer.setCounter(
+  "fanInIdentityCount",
+  Object.keys(fanInByIdentity).length,
+);
+phaseTimer.setCounter(
+  "fanInIdentitySpaceCount",
+  Object.keys(fanInByIdentitySpace).length,
+);
+phaseTimer.setCounter(
+  "namespaceReExportDiagnosticCount",
+  namespaceReExportDiagnostics.length,
+);
+phaseTimer.setCounter(
+  "generatedConsumerBlindZoneCount",
+  generatedConsumerBlindZones.length,
+);
+phaseTimer.recordPhase(
+  "assemble-symbol-graph",
+  Date.now() - assembleSymbolGraphStarted,
+);
 
 // ─── 저장 ─────────────────────────────────────────────────
-const outPath = path.join(output, 'symbols.json');
+const outPath = path.join(output, "symbols.json");
 const artifact = buildSymbolsArtifact({
   root: ROOT,
   files,
@@ -1629,8 +2042,10 @@ const artifact = buildSymbolsArtifact({
   sfcScriptSrcReachabilityUses,
   sfcStyleAssetReferenceUses,
   sfcTemplateComponentRefUses,
+  sfcGlobalComponentRegistrationUses,
   sfcStyleAssetReferences,
   sfcTemplateComponentRefs,
+  sfcGlobalComponentRegistrations,
   dead,
   trulyDead,
   deadInProd,
@@ -1649,14 +2064,19 @@ const artifact = buildSymbolsArtifact({
     reusedFiles,
     droppedFiles,
     invalidatedFiles,
-    reason: incrementalEnabled ? null : 'disabled-by-flag',
+    reason: incrementalEnabled ? null : "disabled-by-flag",
   },
 });
 const writeArtifactStarted = Date.now();
 const artifactJson = JSON.stringify(artifact, null, 2);
-phaseTimer.setCounter('symbolsJsonBytes', Buffer.byteLength(artifactJson, 'utf8'));
+phaseTimer.setCounter(
+  "symbolsJsonBytes",
+  Buffer.byteLength(artifactJson, "utf8"),
+);
 writeFileSync(outPath, artifactJson);
-phaseTimer.recordPhase('write-artifact', Date.now() - writeArtifactStarted);
+phaseTimer.recordPhase("write-artifact", Date.now() - writeArtifactStarted);
 phaseTimer.write();
-console.log(`[symbols] ${files.length} files, dead production candidates: ${deadInProd.length}`);
+console.log(
+  `[symbols] ${files.length} files, dead production candidates: ${deadInProd.length}`,
+);
 console.log(`[symbols] saved → ${outPath}`);
