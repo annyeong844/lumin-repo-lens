@@ -588,6 +588,13 @@ function stripStyleAssetResourceQuery(spec) {
   return candidates.length ? spec.slice(0, Math.min(...candidates)) : spec;
 }
 
+function existingRelativeSpecifierTarget(consumerFile, spec) {
+  if (typeof spec !== 'string') return null;
+  if (!spec.startsWith('./') && !spec.startsWith('../')) return null;
+  const target = path.resolve(path.dirname(consumerFile), stripStyleAssetResourceQuery(spec));
+  return fileExists(target) ? target : null;
+}
+
 function addSfcStyleAssetReference(use, { status, resolvedFile = null, reason = null }) {
   sfcStyleAssetReferences.push({
     consumerFile: relPath(ROOT, use.consumerFile),
@@ -1312,6 +1319,9 @@ function processSfcTemplateComponentRefs(consumers) {
     if (isNonSourceAssetResolution(target) || isGeneratedVirtualResolution(target)) {
       addSfcTemplateComponentRef(use, {
         status: 'muted',
+        resolvedFile: isNonSourceAssetResolution(target)
+          ? existingRelativeSpecifierTarget(use.consumerFile, use.bindingSource)
+          : null,
         reason: 'sfc-template-component-non-source-binding',
       });
       continue;
