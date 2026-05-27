@@ -759,6 +759,9 @@ function addSfcGeneratedComponentManifest(
     normalizedTagNames: [...(use.normalizedTagNames ?? [])].sort(),
     bindingSource: use.bindingSource,
     fromSpec: use.fromSpec,
+    ...(use.computedKeySource
+      ? { computedKeySource: use.computedKeySource }
+      : {}),
     source: use.source,
     confidence: use.confidence,
     eligibleForFanIn: false,
@@ -1667,6 +1670,14 @@ function processSfcGeneratedComponentManifests(consumers) {
   let recordedManifests = 0;
   for (const use of consumers) {
     recordedManifests++;
+    if (use.status === "skipped") {
+      addSfcGeneratedComponentManifest(use, {
+        status: "skipped",
+        reason:
+          use.reason ?? "sfc-framework-generated-manifest-nonliteral",
+      });
+      continue;
+    }
     const target = resolveSpecifier(use.manifestFile, {
       ...use,
       fromSpec: use.bindingSource,

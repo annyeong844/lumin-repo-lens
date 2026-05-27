@@ -426,6 +426,13 @@ function astPropertyName(node) {
   return null;
 }
 
+function computedPropertySource(node, src) {
+  const key = node?.key;
+  if (!node?.computed || !key) return null;
+  if (!Number.isFinite(key.start) || !Number.isFinite(key.end)) return null;
+  return src.slice(key.start, key.end).trim() || null;
+}
+
 function parseScriptImportConsumers(
   script,
   { filePath, fileSource, startOffset, blockKind, parserLang },
@@ -720,24 +727,41 @@ function generatedManifestImportSource(node) {
   return typeof source?.value === "string" ? source.value : null;
 }
 
+function generatedManifestRawImportSource(node) {
+  const annotation = node?.typeAnnotation?.typeAnnotation;
+  if (annotation?.type !== "TSIndexedAccessType") return null;
+  const objectType = annotation.objectType;
+  const importType =
+    objectType?.type === "TSTypeQuery" ? objectType.exprName : null;
+  const source = importType?.type === "TSImportType" ? importType.source : null;
+  return typeof source?.value === "string" ? source.value : null;
+}
+
 function generatedComponentManifestRecord({
   manifestFile,
   manifestKind,
   componentName,
   fromSpec,
+  status = null,
+  reason = null,
+  normalizedTagNames = null,
+  computedKeySource = null,
   line,
 }) {
   return {
     manifestFile,
     manifestKind,
     componentName,
-    normalizedTagNames: normalizedGlobalComponentNames(componentName),
-    bindingSource: fromSpec,
-    fromSpec,
+    normalizedTagNames:
+      normalizedTagNames ?? normalizedGlobalComponentNames(componentName),
+    ...(fromSpec ? { bindingSource: fromSpec, fromSpec } : {}),
+    ...(computedKeySource ? { computedKeySource } : {}),
     source: "sfc-framework-generated-manifest",
     confidence: "generated-manifest-availability",
     eligibleForFanIn: false,
     eligibleForSafeFix: false,
+    ...(status ? { status } : {}),
+    ...(reason ? { reason } : {}),
     line,
   };
 }
@@ -752,10 +776,29 @@ function parseGeneratedComponentManifestInterface(
 
   for (const property of node.body?.body ?? []) {
     if (property?.type !== "TSPropertySignature") continue;
-    if (property.computed) continue;
-    const componentName = astPropertyName(property);
+    const propertyName = astPropertyName(property);
+    const componentName =
+      propertyName ?? (property.computed ? "[computed]" : null);
     if (!componentName) continue;
     const fromSpec = generatedManifestImportSource(property);
+    const rawFromSpec = fromSpec ?? generatedManifestRawImportSource(property);
+    if (rawFromSpec && !isRelativeSourceSpec(rawFromSpec)) continue;
+    if (property.computed || !fromSpec) {
+      out.push(
+        generatedComponentManifestRecord({
+          manifestFile,
+          manifestKind,
+          componentName,
+          fromSpec: rawFromSpec,
+          status: "skipped",
+          reason: "sfc-framework-generated-manifest-nonliteral",
+          normalizedTagNames: [],
+          computedKeySource: computedPropertySource(property, fileSource),
+          line: lineOf(fileSource, property.start ?? 0),
+        }),
+      );
+      continue;
+    }
     if (!isRelativeSourceSpec(fromSpec)) continue;
     out.push(
       generatedComponentManifestRecord({
