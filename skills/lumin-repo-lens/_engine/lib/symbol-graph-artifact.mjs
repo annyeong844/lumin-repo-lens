@@ -70,6 +70,14 @@ function sortSfcGeneratedComponentManifests(items) {
   );
 }
 
+function sortSfcFrameworkConventionComponents(items) {
+  return [...(items ?? [])].sort((a, b) =>
+    `${a.framework ?? ""}|${a.conventionKind ?? ""}|${a.sourceFile ?? ""}|${a.componentName ?? ""}`.localeCompare(
+      `${b.framework ?? ""}|${b.conventionKind ?? ""}|${b.sourceFile ?? ""}|${b.componentName ?? ""}`,
+    ),
+  );
+}
+
 function buildTopUnresolvedSpecifiers({
   unresolvedInternalByPrefix,
   prefixExamples,
@@ -421,10 +429,12 @@ export function buildSymbolsArtifact({
   sfcTemplateComponentRefUses = 0,
   sfcGlobalComponentRegistrationUses = 0,
   sfcGeneratedComponentManifestUses = 0,
+  sfcFrameworkConventionComponentUses = 0,
   sfcStyleAssetReferences = [],
   sfcTemplateComponentRefs = [],
   sfcGlobalComponentRegistrations = [],
   sfcGeneratedComponentManifests = [],
+  sfcFrameworkConventionComponents = [],
   dead,
   trulyDead,
   deadInProd,
@@ -461,6 +471,7 @@ export function buildSymbolsArtifact({
         sfcTemplateComponentRefs: true,
         sfcGlobalComponentRegistrations: true,
         sfcGeneratedComponentManifests: true,
+        sfcFrameworkConventionComponents: true,
         dependencyImportConsumers: true,
         resolvedInternalEdges: true,
         definitionIds: true,
@@ -503,6 +514,7 @@ export function buildSymbolsArtifact({
       sfcTemplateComponentRefs: sfcTemplateComponentRefUses,
       sfcGlobalComponentRegistrations: sfcGlobalComponentRegistrationUses,
       sfcGeneratedComponentManifests: sfcGeneratedComponentManifestUses,
+      sfcFrameworkConventionComponents: sfcFrameworkConventionComponentUses,
       unresolvedInternalRatio:
         resolvedInternalUses + unresolvedInternalUses > 0
           ? +(
@@ -529,6 +541,9 @@ export function buildSymbolsArtifact({
     ),
     sfcGeneratedComponentManifests: sortSfcGeneratedComponentManifests(
       sfcGeneratedComponentManifests,
+    ),
+    sfcFrameworkConventionComponents: sortSfcFrameworkConventionComponents(
+      sfcFrameworkConventionComponents,
     ),
     generatedConsumerBlindZones: sortGeneratedConsumerBlindZones(
       generatedConsumerBlindZones,

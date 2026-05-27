@@ -711,6 +711,94 @@ const GENERATED_COMPONENT_MANIFESTS = Object.freeze([
   },
 ]);
 
+const NUXT_ROOT_CONFIGS = Object.freeze([
+  "nuxt.config.ts",
+  "nuxt.config.mts",
+  "nuxt.config.cts",
+  "nuxt.config.js",
+  "nuxt.config.mjs",
+  "nuxt.config.cjs",
+]);
+
+function packageJsonHasNuxtDependency(root) {
+  const filePath = path.join(root, "package.json");
+  if (!existsSync(filePath)) return false;
+  try {
+    const pkg = JSON.parse(readFileSync(filePath, "utf8"));
+    for (const field of [
+      "dependencies",
+      "devDependencies",
+      "peerDependencies",
+      "optionalDependencies",
+    ]) {
+      if (pkg?.[field]?.nuxt) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function hasNuxtConventionSignal(root) {
+  if (existsSync(path.join(root, ".nuxt", "components.d.ts"))) return true;
+  if (NUXT_ROOT_CONFIGS.some((rel) => existsSync(path.join(root, rel)))) {
+    return true;
+  }
+  return packageJsonHasNuxtDependency(root);
+}
+
+function stripNuxtComponentModeSuffix(value) {
+  return `${value ?? ""}`.replace(/\.(client|server|global)$/i, "");
+}
+
+function pascalFromNuxtConventionSegment(value) {
+  const cleaned = stripNuxtComponentModeSuffix(value);
+  const parts = cleaned.split(/[-_\s.]+/).filter(Boolean);
+  if (parts.length === 0) return null;
+  return parts
+    .map((part) => `${part[0] ?? ""}`.toUpperCase() + part.slice(1))
+    .join("");
+}
+
+function nuxtConventionPathSegments({ root, filePath }) {
+  return path
+    .relative(path.join(root, "components"), filePath)
+    .split(path.sep)
+    .filter(Boolean)
+    .map((segment) => stripNuxtComponentModeSuffix(segment.replace(/\.[^.]+$/, "")));
+}
+
+function nuxtConventionComponentName({ root, filePath }) {
+  const parts = nuxtConventionPathSegments({ root, filePath })
+    .map((segment) => pascalFromNuxtConventionSegment(segment))
+    .filter(Boolean);
+  const deduped = [];
+  for (const part of parts) {
+    if (deduped.at(-1)?.toLowerCase() === part.toLowerCase()) continue;
+    deduped.push(part);
+  }
+  return deduped.join("");
+}
+
+function nuxtConventionRecord({ root, filePath }) {
+  const componentName = nuxtConventionComponentName({ root, filePath });
+  return {
+    framework: "nuxt",
+    conventionKind: "nuxt-components-directory",
+    componentName,
+    normalizedTagNames: normalizedGlobalComponentNames(componentName),
+    sourceFile: filePath,
+    resolvedFile: filePath,
+    source: "sfc-framework-nuxt-fs-convention",
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: "sfc-framework-nuxt-fs-convention",
+    componentPathSegments: nuxtConventionPathSegments({ root, filePath }),
+  };
+}
+
 function generatedManifestImportSource(node) {
   const annotation = node?.typeAnnotation?.typeAnnotation;
   if (annotation?.type !== "TSIndexedAccessType") return null;
@@ -1332,6 +1420,29 @@ export function collectSfcGeneratedComponentManifests({ root }) {
         manifest.manifestKind,
       ),
     );
+  }
+  return out;
+}
+
+export function collectSfcFrameworkConventionComponents({
+  root,
+  includeTests = true,
+  exclude = [],
+}) {
+  const out = [];
+  const resolvedRoot = path.resolve(root);
+  if (!hasNuxtConventionSignal(resolvedRoot)) return out;
+  const files = collectFiles(resolvedRoot, {
+    includeTests,
+    exclude,
+    languages: ["vue"],
+  });
+
+  for (const filePath of files) {
+    const rel = path.relative(resolvedRoot, filePath);
+    const segments = rel.split(path.sep);
+    if (segments[0] !== "components") continue;
+    out.push(nuxtConventionRecord({ root: resolvedRoot, filePath }));
   }
   return out;
 }

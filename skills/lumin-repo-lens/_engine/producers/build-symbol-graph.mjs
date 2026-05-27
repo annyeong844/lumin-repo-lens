@@ -27,6 +27,7 @@ import {
 } from "../lib/resolver-core.mjs";
 import { collectMdxImportConsumers } from "../lib/mdx-consumers.mjs";
 import {
+  collectSfcFrameworkConventionComponents,
   collectSfcGeneratedComponentManifests,
   collectSfcGlobalComponentRegistrations,
   collectSfcImportConsumers,
@@ -564,6 +565,7 @@ let sfcStyleAssetReferenceUses = 0;
 let sfcTemplateComponentRefUses = 0;
 let sfcGlobalComponentRegistrationUses = 0;
 let sfcGeneratedComponentManifestUses = 0;
+let sfcFrameworkConventionComponentUses = 0;
 const dependencyImportConsumers = [];
 // Spec-frequency counter for topUnresolvedSpecifiers artifact.
 // Keyed by "prefix" (everything up to first /) so "@/foo/a" and
@@ -582,6 +584,7 @@ const sfcStyleAssetReferences = [];
 const sfcTemplateComponentRefs = [];
 const sfcGlobalComponentRegistrations = [];
 const sfcGeneratedComponentManifests = [];
+const sfcFrameworkConventionComponents = [];
 const generatedVirtualSurfaces = new Map();
 const generatedVirtualImportConsumers = [];
 function prefixOf(spec) {
@@ -770,6 +773,26 @@ function addSfcGeneratedComponentManifest(
     ...(resolvedFile ? { resolvedFile: relPath(ROOT, resolvedFile) } : {}),
     ...(reason ? { reason } : {}),
     ...(Number.isFinite(use.line) ? { line: use.line } : {}),
+  });
+}
+
+function addSfcFrameworkConventionComponent(use) {
+  sfcFrameworkConventionComponents.push({
+    framework: use.framework,
+    conventionKind: use.conventionKind,
+    componentName: use.componentName,
+    normalizedTagNames: [...(use.normalizedTagNames ?? [])].sort(),
+    sourceFile: relPath(ROOT, use.sourceFile),
+    resolvedFile: relPath(ROOT, use.resolvedFile),
+    source: use.source,
+    confidence: use.confidence,
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: use.reason,
+    ...(Array.isArray(use.componentPathSegments)
+      ? { componentPathSegments: [...use.componentPathSegments] }
+      : {}),
   });
 }
 
@@ -1862,6 +1885,25 @@ phaseTimer.recordPhase(
   Date.now() - assembleSfcGeneratedManifestsStarted,
 );
 
+const assembleSfcFrameworkConventionsStarted = Date.now();
+const sfcFrameworkConventions = collectSfcFrameworkConventionComponents({
+  root: ROOT,
+  includeTests: cli.includeTests,
+  exclude: cli.exclude,
+});
+phaseTimer.setCounter(
+  "sfcFrameworkConventionComponentCandidateCount",
+  sfcFrameworkConventions.length,
+);
+for (const use of sfcFrameworkConventions) {
+  addSfcFrameworkConventionComponent(use);
+}
+sfcFrameworkConventionComponentUses = sfcFrameworkConventions.length;
+phaseTimer.recordPhase(
+  "assemble-sfc-framework-convention-components",
+  Date.now() - assembleSfcFrameworkConventionsStarted,
+);
+
 console.log(`[uses] total ${totalUses}, unresolved ${unresolvedUses}`);
 console.log(
   `[uses] resolvedInternal: ${resolvedInternalUses}, external: ${externalUses}, unresolvedInternal: ${unresolvedInternalUses}`,
@@ -1913,6 +1955,14 @@ phaseTimer.setCounter(
 phaseTimer.setCounter(
   "sfcGeneratedComponentManifestCount",
   sfcGeneratedComponentManifests.length,
+);
+phaseTimer.setCounter(
+  "sfcFrameworkConventionComponentUses",
+  sfcFrameworkConventionComponentUses,
+);
+phaseTimer.setCounter(
+  "sfcFrameworkConventionComponentCount",
+  sfcFrameworkConventionComponents.length,
 );
 phaseTimer.setCounter(
   "dependencyImportConsumerCount",
@@ -2192,10 +2242,12 @@ const artifact = buildSymbolsArtifact({
   sfcTemplateComponentRefUses,
   sfcGlobalComponentRegistrationUses,
   sfcGeneratedComponentManifestUses,
+  sfcFrameworkConventionComponentUses,
   sfcStyleAssetReferences,
   sfcTemplateComponentRefs,
   sfcGlobalComponentRegistrations,
   sfcGeneratedComponentManifests,
+  sfcFrameworkConventionComponents,
   dead,
   trulyDead,
   deadInProd,
