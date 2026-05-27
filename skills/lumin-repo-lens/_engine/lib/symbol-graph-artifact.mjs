@@ -62,6 +62,14 @@ function sortSfcGlobalComponentRegistrations(items) {
   );
 }
 
+function sortSfcGeneratedComponentManifests(items) {
+  return [...(items ?? [])].sort((a, b) =>
+    `${a.manifestFile ?? ""}|${a.componentName ?? ""}|${a.fromSpec ?? ""}|${a.status ?? ""}|${a.reason ?? ""}`.localeCompare(
+      `${b.manifestFile ?? ""}|${b.componentName ?? ""}|${b.fromSpec ?? ""}|${b.status ?? ""}|${b.reason ?? ""}`,
+    ),
+  );
+}
+
 function buildTopUnresolvedSpecifiers({
   unresolvedInternalByPrefix,
   prefixExamples,
@@ -412,9 +420,11 @@ export function buildSymbolsArtifact({
   sfcStyleAssetReferenceUses = 0,
   sfcTemplateComponentRefUses = 0,
   sfcGlobalComponentRegistrationUses = 0,
+  sfcGeneratedComponentManifestUses = 0,
   sfcStyleAssetReferences = [],
   sfcTemplateComponentRefs = [],
   sfcGlobalComponentRegistrations = [],
+  sfcGeneratedComponentManifests = [],
   dead,
   trulyDead,
   deadInProd,
@@ -450,6 +460,7 @@ export function buildSymbolsArtifact({
         sfcStyleAssetReferences: true,
         sfcTemplateComponentRefs: true,
         sfcGlobalComponentRegistrations: true,
+        sfcGeneratedComponentManifests: true,
         dependencyImportConsumers: true,
         resolvedInternalEdges: true,
         definitionIds: true,
@@ -491,6 +502,7 @@ export function buildSymbolsArtifact({
       sfcStyleAssetReferences: sfcStyleAssetReferenceUses,
       sfcTemplateComponentRefs: sfcTemplateComponentRefUses,
       sfcGlobalComponentRegistrations: sfcGlobalComponentRegistrationUses,
+      sfcGeneratedComponentManifests: sfcGeneratedComponentManifestUses,
       unresolvedInternalRatio:
         resolvedInternalUses + unresolvedInternalUses > 0
           ? +(
@@ -514,6 +526,9 @@ export function buildSymbolsArtifact({
     ),
     sfcGlobalComponentRegistrations: sortSfcGlobalComponentRegistrations(
       sfcGlobalComponentRegistrations,
+    ),
+    sfcGeneratedComponentManifests: sortSfcGeneratedComponentManifests(
+      sfcGeneratedComponentManifests,
     ),
     generatedConsumerBlindZones: sortGeneratedConsumerBlindZones(
       generatedConsumerBlindZones,

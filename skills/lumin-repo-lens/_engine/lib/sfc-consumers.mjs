@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { parseSync } from "oxc-parser";
 import { collectFiles } from "./collect-files.mjs";
@@ -693,6 +693,111 @@ function globalRegistrationRecord({
   };
 }
 
+const GENERATED_COMPONENT_MANIFESTS = Object.freeze([
+  {
+    relPath: "components.d.ts",
+    manifestKind: "unplugin-vue-components-dts",
+  },
+  {
+    relPath: ".nuxt/components.d.ts",
+    manifestKind: "nuxt-components-dts",
+  },
+]);
+
+function generatedManifestImportSource(node) {
+  const annotation = node?.typeAnnotation?.typeAnnotation;
+  if (annotation?.type !== "TSIndexedAccessType") return null;
+
+  const indexLiteral = annotation.indexType?.literal;
+  if (indexLiteral?.type !== "Literal" || indexLiteral.value !== "default") {
+    return null;
+  }
+
+  const objectType = annotation.objectType;
+  const importType =
+    objectType?.type === "TSTypeQuery" ? objectType.exprName : null;
+  const source = importType?.type === "TSImportType" ? importType.source : null;
+  return typeof source?.value === "string" ? source.value : null;
+}
+
+function generatedComponentManifestRecord({
+  manifestFile,
+  manifestKind,
+  componentName,
+  fromSpec,
+  line,
+}) {
+  return {
+    manifestFile,
+    manifestKind,
+    componentName,
+    normalizedTagNames: normalizedGlobalComponentNames(componentName),
+    bindingSource: fromSpec,
+    fromSpec,
+    source: "sfc-framework-generated-manifest",
+    confidence: "generated-manifest-availability",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    line,
+  };
+}
+
+function parseGeneratedComponentManifestInterface(
+  node,
+  { manifestFile, manifestKind, fileSource },
+) {
+  const out = [];
+  if (node?.type !== "TSInterfaceDeclaration") return out;
+  if (identifierName(node.id) !== "GlobalComponents") return out;
+
+  for (const property of node.body?.body ?? []) {
+    if (property?.type !== "TSPropertySignature") continue;
+    if (property.computed) continue;
+    const componentName = astPropertyName(property);
+    if (!componentName) continue;
+    const fromSpec = generatedManifestImportSource(property);
+    if (!isRelativeSourceSpec(fromSpec)) continue;
+    out.push(
+      generatedComponentManifestRecord({
+        manifestFile,
+        manifestKind,
+        componentName,
+        fromSpec,
+        line: lineOf(fileSource, property.start ?? 0),
+      }),
+    );
+  }
+
+  return out;
+}
+
+function parseGeneratedComponentManifestProgram(
+  program,
+  { manifestFile, manifestKind, fileSource },
+) {
+  const out = [];
+  for (const node of program.body ?? []) {
+    if (node?.type !== "TSModuleDeclaration") continue;
+    const moduleName =
+      node.id?.type === "Literal" && typeof node.id.value === "string"
+        ? node.id.value
+        : identifierName(node.id);
+    if (moduleName !== "vue") continue;
+    traverseAst(node.body, (candidate) => {
+      if (candidate?.type === "TSInterfaceDeclaration") {
+        out.push(
+          ...parseGeneratedComponentManifestInterface(candidate, {
+            manifestFile,
+            manifestKind,
+            fileSource,
+          }),
+        );
+      }
+    });
+  }
+  return out;
+}
+
 function parseGlobalComponentRegistrations(program, { filePath, fileSource }) {
   const out = [];
   const imports = collectImportBindings(program, fileSource);
@@ -1057,6 +1162,20 @@ export function parseSfcGlobalComponentRegistrations(
   });
 }
 
+export function parseSfcGeneratedComponentManifests(
+  src,
+  filePath = "<manifest>",
+  manifestKind = "unplugin-vue-components-dts",
+) {
+  const program = parseScriptAst(src, filePath, "ts");
+  if (!program) return [];
+  return parseGeneratedComponentManifestProgram(program, {
+    manifestFile: filePath,
+    manifestKind,
+    fileSource: src,
+  });
+}
+
 export function parseSfcScriptSources(src, filePath = "<sfc>") {
   return extractScriptSrcBlocks(src, filePath);
 }
@@ -1149,6 +1268,28 @@ export function collectSfcGlobalComponentRegistrations({
     out.push(...parseSfcGlobalComponentRegistrations(src, filePath));
   }
 
+  return out;
+}
+
+export function collectSfcGeneratedComponentManifests({ root }) {
+  const out = [];
+  for (const manifest of GENERATED_COMPONENT_MANIFESTS) {
+    const filePath = path.join(root, manifest.relPath);
+    if (!existsSync(filePath)) continue;
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    out.push(
+      ...parseSfcGeneratedComponentManifests(
+        src,
+        filePath,
+        manifest.manifestKind,
+      ),
+    );
+  }
   return out;
 }
 
