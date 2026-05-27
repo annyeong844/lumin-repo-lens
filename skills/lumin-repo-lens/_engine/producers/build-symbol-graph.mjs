@@ -780,10 +780,17 @@ function addSfcFrameworkConventionComponent(use) {
   sfcFrameworkConventionComponents.push({
     framework: use.framework,
     conventionKind: use.conventionKind,
-    componentName: use.componentName,
-    normalizedTagNames: [...(use.normalizedTagNames ?? [])].sort(),
-    sourceFile: relPath(ROOT, use.sourceFile),
-    resolvedFile: relPath(ROOT, use.resolvedFile),
+    ...(use.componentName ? { componentName: use.componentName } : {}),
+    ...(Array.isArray(use.normalizedTagNames)
+      ? { normalizedTagNames: [...use.normalizedTagNames].sort() }
+      : {}),
+    ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
+    ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
+    ...(use.resolvedFile
+      ? { resolvedFile: relPath(ROOT, use.resolvedFile) }
+      : {}),
+    ...(use.pluginName ? { pluginName: use.pluginName } : {}),
+    ...(use.fromSpec ? { fromSpec: use.fromSpec } : {}),
     source: use.source,
     confidence: use.confidence,
     eligibleForFanIn: false,
@@ -793,6 +800,7 @@ function addSfcFrameworkConventionComponent(use) {
     ...(Array.isArray(use.componentPathSegments)
       ? { componentPathSegments: [...use.componentPathSegments] }
       : {}),
+    ...(Number.isFinite(use.line) ? { line: use.line } : {}),
   });
 }
 

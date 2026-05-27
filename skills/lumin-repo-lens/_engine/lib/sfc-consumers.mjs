@@ -720,6 +720,21 @@ const NUXT_ROOT_CONFIGS = Object.freeze([
   "nuxt.config.cjs",
 ]);
 
+const UNPLUGIN_COMPONENT_CONFIGS = Object.freeze([
+  "vite.config.ts",
+  "vite.config.mts",
+  "vite.config.cts",
+  "vite.config.js",
+  "vite.config.mjs",
+  "vite.config.cjs",
+  "webpack.config.ts",
+  "webpack.config.mts",
+  "webpack.config.cts",
+  "webpack.config.js",
+  "webpack.config.mjs",
+  "webpack.config.cjs",
+]);
+
 function packageJsonHasNuxtDependency(root) {
   const filePath = path.join(root, "package.json");
   if (!existsSync(filePath)) return false;
@@ -797,6 +812,111 @@ function nuxtConventionRecord({ root, filePath }) {
     reason: "sfc-framework-nuxt-fs-convention",
     componentPathSegments: nuxtConventionPathSegments({ root, filePath }),
   };
+}
+
+function isUnpluginVueComponentsSpec(fromSpec) {
+  return (
+    typeof fromSpec === "string" &&
+    (fromSpec === "unplugin-vue-components" ||
+      fromSpec.startsWith("unplugin-vue-components/"))
+  );
+}
+
+function unpluginRequireSource(node) {
+  if (node?.type !== "CallExpression") return null;
+  if (identifierName(node.callee) !== "require") return null;
+  const fromSpec = literalStringValue(node.arguments?.[0]);
+  return isUnpluginVueComponentsSpec(fromSpec) ? fromSpec : null;
+}
+
+function unpluginConfigRecord({ filePath, pluginName, fromSpec, line }) {
+  return {
+    framework: "unplugin-vue-components",
+    conventionKind: "auto-import-plugin-config",
+    configFile: filePath,
+    pluginName,
+    fromSpec,
+    source: "sfc-framework-auto-import-plugin-config",
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: "sfc-framework-auto-import-plugin-config",
+    line,
+  };
+}
+
+function parseUnpluginVueComponentsConfig(src, filePath) {
+  const program = parseScriptAst(src, filePath, parserLangFromFile(filePath));
+  if (!program) return [];
+
+  const bindings = new Map();
+  for (const node of program.body ?? []) {
+    if (node?.type !== "ImportDeclaration") continue;
+    const fromSpec = node.source?.value;
+    if (!isUnpluginVueComponentsSpec(fromSpec)) continue;
+    if (node.importKind === "type") continue;
+    for (const specifier of node.specifiers ?? []) {
+      if (specifier.importKind === "type") continue;
+      if (
+        specifier.type !== "ImportDefaultSpecifier" &&
+        specifier.type !== "ImportSpecifier"
+      ) {
+        continue;
+      }
+      const pluginName = importLocalName(specifier);
+      if (pluginName) bindings.set(pluginName, fromSpec);
+    }
+  }
+  for (const node of program.body ?? []) {
+    if (node?.type !== "VariableDeclaration") continue;
+    for (const declaration of node.declarations ?? []) {
+      const pluginName = identifierName(declaration.id);
+      if (!pluginName) continue;
+      const fromSpec = unpluginRequireSource(declaration.init);
+      if (fromSpec) bindings.set(pluginName, fromSpec);
+    }
+  }
+  const out = [];
+  const seen = new Set();
+  traverseAst(program, (node) => {
+    if (node?.type !== "CallExpression") return;
+    const directRequireSpec = unpluginRequireSource(node.callee);
+    const pluginName = directRequireSpec
+      ? "require"
+      : identifierName(node.callee);
+    const fromSpec = directRequireSpec ?? bindings.get(pluginName);
+    if (!pluginName || !fromSpec) return;
+    const key = `${pluginName}|${node.start ?? ""}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(
+      unpluginConfigRecord({
+        filePath,
+        pluginName,
+        fromSpec,
+        line: lineOf(src, node.start ?? 0),
+      }),
+    );
+  });
+
+  return out;
+}
+
+function collectUnpluginVueComponentsConfigs(root) {
+  const out = [];
+  for (const relPath of UNPLUGIN_COMPONENT_CONFIGS) {
+    const filePath = path.join(root, relPath);
+    if (!existsSync(filePath)) continue;
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    out.push(...parseUnpluginVueComponentsConfig(src, filePath));
+  }
+  return out;
 }
 
 function generatedManifestImportSource(node) {
@@ -1431,19 +1551,23 @@ export function collectSfcFrameworkConventionComponents({
 }) {
   const out = [];
   const resolvedRoot = path.resolve(root);
-  if (!hasNuxtConventionSignal(resolvedRoot)) return out;
-  const files = collectFiles(resolvedRoot, {
-    includeTests,
-    exclude,
-    languages: ["vue"],
-  });
+  out.push(...collectUnpluginVueComponentsConfigs(resolvedRoot));
 
-  for (const filePath of files) {
-    const rel = path.relative(resolvedRoot, filePath);
-    const segments = rel.split(path.sep);
-    if (segments[0] !== "components") continue;
-    out.push(nuxtConventionRecord({ root: resolvedRoot, filePath }));
+  if (hasNuxtConventionSignal(resolvedRoot)) {
+    const files = collectFiles(resolvedRoot, {
+      includeTests,
+      exclude,
+      languages: ["vue"],
+    });
+
+    for (const filePath of files) {
+      const rel = path.relative(resolvedRoot, filePath);
+      const segments = rel.split(path.sep);
+      if (segments[0] !== "components") continue;
+      out.push(nuxtConventionRecord({ root: resolvedRoot, filePath }));
+    }
   }
+
   return out;
 }
 

@@ -72,8 +72,8 @@ function sortSfcGeneratedComponentManifests(items) {
 
 function sortSfcFrameworkConventionComponents(items) {
   return [...(items ?? [])].sort((a, b) =>
-    `${a.framework ?? ""}|${a.conventionKind ?? ""}|${a.sourceFile ?? ""}|${a.componentName ?? ""}`.localeCompare(
-      `${b.framework ?? ""}|${b.conventionKind ?? ""}|${b.sourceFile ?? ""}|${b.componentName ?? ""}`,
+    `${a.framework ?? ""}|${a.conventionKind ?? ""}|${a.sourceFile ?? ""}|${a.configFile ?? ""}|${a.componentName ?? ""}|${a.fromSpec ?? ""}`.localeCompare(
+      `${b.framework ?? ""}|${b.conventionKind ?? ""}|${b.sourceFile ?? ""}|${b.configFile ?? ""}|${b.componentName ?? ""}|${b.fromSpec ?? ""}`,
     ),
   );
 }
