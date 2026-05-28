@@ -780,7 +780,9 @@ function nuxtConventionPathSegments({ root, filePath }) {
     .relative(path.join(root, "components"), filePath)
     .split(path.sep)
     .filter(Boolean)
-    .map((segment) => stripNuxtComponentModeSuffix(segment.replace(/\.[^.]+$/, "")));
+    .map((segment) =>
+      stripNuxtComponentModeSuffix(segment.replace(/\.[^.]+$/, "")),
+    );
 }
 
 function nuxtConventionComponentName({ root, filePath }) {
@@ -844,6 +846,81 @@ function unpluginConfigRecord({ filePath, pluginName, fromSpec, line }) {
     reason: "sfc-framework-auto-import-plugin-config",
     line,
   };
+}
+
+function astroClientDirectiveName(attrs) {
+  const match = `${attrs ?? ""}`.match(
+    /(?:^|\s)(client:[A-Za-z][A-Za-z0-9_-]*)(?=\s|=|\/|$)/,
+  );
+  return match?.[1] ?? null;
+}
+
+function astroClientDirectiveRecord({
+  filePath,
+  tagName,
+  normalizedTagName,
+  directiveName,
+  binding,
+  line,
+  blockKind,
+}) {
+  return {
+    framework: "astro",
+    conventionKind: "client-directive",
+    consumerFile: filePath,
+    tagName,
+    normalizedTagName,
+    directiveName,
+    bindingName: binding.bindingName,
+    bindingSource: binding.bindingSource,
+    fromSpec: binding.bindingSource,
+    bindingKind: binding.bindingKind,
+    ...(binding.importedName ? { importedName: binding.importedName } : {}),
+    source: "sfc-framework-astro-client-directive",
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: "sfc-framework-astro-client-directive",
+    line,
+    sfcBlockKind: blockKind,
+  };
+}
+
+function parseAstroClientDirectiveTags(
+  template,
+  { filePath, fileSource, startOffset, blockKind, bindings },
+) {
+  const out = [];
+  const cleaned = stripHtmlComments(template);
+  const tagRe = /<\s*([A-Za-z][A-Za-z0-9.:-]*)([^<>]*?)(?:\/?)>/g;
+  let match;
+  while ((match = tagRe.exec(cleaned))) {
+    const tagName = match[1];
+    if (tagName.includes(".")) continue;
+    const attrs = match[2] ?? "";
+    const directiveName = astroClientDirectiveName(attrs);
+    if (!directiveName) continue;
+    const line = lineOf(fileSource, startOffset + match.index);
+
+    for (const candidate of templateTagCandidates(tagName)) {
+      const binding = bindings.exposedNames.get(candidate);
+      if (!binding) continue;
+      out.push(
+        astroClientDirectiveRecord({
+          filePath,
+          tagName,
+          normalizedTagName: candidate,
+          directiveName,
+          binding,
+          line,
+          blockKind,
+        }),
+      );
+      break;
+    }
+  }
+  return out;
 }
 
 function parseUnpluginVueComponentsConfig(src, filePath) {
@@ -1552,6 +1629,13 @@ export function collectSfcFrameworkConventionComponents({
   const out = [];
   const resolvedRoot = path.resolve(root);
   out.push(...collectUnpluginVueComponentsConfigs(resolvedRoot));
+  out.push(
+    ...collectSfcAstroClientDirectiveConventions({
+      root: resolvedRoot,
+      includeTests,
+      exclude,
+    }),
+  );
 
   if (hasNuxtConventionSignal(resolvedRoot)) {
     const files = collectFiles(resolvedRoot, {
@@ -1565,6 +1649,43 @@ export function collectSfcFrameworkConventionComponents({
       const segments = rel.split(path.sep);
       if (segments[0] !== "components") continue;
       out.push(nuxtConventionRecord({ root: resolvedRoot, filePath }));
+    }
+  }
+
+  return out;
+}
+
+function collectSfcAstroClientDirectiveConventions({
+  root,
+  includeTests = true,
+  exclude = [],
+}) {
+  const out = [];
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: ["astro"],
+  });
+
+  for (const filePath of files) {
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const bindings = collectScriptComponentBindings(src, filePath);
+    for (const block of extractTemplateBlocks(src, filePath)) {
+      if (block.sfcLanguage !== "astro") continue;
+      out.push(
+        ...parseAstroClientDirectiveTags(block.content, {
+          filePath,
+          fileSource: src,
+          startOffset: block.startOffset,
+          blockKind: block.kind,
+          bindings,
+        }),
+      );
     }
   }
 
