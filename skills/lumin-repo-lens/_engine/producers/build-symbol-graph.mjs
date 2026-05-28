@@ -793,6 +793,7 @@ function addSfcFrameworkConventionComponent(use) {
       : {}),
     ...(use.directiveName ? { directiveName: use.directiveName } : {}),
     ...(use.actionName ? { actionName: use.actionName } : {}),
+    ...(use.macroName ? { macroName: use.macroName } : {}),
     ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
     ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
     ...(use.resolvedFile
