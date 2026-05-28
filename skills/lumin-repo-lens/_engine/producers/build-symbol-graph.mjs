@@ -780,16 +780,28 @@ function addSfcFrameworkConventionComponent(use) {
   sfcFrameworkConventionComponents.push({
     framework: use.framework,
     conventionKind: use.conventionKind,
+    ...(use.consumerFile
+      ? { consumerFile: relPath(ROOT, use.consumerFile) }
+      : {}),
     ...(use.componentName ? { componentName: use.componentName } : {}),
     ...(Array.isArray(use.normalizedTagNames)
       ? { normalizedTagNames: [...use.normalizedTagNames].sort() }
       : {}),
+    ...(use.tagName ? { tagName: use.tagName } : {}),
+    ...(use.normalizedTagName
+      ? { normalizedTagName: use.normalizedTagName }
+      : {}),
+    ...(use.directiveName ? { directiveName: use.directiveName } : {}),
     ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
     ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
     ...(use.resolvedFile
       ? { resolvedFile: relPath(ROOT, use.resolvedFile) }
       : {}),
     ...(use.pluginName ? { pluginName: use.pluginName } : {}),
+    ...(use.bindingName ? { bindingName: use.bindingName } : {}),
+    ...(use.bindingSource
+      ? { bindingSource: use.bindingSource, fromSpec: use.bindingSource }
+      : {}),
     ...(use.fromSpec ? { fromSpec: use.fromSpec } : {}),
     source: use.source,
     confidence: use.confidence,
@@ -797,9 +809,12 @@ function addSfcFrameworkConventionComponent(use) {
     eligibleForSafeFix: false,
     status: "muted",
     reason: use.reason,
+    ...(use.bindingKind ? { bindingKind: use.bindingKind } : {}),
+    ...(use.importedName ? { importedName: use.importedName } : {}),
     ...(Array.isArray(use.componentPathSegments)
       ? { componentPathSegments: [...use.componentPathSegments] }
       : {}),
+    ...(use.sfcBlockKind ? { sfcBlockKind: use.sfcBlockKind } : {}),
     ...(Number.isFinite(use.line) ? { line: use.line } : {}),
   });
 }
@@ -1704,8 +1719,7 @@ function processSfcGeneratedComponentManifests(consumers) {
     if (use.status === "skipped") {
       addSfcGeneratedComponentManifest(use, {
         status: "skipped",
-        reason:
-          use.reason ?? "sfc-framework-generated-manifest-nonliteral",
+        reason: use.reason ?? "sfc-framework-generated-manifest-nonliteral",
       });
       continue;
     }
