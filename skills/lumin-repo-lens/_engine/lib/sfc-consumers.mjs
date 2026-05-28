@@ -887,6 +887,38 @@ function astroClientDirectiveRecord({
   };
 }
 
+function svelteActionDirectiveRecord({
+  filePath,
+  tagName,
+  directiveName,
+  actionName,
+  binding,
+  line,
+  blockKind,
+}) {
+  return {
+    framework: "svelte",
+    conventionKind: "action-directive",
+    consumerFile: filePath,
+    tagName,
+    directiveName,
+    actionName,
+    bindingName: binding.bindingName,
+    bindingSource: binding.bindingSource,
+    fromSpec: binding.bindingSource,
+    bindingKind: binding.bindingKind,
+    ...(binding.importedName ? { importedName: binding.importedName } : {}),
+    source: "sfc-framework-svelte-action-directive",
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: "sfc-framework-svelte-action-directive",
+    line,
+    sfcBlockKind: blockKind,
+  };
+}
+
 function parseAstroClientDirectiveTags(
   template,
   { filePath, fileSource, startOffset, blockKind, bindings },
@@ -918,6 +950,43 @@ function parseAstroClientDirectiveTags(
         }),
       );
       break;
+    }
+  }
+  return out;
+}
+
+function parseSvelteActionDirectiveTags(
+  template,
+  { filePath, fileSource, startOffset, blockKind, bindings },
+) {
+  const out = [];
+  const cleaned = stripHtmlComments(template);
+  const tagRe = /<\s*([A-Za-z][A-Za-z0-9.:-]*)([^<>]*?)(?:\/?)>/g;
+  let match;
+  while ((match = tagRe.exec(cleaned))) {
+    const tagName = match[1];
+    const attrs = match[2] ?? "";
+    const line = lineOf(fileSource, startOffset + match.index);
+    const actionRe = /(?:^|\s)(use:([A-Za-z_$][\w$]*))(?=\s|=|\/|$)/g;
+    let actionMatch;
+    while ((actionMatch = actionRe.exec(attrs))) {
+      const directiveName = actionMatch[1];
+      const actionName = actionMatch[2];
+      const binding =
+        bindings.exposedNames.get(actionName) ??
+        bindings.imports.get(actionName);
+      if (!binding) continue;
+      out.push(
+        svelteActionDirectiveRecord({
+          filePath,
+          tagName,
+          directiveName,
+          actionName,
+          binding,
+          line,
+          blockKind,
+        }),
+      );
     }
   }
   return out;
@@ -1636,6 +1705,13 @@ export function collectSfcFrameworkConventionComponents({
       exclude,
     }),
   );
+  out.push(
+    ...collectSfcSvelteActionDirectiveConventions({
+      root: resolvedRoot,
+      includeTests,
+      exclude,
+    }),
+  );
 
   if (hasNuxtConventionSignal(resolvedRoot)) {
     const files = collectFiles(resolvedRoot, {
@@ -1649,6 +1725,43 @@ export function collectSfcFrameworkConventionComponents({
       const segments = rel.split(path.sep);
       if (segments[0] !== "components") continue;
       out.push(nuxtConventionRecord({ root: resolvedRoot, filePath }));
+    }
+  }
+
+  return out;
+}
+
+function collectSfcSvelteActionDirectiveConventions({
+  root,
+  includeTests = true,
+  exclude = [],
+}) {
+  const out = [];
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: ["svelte"],
+  });
+
+  for (const filePath of files) {
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const bindings = collectScriptComponentBindings(src, filePath);
+    for (const block of extractTemplateBlocks(src, filePath)) {
+      if (block.sfcLanguage !== "svelte") continue;
+      out.push(
+        ...parseSvelteActionDirectiveTags(block.content, {
+          filePath,
+          fileSource: src,
+          startOffset: block.startOffset,
+          blockKind: block.kind,
+          bindings,
+        }),
+      );
     }
   }
 
