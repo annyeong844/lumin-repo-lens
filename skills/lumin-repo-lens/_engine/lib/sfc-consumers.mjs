@@ -950,12 +950,55 @@ function vueMacroRegistrationRecord({
   };
 }
 
+function vueOptionsRegistrationRecord({
+  filePath,
+  componentName,
+  binding,
+  line,
+  blockKind,
+}) {
+  return {
+    framework: "vue",
+    conventionKind: "options-registration",
+    consumerFile: filePath,
+    optionName: "components",
+    componentName,
+    normalizedTagNames: normalizedGlobalComponentNames(componentName),
+    bindingName: binding.bindingName,
+    bindingSource: binding.bindingSource,
+    fromSpec: binding.bindingSource,
+    bindingKind: binding.bindingKind,
+    ...(binding.importedName ? { importedName: binding.importedName } : {}),
+    source: "sfc-framework-vue-options-registration",
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: "sfc-framework-vue-options-registration",
+    line,
+    sfcBlockKind: blockKind,
+  };
+}
+
 function componentsObjectFromDefineOptions(node) {
   if (node?.type !== "CallExpression") return null;
   if (identifierName(node.callee) !== "defineOptions") return null;
   const options = node.arguments?.[0];
   if (options?.type !== "ObjectExpression") return null;
   for (const property of options.properties ?? []) {
+    if (property?.type !== "Property") continue;
+    if (property.computed) continue;
+    if (astPropertyName(property) !== "components") continue;
+    return property.value?.type === "ObjectExpression" ? property.value : null;
+  }
+  return null;
+}
+
+function componentsObjectFromVueDefaultExport(node) {
+  if (node?.type !== "ExportDefaultDeclaration") return null;
+  const declaration = node.declaration;
+  if (declaration?.type !== "ObjectExpression") return null;
+  for (const property of declaration.properties ?? []) {
     if (property?.type !== "Property") continue;
     if (property.computed) continue;
     if (astPropertyName(property) !== "components") continue;
@@ -999,6 +1042,44 @@ function parseVueMacroRegistrations(
       );
     }
   });
+
+  return out;
+}
+
+function parseVueOptionsRegistrations(
+  script,
+  { filePath, fileSource, startOffset, blockKind, parserLang },
+) {
+  const out = [];
+  if (blockKind !== "vue-script") return out;
+  const program = parseScriptAst(script, filePath, parserLang);
+  if (!program) return out;
+  const imports = collectImportBindings(program, fileSource);
+
+  for (const node of program.body ?? []) {
+    const components = componentsObjectFromVueDefaultExport(node);
+    if (!components) continue;
+    for (const property of components.properties ?? []) {
+      if (property?.type !== "Property") continue;
+      if (property.computed) continue;
+      const componentName = astPropertyName(property);
+      const bindingName = identifierName(property.value);
+      const binding = bindingName ? imports.get(bindingName) : null;
+      if (!componentName || !binding) continue;
+      out.push(
+        vueOptionsRegistrationRecord({
+          filePath,
+          componentName,
+          binding,
+          line: lineOf(
+            fileSource,
+            startOffset + (property.start ?? node.start),
+          ),
+          blockKind,
+        }),
+      );
+    }
+  }
 
   return out;
 }
@@ -1803,6 +1884,13 @@ export function collectSfcFrameworkConventionComponents({
       exclude,
     }),
   );
+  out.push(
+    ...collectSfcVueOptionsRegistrationConventions({
+      root: resolvedRoot,
+      includeTests,
+      exclude,
+    }),
+  );
 
   if (hasNuxtConventionSignal(resolvedRoot)) {
     const files = collectFiles(resolvedRoot, {
@@ -1816,6 +1904,41 @@ export function collectSfcFrameworkConventionComponents({
       const segments = rel.split(path.sep);
       if (segments[0] !== "components") continue;
       out.push(nuxtConventionRecord({ root: resolvedRoot, filePath }));
+    }
+  }
+
+  return out;
+}
+
+function collectSfcVueOptionsRegistrationConventions({
+  root,
+  includeTests = true,
+  exclude = [],
+}) {
+  const out = [];
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: ["vue"],
+  });
+
+  for (const filePath of files) {
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    for (const block of extractScriptBlocks(src, filePath)) {
+      out.push(
+        ...parseVueOptionsRegistrations(block.content, {
+          filePath,
+          fileSource: src,
+          startOffset: block.startOffset,
+          blockKind: block.kind,
+          parserLang: block.parserLang,
+        }),
+      );
     }
   }
 
