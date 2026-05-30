@@ -737,7 +737,9 @@ function addSfcGlobalComponentRegistration(
           bindingSource: use.bindingSource,
           fromSpec: use.bindingSource,
         }
-      : {}),
+      : use.fromSpec
+        ? { fromSpec: use.fromSpec }
+        : {}),
     source: use.source,
     confidence: status === "muted" ? "muted-review" : "registration-review",
     eligibleForFanIn: false,
@@ -747,6 +749,8 @@ function addSfcGlobalComponentRegistration(
     ...(reason ? { reason } : {}),
     ...(use.bindingKind ? { bindingKind: use.bindingKind } : {}),
     ...(use.importedName ? { importedName: use.importedName } : {}),
+    ...(use.factoryKind ? { factoryKind: use.factoryKind } : {}),
+    ...(use.ambiguityKey ? { ambiguityKey: use.ambiguityKey } : {}),
     ...(Number.isFinite(use.line) ? { line: use.line } : {}),
   });
 }
@@ -1662,6 +1666,34 @@ function processSfcGlobalComponentRegistrations(consumers) {
   for (const use of consumers) {
     recordedRegistrations++;
     if (use.status === "muted") {
+      const mutedSpec =
+        use.reason === "sfc-global-component-async-factory"
+          ? use.fromSpec
+          : use.reason === "sfc-global-component-duplicate-registration"
+            ? use.bindingSource
+            : null;
+      if (mutedSpec) {
+        const target = resolveSpecifier(use.registrationFile, {
+          ...use,
+          fromSpec: mutedSpec,
+          kind: "sfc-global-component-registration",
+          name: "*",
+          typeOnly: false,
+        });
+        addSfcGlobalComponentRegistration(use, {
+          status: "muted",
+          resolvedFile: isNonSourceAssetResolution(target)
+            ? existingRelativeSpecifierTarget(use.registrationFile, mutedSpec)
+            : target &&
+                target !== "EXTERNAL" &&
+                target !== "UNRESOLVED_INTERNAL" &&
+                !isGeneratedVirtualResolution(target)
+              ? target
+              : null,
+          reason: use.reason ?? "sfc-global-component-muted",
+        });
+        continue;
+      }
       addSfcGlobalComponentRegistration(use, {
         status: "muted",
         reason: use.reason ?? "sfc-global-component-muted",

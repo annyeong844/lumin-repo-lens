@@ -665,10 +665,14 @@ function globalRegistrationRecord({
   api,
   componentName = null,
   binding = null,
+  fromSpec = null,
+  factoryKind = null,
+  ambiguityKey = null,
   line,
   status = "registration-syntax",
   reason = null,
 }) {
+  const explicitFromSpec = binding?.bindingSource ?? fromSpec;
   return {
     registrationFile: filePath,
     framework: "vue",
@@ -683,21 +687,86 @@ function globalRegistrationRecord({
       ? {
           bindingName: binding.bindingName,
           bindingSource: binding.bindingSource,
-          fromSpec: binding.bindingSource,
+          fromSpec: explicitFromSpec,
           bindingKind: binding.bindingKind,
           ...(binding.importedName
             ? { importedName: binding.importedName }
             : {}),
         }
-      : {}),
+      : explicitFromSpec
+        ? { fromSpec: explicitFromSpec }
+        : {}),
     source: "sfc-global-component-registration",
     status,
     confidence: status === "muted" ? "muted-review" : "registration-review",
     eligibleForFanIn: false,
     eligibleForSafeFix: false,
     ...(reason ? { reason } : {}),
+    ...(factoryKind ? { factoryKind } : {}),
+    ...(ambiguityKey ? { ambiguityKey } : {}),
     line,
   };
+}
+
+function importExpressionLiteralSource(node) {
+  if (node?.type !== "ImportExpression") return null;
+  return literalStringValue(node.source);
+}
+
+function asyncLoaderImportSource(node) {
+  if (
+    node?.type !== "ArrowFunctionExpression" &&
+    node?.type !== "FunctionExpression"
+  ) {
+    return null;
+  }
+  const direct = importExpressionLiteralSource(node.body);
+  if (direct) return direct;
+  if (node.body?.type !== "BlockStatement") return null;
+  for (const statement of node.body.body ?? []) {
+    if (statement?.type !== "ReturnStatement") continue;
+    const returned = importExpressionLiteralSource(statement.argument);
+    if (returned) return returned;
+  }
+  return null;
+}
+
+function defineAsyncComponentFactory(node) {
+  if (node?.type !== "CallExpression") return null;
+  if (identifierName(node.callee) !== "defineAsyncComponent") return null;
+  return {
+    factoryKind: "defineAsyncComponent",
+    fromSpec: asyncLoaderImportSource(node.arguments?.[0]),
+  };
+}
+
+function markDuplicateGlobalRegistrations(records) {
+  const byName = new Map();
+  for (const record of records) {
+    if (!record.componentName) continue;
+    if (!record.bindingName && !record.fromSpec) continue;
+    const key = `${record.api}:${record.componentName}`;
+    const group = byName.get(key) ?? [];
+    group.push(record);
+    byName.set(key, group);
+  }
+  const duplicateRecords = new Set(
+    [...byName.entries()]
+      .filter(([, group]) => group.length > 1)
+      .flatMap(([, group]) => group.map((record) => record)),
+  );
+  if (duplicateRecords.size === 0) return records;
+  return records.map((record) => {
+    if (!duplicateRecords.has(record)) return record;
+    if (!record.bindingName && !record.fromSpec) return record;
+    return {
+      ...record,
+      status: "muted",
+      confidence: "muted-review",
+      reason: "sfc-global-component-duplicate-registration",
+      ambiguityKey: record.componentName,
+    };
+  });
 }
 
 const GENERATED_COMPONENT_MANIFESTS = Object.freeze([
@@ -1376,6 +1445,7 @@ function parseGlobalComponentRegistrations(program, { filePath, fileSource }) {
 
     const args = node.arguments ?? [];
     const componentName = literalStringValue(args[0]);
+    const asyncFactory = defineAsyncComponentFactory(args[1]);
     const bindingName = identifierName(args[1]);
     const binding = bindingName ? imports.get(bindingName) : null;
     const line = lineOf(fileSource, node.start);
@@ -1391,6 +1461,24 @@ function parseGlobalComponentRegistrations(program, { filePath, fileSource }) {
           line,
           status: "muted",
           reason: "sfc-global-component-name-dynamic",
+        }),
+      );
+      return;
+    }
+
+    if (asyncFactory) {
+      out.push(
+        globalRegistrationRecord({
+          filePath,
+          api,
+          componentName,
+          fromSpec: asyncFactory.fromSpec,
+          factoryKind: asyncFactory.factoryKind,
+          line,
+          status: "muted",
+          reason: asyncFactory.fromSpec
+            ? "sfc-global-component-async-factory"
+            : "sfc-global-component-async-factory-nonliteral",
         }),
       );
       return;
@@ -1421,7 +1509,7 @@ function parseGlobalComponentRegistrations(program, { filePath, fileSource }) {
     );
   });
 
-  return out;
+  return markDuplicateGlobalRegistrations(out);
 }
 
 function collectComponentRegistrations(program) {
