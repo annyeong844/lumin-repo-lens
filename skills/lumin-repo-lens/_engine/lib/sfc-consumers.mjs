@@ -642,6 +642,53 @@ function collectImportBindings(program, src) {
   return out;
 }
 
+function isFunctionLikeValue(node) {
+  return (
+    node?.type === "ArrowFunctionExpression" ||
+    node?.type === "FunctionExpression"
+  );
+}
+
+function collectLocalSvelteActionBindings(
+  program,
+  src,
+  startOffset,
+  filePath,
+  blockKind,
+) {
+  const out = new Map();
+  for (const node of program.body ?? []) {
+    if (node?.type === "FunctionDeclaration") {
+      const bindingName = identifierName(node.id);
+      if (!bindingName) continue;
+      out.set(bindingName, {
+        bindingName,
+        bindingSource: filePath,
+        bindingKind: "local-function",
+        line: lineOf(src, startOffset + (node.start ?? 0)),
+        sfcBlockKind: blockKind,
+      });
+      continue;
+    }
+
+    if (node?.type !== "VariableDeclaration" || node.kind !== "const") {
+      continue;
+    }
+    for (const declaration of node.declarations ?? []) {
+      const bindingName = identifierName(declaration.id);
+      if (!bindingName || !isFunctionLikeValue(declaration.init)) continue;
+      out.set(bindingName, {
+        bindingName,
+        bindingSource: filePath,
+        bindingKind: "local-const-function",
+        line: lineOf(src, startOffset + (declaration.start ?? node.start ?? 0)),
+        sfcBlockKind: blockKind,
+      });
+    }
+  }
+  return out;
+}
+
 function kebabFromPascal(value) {
   if (!/^[A-Z][A-Za-z0-9]*$/.test(value)) return null;
   return value
@@ -1207,6 +1254,7 @@ function parseSvelteActionDirectiveTags(
       const directiveName = actionMatch[1];
       const actionName = actionMatch[2];
       const binding =
+        bindings.localActions?.get(actionName) ??
         bindings.exposedNames.get(actionName) ??
         bindings.imports.get(actionName);
       if (!binding) continue;
@@ -1540,6 +1588,7 @@ function collectScriptComponentBindings(src, filePath) {
   const imports = new Map();
   const namespaceImports = new Map();
   const exposedNames = new Map();
+  const localActions = new Map();
   const lang = sfcLanguageForFile(filePath);
 
   for (const block of extractScriptBlocks(src, filePath)) {
@@ -1607,9 +1656,21 @@ function collectScriptComponentBindings(src, filePath) {
     for (const [bindingName, record] of blockNamespaceImports) {
       namespaceImports.set(bindingName, record);
     }
+
+    if (lang === "svelte") {
+      for (const [bindingName, record] of collectLocalSvelteActionBindings(
+        program,
+        src,
+        block.startOffset,
+        filePath,
+        block.kind,
+      )) {
+        localActions.set(bindingName, record);
+      }
+    }
   }
 
-  return { imports, namespaceImports, exposedNames };
+  return { imports, namespaceImports, exposedNames, localActions };
 }
 
 function pascalFromKebab(value) {

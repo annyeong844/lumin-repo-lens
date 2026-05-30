@@ -781,6 +781,14 @@ function addSfcGeneratedComponentManifest(
 }
 
 function addSfcFrameworkConventionComponent(use) {
+  const bindingSource =
+    use.bindingSource && path.isAbsolute(use.bindingSource)
+      ? relPath(ROOT, use.bindingSource)
+      : use.bindingSource;
+  const fromSpec =
+    use.fromSpec && path.isAbsolute(use.fromSpec)
+      ? relPath(ROOT, use.fromSpec)
+      : use.fromSpec;
   sfcFrameworkConventionComponents.push({
     framework: use.framework,
     conventionKind: use.conventionKind,
@@ -806,10 +814,10 @@ function addSfcFrameworkConventionComponent(use) {
       : {}),
     ...(use.pluginName ? { pluginName: use.pluginName } : {}),
     ...(use.bindingName ? { bindingName: use.bindingName } : {}),
-    ...(use.bindingSource
-      ? { bindingSource: use.bindingSource, fromSpec: use.bindingSource }
+    ...(bindingSource
+      ? { bindingSource, fromSpec: bindingSource }
       : {}),
-    ...(use.fromSpec ? { fromSpec: use.fromSpec } : {}),
+    ...(fromSpec ? { fromSpec } : {}),
     source: use.source,
     confidence: use.confidence,
     eligibleForFanIn: false,
