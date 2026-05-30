@@ -514,6 +514,45 @@ function buildBlockClonesSummary(artifact) {
   return blockClones;
 }
 
+function numberOrZero(value) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function buildSfcEvidenceSummary(symbols) {
+  if (!symbols || typeof symbols !== 'object') return null;
+  const uses = symbols.uses && typeof symbols.uses === 'object'
+    ? symbols.uses
+    : {};
+  const byLane = {
+    scriptImportConsumers: numberOrZero(uses.sfcScriptConsumers),
+    scriptSrcReachability: numberOrZero(uses.sfcScriptSrcReachability),
+    styleAssetReferences: numberOrZero(uses.sfcStyleAssetReferences),
+    templateComponentRefs: numberOrZero(uses.sfcTemplateComponentRefs),
+    globalComponentRegistrations: numberOrZero(uses.sfcGlobalComponentRegistrations),
+    generatedComponentManifests: numberOrZero(uses.sfcGeneratedComponentManifests),
+    frameworkConventionComponents: numberOrZero(uses.sfcFrameworkConventionComponents),
+  };
+  const totalEvidenceCount = Object.values(byLane)
+    .reduce((sum, count) => sum + count, 0);
+  if (totalEvidenceCount <= 0) return null;
+
+  return {
+    artifact: 'symbols.json',
+    status: 'complete',
+    scriptImportConsumerCount: byLane.scriptImportConsumers,
+    reachabilityOnlyCount: byLane.scriptSrcReachability,
+    reviewOnlyEvidenceCount:
+      byLane.styleAssetReferences +
+      byLane.templateComponentRefs +
+      byLane.globalComponentRegistrations +
+      byLane.generatedComponentManifests +
+      byLane.frameworkConventionComponents,
+    totalEvidenceCount,
+    byLane,
+    scanGapStillApplies: true,
+  };
+}
+
 export function collectProducedArtifacts(outDir) {
   const produced = new Set();
   for (const name of ARTIFACT_CANDIDATES) {
@@ -591,6 +630,7 @@ export function buildManifestEvidence({
     frameworkResourceSurfaces: buildFrameworkResourceSurfacesSummary(frameworkResourceSurfaces),
     unusedDependencies: buildUnusedDependenciesSummary(unusedDeps),
     blockClones: buildBlockClonesSummary(blockClones),
+    sfcEvidence: buildSfcEvidenceSummary(symbols),
     livingAudit: detectLivingAuditDocs(root),
   };
 }
@@ -605,5 +645,6 @@ export function refreshManifestEvidence(manifest, options) {
   manifest.frameworkResourceSurfaces = evidence.frameworkResourceSurfaces;
   manifest.unusedDependencies = evidence.unusedDependencies;
   manifest.blockClones = evidence.blockClones;
+  manifest.sfcEvidence = evidence.sfcEvidence;
   manifest.livingAudit = evidence.livingAudit;
 }

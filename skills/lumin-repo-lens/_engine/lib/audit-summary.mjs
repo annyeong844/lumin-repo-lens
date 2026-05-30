@@ -114,6 +114,30 @@ function formatDependencyHygieneCue(summary) {
   return `Dependency hygiene: ${reviewUnused} review-only dependency ${plural(reviewUnused, 'declaration')} ${reviewVerb} inspection; ${muted} muted ${plural(muted, 'explanation')}${confidenceText}. Read \`manifest.json.unusedDependencies\` and \`unused-deps.json\` before changing package manifests.`;
 }
 
+function formatSfcEvidenceCue(summary) {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
+  const byLane = summary.byLane && typeof summary.byLane === 'object'
+    ? summary.byLane
+    : {};
+  const total = n(summary.totalEvidenceCount, 0);
+  const reviewOnly = n(summary.reviewOnlyEvidenceCount, 0);
+  const scriptConsumers = n(summary.scriptImportConsumerCount, n(byLane.scriptImportConsumers));
+  const reachabilityOnly = n(summary.reachabilityOnlyCount, n(byLane.scriptSrcReachability));
+  if (total <= 0) return null;
+
+  const laneText = [
+    scriptConsumers > 0 ? `script imports ${scriptConsumers}` : null,
+    reachabilityOnly > 0 ? `script-src reachability ${reachabilityOnly}` : null,
+    n(byLane.styleAssetReferences) > 0 ? `style assets ${n(byLane.styleAssetReferences)}` : null,
+    n(byLane.templateComponentRefs) > 0 ? `template refs ${n(byLane.templateComponentRefs)}` : null,
+    n(byLane.globalComponentRegistrations) > 0 ? `global registrations ${n(byLane.globalComponentRegistrations)}` : null,
+    n(byLane.generatedComponentManifests) > 0 ? `generated manifests ${n(byLane.generatedComponentManifests)}` : null,
+    n(byLane.frameworkConventionComponents) > 0 ? `framework conventions ${n(byLane.frameworkConventionComponents)}` : null,
+  ].filter(Boolean).join(', ');
+
+  return `SFC evidence: ${total} ${plural(total, 'record')} across ${laneText || 'recorded SFC lanes'}; ${reviewOnly} review-only ${plural(reviewOnly, 'record')}. Read \`manifest.json.sfcEvidence\` and SFC arrays in \`symbols.json\`; review-only SFC lanes are not fan-in or action-tier proof, and sfc-scan-gap still applies.`;
+}
+
 function formatUnreachableSccCue(moduleReachability) {
   const groups = n(moduleReachability?.summary?.unreachableStronglyConnectedComponents, 0);
   const files = n(moduleReachability?.summary?.unreachableStronglyConnectedFiles, 0);
@@ -350,6 +374,11 @@ function measuredCueLines({ manifest, checklistFacts, fixPlan, topology, discipl
     lines.push(`- ${dependencyHygieneCue}`);
   }
 
+  const sfcEvidenceCue = formatSfcEvidenceCue(manifest?.sfcEvidence);
+  if (sfcEvidenceCue) {
+    lines.push(`- ${sfcEvidenceCue}`);
+  }
+
   if (callGraph?.summary) {
     const semiDead = n(callGraph.summary.semiDead, Array.isArray(callGraph.semiDeadList) ? callGraph.semiDeadList.length : 0);
     lines.push(`- Call graph: semi-dead imports ${semiDead}. Read \`call-graph.json.semiDeadList\` and framework/test conventions before cleanup.`);
@@ -441,6 +470,9 @@ function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipl
   }
   if (manifest?.unusedDependencies || produced.has('unused-deps.json')) {
     lines.push('- `unused-deps.json`: review-only dependency declaration evidence; inspect before changing package manifests.');
+  }
+  if (manifest?.sfcEvidence) {
+    lines.push('- `symbols.json` SFC arrays: SFC import, reachability, asset, template, registration, generated-manifest, and framework-convention evidence; review-only SFC lanes do not prove fan-in or action readiness.');
   }
 
   return lines;

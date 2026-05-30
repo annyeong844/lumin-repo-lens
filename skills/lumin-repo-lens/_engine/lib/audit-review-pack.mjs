@@ -59,6 +59,25 @@ function formatDependencyHygieneReviewCheck(summary) {
   return `Dependency hygiene review: inspect unused-deps.json before changing package manifests. review-only=${reviewUnused}; muted=${muted}; confidence-limited=${confidenceLimited}.`;
 }
 
+function formatSfcEvidenceReviewCheck(summary) {
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return null;
+  const byLane = summary.byLane && typeof summary.byLane === 'object'
+    ? summary.byLane
+    : {};
+  const total = n(summary.totalEvidenceCount, 0);
+  if (total <= 0) return null;
+  const laneText = [
+    n(byLane.scriptImportConsumers) > 0 ? `script-imports=${n(byLane.scriptImportConsumers)}` : null,
+    n(byLane.scriptSrcReachability) > 0 ? `script-src=${n(byLane.scriptSrcReachability)}` : null,
+    n(byLane.styleAssetReferences) > 0 ? `style-assets=${n(byLane.styleAssetReferences)}` : null,
+    n(byLane.templateComponentRefs) > 0 ? `template-refs=${n(byLane.templateComponentRefs)}` : null,
+    n(byLane.globalComponentRegistrations) > 0 ? `global-registrations=${n(byLane.globalComponentRegistrations)}` : null,
+    n(byLane.generatedComponentManifests) > 0 ? `generated-manifests=${n(byLane.generatedComponentManifests)}` : null,
+    n(byLane.frameworkConventionComponents) > 0 ? `framework-conventions=${n(byLane.frameworkConventionComponents)}` : null,
+  ].filter(Boolean).join('; ');
+  return `SFC evidence review: inspect manifest.json.sfcEvidence and SFC arrays in symbols.json before treating SFC absence as deadness. ${laneText || 'recorded-sfc-lanes'}; review-only=${n(summary.reviewOnlyEvidenceCount, 0)}; sfc-scan-gap still applies.`;
+}
+
 function formatUnreachableSccReviewCheck(moduleReachability) {
   const groups = n(moduleReachability?.summary?.unreachableStronglyConnectedComponents, 0);
   const files = n(moduleReachability?.summary?.unreachableStronglyConnectedFiles, 0);
@@ -185,6 +204,7 @@ function deadSurfaceLane({ fixPlan, deadClassify, manifest, moduleReachability }
   const dependencyHygieneCheck = formatDependencyHygieneReviewCheck(
     manifest?.unusedDependencies
   );
+  const sfcEvidenceCheck = formatSfcEvidenceReviewCheck(manifest?.sfcEvidence);
   const unreachableSccCheck = formatUnreachableSccReviewCheck(moduleReachability);
   const artifacts = [
     'fix-plan.json',
@@ -201,6 +221,7 @@ function deadSurfaceLane({ fixPlan, deadClassify, manifest, moduleReachability }
     ...(resolverBlockedHint ? [resolverBlockedHint] : []),
     ...(frameworkResourceSurfaceCheck ? [frameworkResourceSurfaceCheck] : []),
     ...(dependencyHygieneCheck ? [dependencyHygieneCheck] : []),
+    ...(sfcEvidenceCheck ? [sfcEvidenceCheck] : []),
     ...(unreachableSccCheck ? [unreachableSccCheck] : []),
     'For each visible cleanup candidate, check whether it is exported through package/API/declaration/test-only surfaces before recommending a change.',
   ];
