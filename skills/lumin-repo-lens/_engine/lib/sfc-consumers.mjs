@@ -841,6 +841,8 @@ const NUXT_COMPONENTS_DIR_CONFIG_REASON =
   "sfc-framework-nuxt-components-dir-config";
 const NUXT_CUSTOM_RESOLVER_UNAVAILABLE_REASON =
   "sfc-framework-nuxt-custom-resolver-unavailable";
+const NUXT_LAYER_EXTENDS_UNAVAILABLE_REASON =
+  "sfc-framework-nuxt-layer-extends-unavailable";
 const NUXT_CUSTOM_RESOLVER_HOOKS = new Set([
   "components:dirs",
   "components:extend",
@@ -1088,6 +1090,32 @@ function nuxtCustomResolverUnavailableRecord({ configFile, hookName, line }) {
   };
 }
 
+function nuxtLayerExtendsUnavailableRecord({
+  configFile,
+  extendsSource = null,
+  extendsSourceKind,
+  line,
+}) {
+  return {
+    framework: "nuxt",
+    conventionKind: "nuxt-layer-extends-unavailable",
+    configFile,
+    configProperty: "extends",
+    configShape: "extends",
+    ...(typeof extendsSource === "string" && extendsSource.length > 0
+      ? { extendsSource }
+      : {}),
+    extendsSourceKind,
+    source: NUXT_LAYER_EXTENDS_UNAVAILABLE_REASON,
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "unavailable",
+    reason: NUXT_LAYER_EXTENDS_UNAVAILABLE_REASON,
+    ...(Number.isFinite(line) ? { line } : {}),
+  };
+}
+
 function booleanLiteralValue(node) {
   return node?.type === "Literal" && typeof node.value === "boolean"
     ? node.value
@@ -1260,6 +1288,74 @@ function collectSfcNuxtCustomResolverUnavailableConventions({ root }) {
             }),
           );
         }
+      }
+    }
+  }
+  return out;
+}
+
+function nuxtLayerExtendsRecordsFromValue({ configFile, value, src }) {
+  const out = [];
+  const stringValue = literalStringValue(value);
+  if (stringValue) {
+    out.push(
+      nuxtLayerExtendsUnavailableRecord({
+        configFile,
+        extendsSource: stringValue,
+        extendsSourceKind: "literal",
+        line: lineOf(src, value.start),
+      }),
+    );
+    return out;
+  }
+  if (value?.type === "ArrayExpression") {
+    for (const element of value.elements ?? []) {
+      if (!element) continue;
+      out.push(
+        ...nuxtLayerExtendsRecordsFromValue({
+          configFile,
+          value: element,
+          src,
+        }),
+      );
+    }
+    return out;
+  }
+  out.push(
+    nuxtLayerExtendsUnavailableRecord({
+      configFile,
+      extendsSourceKind: "nonliteral",
+      line: lineOf(src, value?.start),
+    }),
+  );
+  return out;
+}
+
+function collectSfcNuxtLayerExtendsUnavailableConventions({ root }) {
+  if (!hasNuxtConventionSignal(root)) return [];
+  const out = [];
+  for (const rel of NUXT_ROOT_CONFIGS) {
+    const filePath = path.join(root, rel);
+    if (!existsSync(filePath)) continue;
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const program = parseScriptAst(src, filePath, parserLangFromFile(filePath));
+    if (!program) continue;
+    for (const configObject of nuxtConfigRootObjectExpressions(program)) {
+      for (const property of configObject.properties ?? []) {
+        if (property?.type !== "Property" || property.computed) continue;
+        if (astPropertyName(property) !== "extends") continue;
+        out.push(
+          ...nuxtLayerExtendsRecordsFromValue({
+            configFile: filePath,
+            value: property.value,
+            src,
+          }),
+        );
       }
     }
   }
@@ -2565,6 +2661,11 @@ export function collectSfcFrameworkConventionComponents({
   out.push(...collectSfcNuxtComponentsDirConfigConventions({ root: resolvedRoot }));
   out.push(
     ...collectSfcNuxtCustomResolverUnavailableConventions({
+      root: resolvedRoot,
+    }),
+  );
+  out.push(
+    ...collectSfcNuxtLayerExtendsUnavailableConventions({
       root: resolvedRoot,
     }),
   );

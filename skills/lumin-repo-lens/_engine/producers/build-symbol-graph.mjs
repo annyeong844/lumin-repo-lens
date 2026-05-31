@@ -809,6 +809,11 @@ function addSfcFrameworkConventionComponent(use) {
     ...(use.optionName ? { optionName: use.optionName } : {}),
     ...(use.hookName ? { hookName: use.hookName } : {}),
     ...(use.configShape ? { configShape: use.configShape } : {}),
+    ...(use.configProperty ? { configProperty: use.configProperty } : {}),
+    ...(use.extendsSource ? { extendsSource: use.extendsSource } : {}),
+    ...(use.extendsSourceKind
+      ? { extendsSourceKind: use.extendsSourceKind }
+      : {}),
     ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
     ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
     ...(use.componentDir ? { componentDir: use.componentDir } : {}),
