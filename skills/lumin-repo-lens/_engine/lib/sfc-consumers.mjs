@@ -837,6 +837,8 @@ const NUXT_COMPONENTS_ALIAS_MANIFEST_REASON =
   "sfc-framework-nuxt-components-alias-manifest";
 const NUXT_COMPONENTS_ALIAS_UNRESOLVED_REASON =
   "sfc-framework-nuxt-components-alias-unresolved";
+const NUXT_COMPONENTS_DIR_CONFIG_REASON =
+  "sfc-framework-nuxt-components-dir-config";
 
 const NUXT_ROOT_CONFIGS = Object.freeze([
   "nuxt.config.ts",
@@ -954,6 +956,244 @@ function hasNuxtConventionSignal(root) {
 
 function hasNuxtAppDirConventionSignal(root) {
   return packageJsonHasNuxtFourDependency(root) || nuxtConfigHasAppSrcDir(root);
+}
+
+function nuxtConfigObjectExpression(node) {
+  if (node?.type === "ObjectExpression") return node;
+  if (
+    node?.type === "CallExpression" &&
+    identifierName(node.callee) === "defineNuxtConfig" &&
+    node.arguments?.[0]?.type === "ObjectExpression"
+  ) {
+    return node.arguments[0];
+  }
+  return null;
+}
+
+function nuxtConfigRootObjectExpressions(program) {
+  const out = [];
+  for (const node of program?.body ?? []) {
+    if (node?.type === "ExportDefaultDeclaration") {
+      const configObject = nuxtConfigObjectExpression(node.declaration);
+      if (configObject) out.push(configObject);
+      continue;
+    }
+    const expr = node?.type === "ExpressionStatement" ? node.expression : null;
+    if (
+      expr?.type === "AssignmentExpression" &&
+      expr.operator === "=" &&
+      expr.left?.type === "MemberExpression" &&
+      identifierName(expr.left.object) === "module" &&
+      memberPropertyName(expr.left) === "exports"
+    ) {
+      const configObject = nuxtConfigObjectExpression(expr.right);
+      if (configObject) out.push(configObject);
+    }
+  }
+  return out;
+}
+
+function nuxtConfigSrcDirValue(configObject) {
+  for (const property of configObject?.properties ?? []) {
+    if (property?.type !== "Property" || property.computed) continue;
+    if (astPropertyName(property) !== "srcDir") continue;
+    return literalStringValue(property.value);
+  }
+  return null;
+}
+
+function nuxtRootRelativePath(root, configuredPath) {
+  if (typeof configuredPath !== "string" || configuredPath.length === 0) {
+    return null;
+  }
+  const normalized = configuredPath.replace(/\\/g, "/");
+  if (path.isAbsolute(normalized)) return normalized;
+  return path.join(root, normalized);
+}
+
+function nuxtConfigSrcDirRoot(root, configObject) {
+  const srcDir = nuxtConfigSrcDirValue(configObject);
+  if (srcDir) return nuxtRootRelativePath(root, srcDir);
+  if (packageJsonHasNuxtFourDependency(root)) return path.join(root, "app");
+  return root;
+}
+
+function nuxtConfigPath(root, configFile, srcDirRoot, configuredPath) {
+  if (typeof configuredPath !== "string" || configuredPath.length === 0) {
+    return null;
+  }
+  const normalized = configuredPath.replace(/\\/g, "/");
+  if (normalized.startsWith("~/") || normalized.startsWith("@/")) {
+    return path.join(srcDirRoot || root, normalized.slice(2));
+  }
+  if (normalized.startsWith("./") || normalized.startsWith("../")) {
+    return path.resolve(path.dirname(configFile), normalized);
+  }
+  if (path.isAbsolute(normalized)) return normalized;
+  return path.join(root, normalized);
+}
+
+function nuxtComponentsDirConfigRecord({
+  root,
+  configFile,
+  srcDirRoot,
+  componentDir,
+  prefix = null,
+  pathPrefix = null,
+  global = null,
+  line,
+}) {
+  const resolved = nuxtConfigPath(root, configFile, srcDirRoot, componentDir);
+  return {
+    framework: "nuxt",
+    conventionKind: "nuxt-components-dir-config",
+    configFile,
+    componentDir,
+    ...(resolved && existsSync(resolved) ? { resolvedDir: resolved } : {}),
+    ...(typeof prefix === "string" && prefix.length > 0 ? { prefix } : {}),
+    ...(typeof pathPrefix === "boolean" || typeof pathPrefix === "string"
+      ? { pathPrefix }
+      : {}),
+    ...(typeof global === "boolean" ? { global } : {}),
+    source: NUXT_COMPONENTS_DIR_CONFIG_REASON,
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: NUXT_COMPONENTS_DIR_CONFIG_REASON,
+    ...(Number.isFinite(line) ? { line } : {}),
+  };
+}
+
+function booleanLiteralValue(node) {
+  return node?.type === "Literal" && typeof node.value === "boolean"
+    ? node.value
+    : null;
+}
+
+function nuxtComponentsDirObjectRecord({ root, configFile, srcDirRoot, node, src }) {
+  let componentDir = null;
+  let prefix = null;
+  let pathPrefix = null;
+  let global = null;
+  for (const property of node?.properties ?? []) {
+    if (property?.type !== "Property" || property.computed) continue;
+    const name = astPropertyName(property);
+    if (name === "path") componentDir = literalStringValue(property.value);
+    if (name === "prefix") prefix = literalStringValue(property.value);
+    if (name === "pathPrefix") {
+      pathPrefix =
+        booleanLiteralValue(property.value) ?? literalStringValue(property.value);
+    }
+    if (name === "global") global = booleanLiteralValue(property.value);
+  }
+  if (!componentDir) return null;
+  return nuxtComponentsDirConfigRecord({
+    root,
+    configFile,
+    srcDirRoot,
+    componentDir,
+    prefix,
+    pathPrefix,
+    global,
+    line: lineOf(src, node.start),
+  });
+}
+
+function nuxtComponentsDirConfigRecordsFromValue({
+  root,
+  configFile,
+  srcDirRoot,
+  value,
+  src,
+}) {
+  const out = [];
+  const stringValue = literalStringValue(value);
+  if (stringValue) {
+    out.push(
+      nuxtComponentsDirConfigRecord({
+        root,
+        configFile,
+        srcDirRoot,
+        componentDir: stringValue,
+        line: lineOf(src, value.start),
+      }),
+    );
+    return out;
+  }
+  if (value?.type === "ArrayExpression") {
+    for (const element of value.elements ?? []) {
+      if (!element) continue;
+      out.push(
+        ...nuxtComponentsDirConfigRecordsFromValue({
+          root,
+          configFile,
+          srcDirRoot,
+          value: element,
+          src,
+        }),
+      );
+    }
+    return out;
+  }
+  if (value?.type === "ObjectExpression") {
+    const direct = nuxtComponentsDirObjectRecord({
+      root,
+      configFile,
+      srcDirRoot,
+      node: value,
+      src,
+    });
+    if (direct) out.push(direct);
+    for (const property of value.properties ?? []) {
+      if (property?.type !== "Property" || property.computed) continue;
+      if (astPropertyName(property) !== "dirs") continue;
+      out.push(
+        ...nuxtComponentsDirConfigRecordsFromValue({
+          root,
+          configFile,
+          srcDirRoot,
+          value: property.value,
+          src,
+        }),
+      );
+    }
+  }
+  return out;
+}
+
+function collectSfcNuxtComponentsDirConfigConventions({ root }) {
+  if (!hasNuxtConventionSignal(root)) return [];
+  const out = [];
+  for (const rel of NUXT_ROOT_CONFIGS) {
+    const filePath = path.join(root, rel);
+    if (!existsSync(filePath)) continue;
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const program = parseScriptAst(src, filePath, parserLangFromFile(filePath));
+    if (!program) continue;
+    for (const configObject of nuxtConfigRootObjectExpressions(program)) {
+      const srcDirRoot = nuxtConfigSrcDirRoot(root, configObject);
+      for (const property of configObject.properties ?? []) {
+        if (property?.type !== "Property" || property.computed) continue;
+        if (astPropertyName(property) !== "components") continue;
+        out.push(
+          ...nuxtComponentsDirConfigRecordsFromValue({
+            root,
+            configFile: filePath,
+            srcDirRoot,
+            value: property.value,
+            src,
+          }),
+        );
+      }
+    }
+  }
+  return out;
 }
 
 function stripNuxtComponentModeSuffix(value) {
@@ -2252,6 +2492,7 @@ export function collectSfcFrameworkConventionComponents({
       exclude,
     }),
   );
+  out.push(...collectSfcNuxtComponentsDirConfigConventions({ root: resolvedRoot }));
 
   if (hasNuxtConventionSignal(resolvedRoot)) {
     const hasAppDirConventionSignal =

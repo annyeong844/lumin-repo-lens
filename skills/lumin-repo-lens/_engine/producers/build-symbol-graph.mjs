@@ -809,6 +809,13 @@ function addSfcFrameworkConventionComponent(use) {
     ...(use.optionName ? { optionName: use.optionName } : {}),
     ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
     ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
+    ...(use.componentDir ? { componentDir: use.componentDir } : {}),
+    ...(use.resolvedDir ? { resolvedDir: relPath(ROOT, use.resolvedDir) } : {}),
+    ...(use.prefix ? { prefix: use.prefix } : {}),
+    ...(typeof use.pathPrefix === "boolean" || typeof use.pathPrefix === "string"
+      ? { pathPrefix: use.pathPrefix }
+      : {}),
+    ...(typeof use.global === "boolean" ? { global: use.global } : {}),
     ...(use.manifestFile
       ? { manifestFile: relPath(ROOT, use.manifestFile) }
       : {}),
