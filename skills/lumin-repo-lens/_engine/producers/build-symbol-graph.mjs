@@ -807,6 +807,8 @@ function addSfcFrameworkConventionComponent(use) {
     ...(use.actionName ? { actionName: use.actionName } : {}),
     ...(use.macroName ? { macroName: use.macroName } : {}),
     ...(use.optionName ? { optionName: use.optionName } : {}),
+    ...(use.hookName ? { hookName: use.hookName } : {}),
+    ...(use.configShape ? { configShape: use.configShape } : {}),
     ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
     ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
     ...(use.componentDir ? { componentDir: use.componentDir } : {}),

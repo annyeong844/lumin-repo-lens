@@ -839,6 +839,12 @@ const NUXT_COMPONENTS_ALIAS_UNRESOLVED_REASON =
   "sfc-framework-nuxt-components-alias-unresolved";
 const NUXT_COMPONENTS_DIR_CONFIG_REASON =
   "sfc-framework-nuxt-components-dir-config";
+const NUXT_CUSTOM_RESOLVER_UNAVAILABLE_REASON =
+  "sfc-framework-nuxt-custom-resolver-unavailable";
+const NUXT_CUSTOM_RESOLVER_HOOKS = new Set([
+  "components:dirs",
+  "components:extend",
+]);
 
 const NUXT_ROOT_CONFIGS = Object.freeze([
   "nuxt.config.ts",
@@ -1065,6 +1071,23 @@ function nuxtComponentsDirConfigRecord({
   };
 }
 
+function nuxtCustomResolverUnavailableRecord({ configFile, hookName, line }) {
+  return {
+    framework: "nuxt",
+    conventionKind: "nuxt-custom-resolver-unavailable",
+    configFile,
+    hookName,
+    configShape: "hooks",
+    source: NUXT_CUSTOM_RESOLVER_UNAVAILABLE_REASON,
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "unavailable",
+    reason: NUXT_CUSTOM_RESOLVER_UNAVAILABLE_REASON,
+    ...(Number.isFinite(line) ? { line } : {}),
+  };
+}
+
 function booleanLiteralValue(node) {
   return node?.type === "Literal" && typeof node.value === "boolean"
     ? node.value
@@ -1190,6 +1213,53 @@ function collectSfcNuxtComponentsDirConfigConventions({ root }) {
             src,
           }),
         );
+      }
+    }
+  }
+  return out;
+}
+
+function isFunctionLikeExpression(node) {
+  return (
+    node?.type === "FunctionExpression" ||
+    node?.type === "ArrowFunctionExpression"
+  );
+}
+
+function collectSfcNuxtCustomResolverUnavailableConventions({ root }) {
+  if (!hasNuxtConventionSignal(root)) return [];
+  const out = [];
+  for (const rel of NUXT_ROOT_CONFIGS) {
+    const filePath = path.join(root, rel);
+    if (!existsSync(filePath)) continue;
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const program = parseScriptAst(src, filePath, parserLangFromFile(filePath));
+    if (!program) continue;
+    for (const configObject of nuxtConfigRootObjectExpressions(program)) {
+      for (const property of configObject.properties ?? []) {
+        if (property?.type !== "Property" || property.computed) continue;
+        if (astPropertyName(property) !== "hooks") continue;
+        if (property.value?.type !== "ObjectExpression") continue;
+        for (const hookProperty of property.value.properties ?? []) {
+          if (hookProperty?.type !== "Property" || hookProperty.computed) {
+            continue;
+          }
+          const hookName = astPropertyName(hookProperty);
+          if (!NUXT_CUSTOM_RESOLVER_HOOKS.has(hookName)) continue;
+          if (!isFunctionLikeExpression(hookProperty.value)) continue;
+          out.push(
+            nuxtCustomResolverUnavailableRecord({
+              configFile: filePath,
+              hookName,
+              line: lineOf(src, hookProperty.start ?? property.start),
+            }),
+          );
+        }
       }
     }
   }
@@ -2493,6 +2563,11 @@ export function collectSfcFrameworkConventionComponents({
     }),
   );
   out.push(...collectSfcNuxtComponentsDirConfigConventions({ root: resolvedRoot }));
+  out.push(
+    ...collectSfcNuxtCustomResolverUnavailableConventions({
+      root: resolvedRoot,
+    }),
+  );
 
   if (hasNuxtConventionSignal(resolvedRoot)) {
     const hasAppDirConventionSignal =

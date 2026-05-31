@@ -1,6 +1,6 @@
 {
   "name": "lumin-repo-lens-skill",
-  "version": "0.9.0-beta.82",
+  "version": "0.9.0-beta.83",
   "description": "Deployable lumin-repo-lens repository evidence skill package.",
   "type": "module",
   "private": true,
