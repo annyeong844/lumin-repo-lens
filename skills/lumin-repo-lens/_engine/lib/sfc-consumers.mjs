@@ -836,6 +836,20 @@ const NUXT_ROOT_CONFIGS = Object.freeze([
   "nuxt.config.cjs",
 ]);
 
+const NUXT_COMPONENT_CONVENTION_ROOTS = Object.freeze([
+  {
+    relPath: "components",
+    conventionKind: "nuxt-components-directory",
+    reason: "sfc-framework-nuxt-fs-convention",
+  },
+  {
+    relPath: "app/components",
+    conventionKind: "nuxt-app-components-directory",
+    reason: "sfc-framework-nuxt-app-dir-convention",
+    requiresAppSrcDirSignal: true,
+  },
+]);
+
 const UNPLUGIN_COMPONENT_CONFIGS = Object.freeze([
   "vite.config.ts",
   "vite.config.mts",
@@ -851,9 +865,9 @@ const UNPLUGIN_COMPONENT_CONFIGS = Object.freeze([
   "webpack.config.cjs",
 ]);
 
-function packageJsonHasNuxtDependency(root) {
+function packageJsonNuxtDependencyRange(root) {
   const filePath = path.join(root, "package.json");
-  if (!existsSync(filePath)) return false;
+  if (!existsSync(filePath)) return null;
   try {
     const pkg = JSON.parse(readFileSync(filePath, "utf8"));
     for (const field of [
@@ -862,10 +876,59 @@ function packageJsonHasNuxtDependency(root) {
       "peerDependencies",
       "optionalDependencies",
     ]) {
-      if (pkg?.[field]?.nuxt) return true;
+      if (pkg?.[field]?.nuxt) return pkg[field].nuxt;
     }
   } catch {
-    return false;
+    return null;
+  }
+  return null;
+}
+
+function packageJsonHasNuxtDependency(root) {
+  return typeof packageJsonNuxtDependencyRange(root) === "string";
+}
+
+function isNuxtFourDependencyRange(value) {
+  if (typeof value !== "string") return false;
+  const spec = value.trim().replace(/^npm:nuxt@/, "");
+  const match = spec.match(/(?:^|[^\d])([0-9]+)(?:\b|[.\-xX*])/);
+  return match ? Number(match[1]) >= 4 : false;
+}
+
+function packageJsonHasNuxtFourDependency(root) {
+  return isNuxtFourDependencyRange(packageJsonNuxtDependencyRange(root));
+}
+
+function isNuxtAppSrcDirValue(value) {
+  if (typeof value !== "string") return false;
+  const normalized = value
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/\/+$/, "");
+  return normalized === "app";
+}
+
+function nuxtConfigHasAppSrcDir(root) {
+  for (const rel of NUXT_ROOT_CONFIGS) {
+    const filePath = path.join(root, rel);
+    if (!existsSync(filePath)) continue;
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const program = parseScriptAst(src, filePath, parserLangFromFile(filePath));
+    if (!program) continue;
+    let found = false;
+    traverseAst(program, (node) => {
+      if (found) return;
+      if (node?.type !== "Property") return;
+      if (node.computed) return;
+      if (astPropertyName(node) !== "srcDir") return;
+      if (isNuxtAppSrcDirValue(literalStringValue(node.value))) found = true;
+    });
+    if (found) return true;
   }
   return false;
 }
@@ -876,6 +939,10 @@ function hasNuxtConventionSignal(root) {
     return true;
   }
   return packageJsonHasNuxtDependency(root);
+}
+
+function hasNuxtAppDirConventionSignal(root) {
+  return packageJsonHasNuxtFourDependency(root) || nuxtConfigHasAppSrcDir(root);
 }
 
 function stripNuxtComponentModeSuffix(value) {
@@ -891,9 +958,26 @@ function pascalFromNuxtConventionSegment(value) {
     .join("");
 }
 
-function nuxtConventionPathSegments({ root, filePath }) {
+function pathInsideRoot(rootRel, conventionRootRelPath) {
+  const rootParts = conventionRootRelPath.split("/").filter(Boolean);
+  const fileParts = rootRel.split(path.sep).filter(Boolean);
+  if (fileParts.length < rootParts.length) return false;
+  return rootParts.every((part, index) => fileParts[index] === part);
+}
+
+function nuxtConventionRootDir(root, conventionRoot) {
+  return path.join(root, ...conventionRoot.relPath.split("/").filter(Boolean));
+}
+
+function nuxtConventionRootForRelPath(rootRel) {
+  return NUXT_COMPONENT_CONVENTION_ROOTS.find((conventionRoot) =>
+    pathInsideRoot(rootRel, conventionRoot.relPath),
+  );
+}
+
+function nuxtConventionPathSegments({ root, filePath, conventionRoot }) {
   return path
-    .relative(path.join(root, "components"), filePath)
+    .relative(nuxtConventionRootDir(root, conventionRoot), filePath)
     .split(path.sep)
     .filter(Boolean)
     .map((segment) =>
@@ -901,8 +985,8 @@ function nuxtConventionPathSegments({ root, filePath }) {
     );
 }
 
-function nuxtConventionComponentName({ root, filePath }) {
-  const parts = nuxtConventionPathSegments({ root, filePath })
+function nuxtConventionComponentName({ root, filePath, conventionRoot }) {
+  const parts = nuxtConventionPathSegments({ root, filePath, conventionRoot })
     .map((segment) => pascalFromNuxtConventionSegment(segment))
     .filter(Boolean);
   const deduped = [];
@@ -913,22 +997,30 @@ function nuxtConventionComponentName({ root, filePath }) {
   return deduped.join("");
 }
 
-function nuxtConventionRecord({ root, filePath }) {
-  const componentName = nuxtConventionComponentName({ root, filePath });
+function nuxtConventionRecord({ root, filePath, conventionRoot }) {
+  const componentName = nuxtConventionComponentName({
+    root,
+    filePath,
+    conventionRoot,
+  });
   return {
     framework: "nuxt",
-    conventionKind: "nuxt-components-directory",
+    conventionKind: conventionRoot.conventionKind,
     componentName,
     normalizedTagNames: normalizedGlobalComponentNames(componentName),
     sourceFile: filePath,
     resolvedFile: filePath,
-    source: "sfc-framework-nuxt-fs-convention",
+    source: conventionRoot.reason,
     confidence: "framework-convention-observed",
     eligibleForFanIn: false,
     eligibleForSafeFix: false,
     status: "muted",
-    reason: "sfc-framework-nuxt-fs-convention",
-    componentPathSegments: nuxtConventionPathSegments({ root, filePath }),
+    reason: conventionRoot.reason,
+    componentPathSegments: nuxtConventionPathSegments({
+      root,
+      filePath,
+      conventionRoot,
+    }),
   };
 }
 
@@ -2042,6 +2134,8 @@ export function collectSfcFrameworkConventionComponents({
   );
 
   if (hasNuxtConventionSignal(resolvedRoot)) {
+    const hasAppDirConventionSignal =
+      hasNuxtAppDirConventionSignal(resolvedRoot);
     const files = collectFiles(resolvedRoot, {
       includeTests,
       exclude,
@@ -2050,9 +2144,21 @@ export function collectSfcFrameworkConventionComponents({
 
     for (const filePath of files) {
       const rel = path.relative(resolvedRoot, filePath);
-      const segments = rel.split(path.sep);
-      if (segments[0] !== "components") continue;
-      out.push(nuxtConventionRecord({ root: resolvedRoot, filePath }));
+      const conventionRoot = nuxtConventionRootForRelPath(rel);
+      if (!conventionRoot) continue;
+      if (
+        conventionRoot.requiresAppSrcDirSignal &&
+        !hasAppDirConventionSignal
+      ) {
+        continue;
+      }
+      out.push(
+        nuxtConventionRecord({
+          root: resolvedRoot,
+          filePath,
+          conventionRoot,
+        }),
+      );
     }
   }
 
