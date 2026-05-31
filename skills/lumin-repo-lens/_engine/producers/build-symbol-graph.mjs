@@ -814,6 +814,8 @@ function addSfcFrameworkConventionComponent(use) {
     ...(use.extendsSourceKind
       ? { extendsSourceKind: use.extendsSourceKind }
       : {}),
+    ...(use.moduleSource ? { moduleSource: use.moduleSource } : {}),
+    ...(use.moduleSourceKind ? { moduleSourceKind: use.moduleSourceKind } : {}),
     ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
     ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
     ...(use.componentDir ? { componentDir: use.componentDir } : {}),

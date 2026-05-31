@@ -843,6 +843,8 @@ const NUXT_CUSTOM_RESOLVER_UNAVAILABLE_REASON =
   "sfc-framework-nuxt-custom-resolver-unavailable";
 const NUXT_LAYER_EXTENDS_UNAVAILABLE_REASON =
   "sfc-framework-nuxt-layer-extends-unavailable";
+const NUXT_MODULE_PACKAGE_UNAVAILABLE_REASON =
+  "sfc-framework-nuxt-module-package-unavailable";
 const NUXT_CUSTOM_RESOLVER_HOOKS = new Set([
   "components:dirs",
   "components:extend",
@@ -1116,6 +1118,32 @@ function nuxtLayerExtendsUnavailableRecord({
   };
 }
 
+function nuxtModulePackageUnavailableRecord({
+  configFile,
+  moduleSource = null,
+  moduleSourceKind,
+  line,
+}) {
+  return {
+    framework: "nuxt",
+    conventionKind: "nuxt-module-package-unavailable",
+    configFile,
+    configProperty: "modules",
+    configShape: "modules",
+    ...(typeof moduleSource === "string" && moduleSource.length > 0
+      ? { moduleSource }
+      : {}),
+    moduleSourceKind,
+    source: NUXT_MODULE_PACKAGE_UNAVAILABLE_REASON,
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "unavailable",
+    reason: NUXT_MODULE_PACKAGE_UNAVAILABLE_REASON,
+    ...(Number.isFinite(line) ? { line } : {}),
+  };
+}
+
 function booleanLiteralValue(node) {
   return node?.type === "Literal" && typeof node.value === "boolean"
     ? node.value
@@ -1351,6 +1379,68 @@ function collectSfcNuxtLayerExtendsUnavailableConventions({ root }) {
         if (astPropertyName(property) !== "extends") continue;
         out.push(
           ...nuxtLayerExtendsRecordsFromValue({
+            configFile: filePath,
+            value: property.value,
+            src,
+          }),
+        );
+      }
+    }
+  }
+  return out;
+}
+
+function nuxtModulePackageRecordFromEntry({ configFile, value, src }) {
+  const entry =
+    value?.type === "ArrayExpression" ? (value.elements ?? [])[0] : value;
+  const stringValue = literalStringValue(entry);
+  if (stringValue) {
+    return nuxtModulePackageUnavailableRecord({
+      configFile,
+      moduleSource: stringValue,
+      moduleSourceKind: "literal",
+      line: lineOf(src, entry.start),
+    });
+  }
+  return nuxtModulePackageUnavailableRecord({
+    configFile,
+    moduleSourceKind: "nonliteral",
+    line: lineOf(src, entry?.start ?? value?.start),
+  });
+}
+
+function nuxtModulePackageRecordsFromValue({ configFile, value, src }) {
+  if (value?.type !== "ArrayExpression") {
+    return [nuxtModulePackageRecordFromEntry({ configFile, value, src })];
+  }
+  const out = [];
+  for (const element of value.elements ?? []) {
+    if (!element) continue;
+    out.push(nuxtModulePackageRecordFromEntry({ configFile, value: element, src }));
+  }
+  return out;
+}
+
+function collectSfcNuxtModulePackageUnavailableConventions({ root }) {
+  if (!hasNuxtConventionSignal(root)) return [];
+  const out = [];
+  for (const rel of NUXT_ROOT_CONFIGS) {
+    const filePath = path.join(root, rel);
+    if (!existsSync(filePath)) continue;
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const program = parseScriptAst(src, filePath, parserLangFromFile(filePath));
+    if (!program) continue;
+    for (const configObject of nuxtConfigRootObjectExpressions(program)) {
+      for (const property of configObject.properties ?? []) {
+        if (property?.type !== "Property" || property.computed) continue;
+        if (astPropertyName(property) !== "modules") continue;
+        out.push(
+          ...nuxtModulePackageRecordsFromValue({
             configFile: filePath,
             value: property.value,
             src,
@@ -2666,6 +2756,11 @@ export function collectSfcFrameworkConventionComponents({
   );
   out.push(
     ...collectSfcNuxtLayerExtendsUnavailableConventions({
+      root: resolvedRoot,
+    }),
+  );
+  out.push(
+    ...collectSfcNuxtModulePackageUnavailableConventions({
       root: resolvedRoot,
     }),
   );
