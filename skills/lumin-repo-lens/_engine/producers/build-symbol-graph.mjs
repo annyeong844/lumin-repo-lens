@@ -809,6 +809,10 @@ function addSfcFrameworkConventionComponent(use) {
     ...(use.optionName ? { optionName: use.optionName } : {}),
     ...(use.sourceFile ? { sourceFile: relPath(ROOT, use.sourceFile) } : {}),
     ...(use.configFile ? { configFile: relPath(ROOT, use.configFile) } : {}),
+    ...(use.manifestFile
+      ? { manifestFile: relPath(ROOT, use.manifestFile) }
+      : {}),
+    ...(use.manifestKind ? { manifestKind: use.manifestKind } : {}),
     ...(use.resolvedFile
       ? { resolvedFile: relPath(ROOT, use.resolvedFile) }
       : {}),
@@ -822,7 +826,7 @@ function addSfcFrameworkConventionComponent(use) {
     confidence: use.confidence,
     eligibleForFanIn: false,
     eligibleForSafeFix: false,
-    status: "muted",
+    status: use.status ?? "muted",
     reason: use.reason,
     ...(use.bindingKind ? { bindingKind: use.bindingKind } : {}),
     ...(use.importedName ? { importedName: use.importedName } : {}),
@@ -1073,6 +1077,7 @@ phaseTimer.recordPhase(
 function packageRootFromSpec(spec) {
   if (typeof spec !== "string" || spec.length === 0) return null;
   if (spec.startsWith(".") || spec.startsWith("/")) return null;
+  if (spec.startsWith("#")) return null;
   if (spec.startsWith("@")) {
     const parts = spec.split("/");
     if (parts.length < 2 || parts[1].length === 0) return null;

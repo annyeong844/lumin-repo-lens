@@ -466,6 +466,7 @@ function parseScriptImportConsumers(
           consumerFile: filePath,
           fromSpec,
           name: "default",
+          localName: importLocalName(specifier),
           kind: "default",
           typeOnly: declarationTypeOnly,
           line,
@@ -476,6 +477,7 @@ function parseScriptImportConsumers(
           consumerFile: filePath,
           fromSpec,
           name: "*",
+          localName: importLocalName(specifier),
           kind: "namespace",
           typeOnly: declarationTypeOnly,
           line,
@@ -488,6 +490,7 @@ function parseScriptImportConsumers(
             consumerFile: filePath,
             fromSpec,
             name,
+            localName: importLocalName(specifier),
             kind: "import",
             typeOnly: declarationTypeOnly || specifier.importKind === "type",
             line,
@@ -827,6 +830,14 @@ const GENERATED_COMPONENT_MANIFESTS = Object.freeze([
   },
 ]);
 
+const NUXT_COMPONENTS_ALIAS_SPEC = "#components";
+const NUXT_COMPONENTS_ALIAS_SOURCE =
+  "sfc-framework-nuxt-components-alias";
+const NUXT_COMPONENTS_ALIAS_MANIFEST_REASON =
+  "sfc-framework-nuxt-components-alias-manifest";
+const NUXT_COMPONENTS_ALIAS_UNRESOLVED_REASON =
+  "sfc-framework-nuxt-components-alias-unresolved";
+
 const NUXT_ROOT_CONFIGS = Object.freeze([
   "nuxt.config.ts",
   "nuxt.config.mts",
@@ -1022,6 +1033,104 @@ function nuxtConventionRecord({ root, filePath, conventionRoot }) {
       conventionRoot,
     }),
   };
+}
+
+function generatedManifestTargetFile(manifest) {
+  const fromSpec = manifest?.bindingSource ?? manifest?.fromSpec;
+  if (!isRelativeSourceSpec(fromSpec)) return null;
+  const target = path.resolve(path.dirname(manifest.manifestFile), fromSpec);
+  return existsSync(target) ? target : null;
+}
+
+function nuxtGeneratedManifestLookup(root) {
+  const byName = new Map();
+  for (const record of collectSfcGeneratedComponentManifests({ root })) {
+    if (record.manifestKind !== "nuxt-components-dts") continue;
+    if (record.status === "skipped") continue;
+    const names = [
+      record.componentName,
+      ...(Array.isArray(record.normalizedTagNames)
+        ? record.normalizedTagNames
+        : []),
+    ].filter(Boolean);
+    for (const name of names) byName.set(name, record);
+  }
+  return byName;
+}
+
+function nuxtComponentsAliasRecord({ use, manifest = null }) {
+  const resolvedFile = manifest ? generatedManifestTargetFile(manifest) : null;
+  const status = manifest && resolvedFile ? "muted" : "unresolved";
+  const reason =
+    status === "muted"
+      ? NUXT_COMPONENTS_ALIAS_MANIFEST_REASON
+      : NUXT_COMPONENTS_ALIAS_UNRESOLVED_REASON;
+  const componentName = manifest?.componentName ?? use.name;
+  return {
+    framework: "nuxt",
+    conventionKind: "nuxt-components-alias-import",
+    consumerFile: use.consumerFile,
+    componentName,
+    normalizedTagNames:
+      manifest?.normalizedTagNames ?? normalizedGlobalComponentNames(componentName),
+    bindingName: use.localName ?? use.name,
+    importedName: use.name,
+    ...(manifest
+      ? {
+          manifestFile: manifest.manifestFile,
+          manifestKind: manifest.manifestKind,
+          bindingSource: manifest.bindingSource ?? manifest.fromSpec,
+        }
+      : {}),
+    fromSpec: NUXT_COMPONENTS_ALIAS_SPEC,
+    ...(resolvedFile ? { resolvedFile } : {}),
+    source: NUXT_COMPONENTS_ALIAS_SOURCE,
+    confidence: manifest
+      ? "generated-manifest-availability"
+      : "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status,
+    reason,
+    ...(use.sfcBlockKind ? { sfcBlockKind: use.sfcBlockKind } : {}),
+    ...(Number.isFinite(use.line) ? { line: use.line } : {}),
+  };
+}
+
+function collectSfcNuxtComponentsAliasConventions({
+  root,
+  includeTests = true,
+  exclude = [],
+}) {
+  if (!hasNuxtConventionSignal(root)) return [];
+  const out = [];
+  const manifestByName = nuxtGeneratedManifestLookup(root);
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: SFC_FAMILY_LANGS,
+  });
+
+  for (const filePath of files) {
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    for (const use of parseSfcImportConsumers(src, filePath)) {
+      if (use.fromSpec !== NUXT_COMPONENTS_ALIAS_SPEC) continue;
+      if (use.kind !== "import" || use.typeOnly) continue;
+      out.push(
+        nuxtComponentsAliasRecord({
+          use,
+          manifest: manifestByName.get(use.name) ?? null,
+        }),
+      );
+    }
+  }
+
+  return out;
 }
 
 function isUnpluginVueComponentsSpec(fromSpec) {
@@ -2018,7 +2127,11 @@ export function collectSfcImportConsumers({
     } catch {
       continue;
     }
-    out.push(...parseSfcImportConsumers(src, filePath));
+    out.push(
+      ...parseSfcImportConsumers(src, filePath).filter(
+        (record) => record.fromSpec !== NUXT_COMPONENTS_ALIAS_SPEC,
+      ),
+    );
   }
 
   return out;
@@ -2127,6 +2240,13 @@ export function collectSfcFrameworkConventionComponents({
   );
   out.push(
     ...collectSfcVueOptionsRegistrationConventions({
+      root: resolvedRoot,
+      includeTests,
+      exclude,
+    }),
+  );
+  out.push(
+    ...collectSfcNuxtComponentsAliasConventions({
       root: resolvedRoot,
       includeTests,
       exclude,
