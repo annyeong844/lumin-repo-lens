@@ -837,6 +837,7 @@ const NUXT_COMPONENTS_ALIAS_MANIFEST_REASON =
   "sfc-framework-nuxt-components-alias-manifest";
 const NUXT_COMPONENTS_ALIAS_UNRESOLVED_REASON =
   "sfc-framework-nuxt-components-alias-unresolved";
+const NUXT_COMPONENTS_ALIAS_HELPER_EXPORTS = new Set(["componentNames"]);
 const NUXT_COMPONENTS_DIR_CONFIG_REASON =
   "sfc-framework-nuxt-components-dir-config";
 const NUXT_CUSTOM_RESOLVER_UNAVAILABLE_REASON =
@@ -1617,6 +1618,7 @@ function collectSfcNuxtComponentsAliasConventions({
     for (const use of parseSfcImportConsumers(src, filePath)) {
       if (use.fromSpec !== NUXT_COMPONENTS_ALIAS_SPEC) continue;
       if (use.kind !== "import" || use.typeOnly) continue;
+      if (NUXT_COMPONENTS_ALIAS_HELPER_EXPORTS.has(use.name)) continue;
       out.push(
         nuxtComponentsAliasRecord({
           use,
