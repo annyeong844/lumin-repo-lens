@@ -5,7 +5,7 @@
 // candidate index, not a semantic verdict: the model must inspect the cited
 // functions before recommending a merge.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { parseCliArgs } from '../lib/cli.mjs';
@@ -40,7 +40,7 @@ const OUTPUT = cli.output;
 
 const PRODUCER_ID = 'function-clones';
 const PRODUCER_VERSION = 1;
-const FACT_SCHEMA_VERSION = 1;
+const FACT_SCHEMA_VERSION = 3;
 const PARSER_IDENTITY = 'function-clones:oxc-parser+normalizer+scoring-v1';
 
 const contextFingerprint = buildContextFingerprint({
@@ -66,8 +66,8 @@ const snapshotEntries = Object.values(snapshot.files);
 
 const metaBase = producerMetaBase({ tool: 'build-function-clone-index.mjs', root: ROOT });
 const scope = cli.includeTests
-  ? 'TS/JS including tests, exported top-level functions only'
-  : 'TS/JS production files, exported top-level functions only';
+  ? 'TS/JS including tests, top-level exported and file-local functions'
+  : 'TS/JS production files, top-level exported and file-local functions';
 
 const incrementalEnabled = cli.raw?.['no-incremental'] !== true;
 const cacheStore = openIncrementalCacheStore({
@@ -193,6 +193,7 @@ const artifact = assembleFunctionCloneArtifact({
 });
 
 const outPath = path.join(OUTPUT, 'function-clones.json');
+mkdirSync(OUTPUT, { recursive: true });
 writeFileSync(outPath, JSON.stringify(artifact, null, 2));
 
 const errors =

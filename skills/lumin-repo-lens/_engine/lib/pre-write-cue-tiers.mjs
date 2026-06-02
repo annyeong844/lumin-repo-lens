@@ -385,17 +385,32 @@ function addShapeLookup({ lookup, cardMap, suppressedCues, unavailableEvidence }
     : 'same normalized type shape';
   const artifact = lookup.result === 'SIGNATURE_MATCH' ? 'function-clones.json' : 'shape-index.json';
   for (const match of lookup.matches ?? []) {
-    addCue(cardMap, suppressedCues, match, safeCue({
-      lane,
-      claim,
-      evidence: [{
+    const evidence = [{
         artifact,
         matchedField: lookup.result === 'SIGNATURE_MATCH' ? 'normalizedSignatureHash' : 'hash',
         algorithmVersion: lookup.result === 'SIGNATURE_MATCH'
           ? 'function-signature.normalized.v1'
           : 'shape-hash.normalized.v1',
         hash: lookup.shapeHash,
-      }],
+        ...(lookup.result === 'SIGNATURE_MATCH' && match.visibility
+          ? { visibility: match.visibility }
+          : {}),
+        ...(lookup.result === 'SIGNATURE_MATCH' && match.localName
+          ? { localName: match.localName }
+          : {}),
+      }];
+    if (lookup.result === 'SIGNATURE_MATCH' && match.visibility && match.visibility !== 'exported') {
+      addCue(cardMap, suppressedCues, match, reviewCue({
+        lane,
+        claim,
+        evidence,
+      }));
+      continue;
+    }
+    addCue(cardMap, suppressedCues, match, safeCue({
+      lane,
+      claim,
+      evidence,
     }));
   }
 }

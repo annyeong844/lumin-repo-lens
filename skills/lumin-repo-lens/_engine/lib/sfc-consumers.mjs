@@ -543,6 +543,176 @@ function traverseAst(node, visit) {
   }
 }
 
+function traverseAstWithAncestors(node, visit, ancestors = []) {
+  if (!node || typeof node !== "object") return;
+  visit(node, ancestors);
+  const nextAncestors = [...ancestors, node];
+  for (const [key, value] of Object.entries(node)) {
+    if (key === "parent") continue;
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        traverseAstWithAncestors(item, visit, nextAncestors);
+      }
+    } else if (
+      value &&
+      typeof value === "object" &&
+      typeof value.type === "string"
+    ) {
+      traverseAstWithAncestors(value, visit, nextAncestors);
+    }
+  }
+}
+
+function isFunctionScopeNode(node) {
+  return (
+    node?.type === "Program" ||
+    node?.type === "FunctionDeclaration" ||
+    node?.type === "FunctionExpression" ||
+    node?.type === "ArrowFunctionExpression"
+  );
+}
+
+function collectPatternBindingNames(pattern, out) {
+  const name = identifierName(pattern);
+  if (name) {
+    out.add(name);
+    return;
+  }
+
+  if (pattern?.type === "AssignmentPattern") {
+    collectPatternBindingNames(pattern.left, out);
+    return;
+  }
+
+  if (pattern?.type === "RestElement") {
+    collectPatternBindingNames(pattern.argument, out);
+    return;
+  }
+
+  if (pattern?.type === "ArrayPattern") {
+    for (const element of pattern.elements ?? []) {
+      collectPatternBindingNames(element, out);
+    }
+    return;
+  }
+
+  if (pattern?.type !== "ObjectPattern") return;
+  for (const property of pattern.properties ?? []) {
+    if (property?.type === "RestElement") {
+      collectPatternBindingNames(property.argument, out);
+      continue;
+    }
+    collectPatternBindingNames(property?.value, out);
+  }
+}
+
+function nearestAstScope(ancestors, scopes) {
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (scopes.has(ancestors[i])) return ancestors[i];
+  }
+  return null;
+}
+
+function addPatternBindingsToScope(scopes, scope, pattern) {
+  if (!scope) return;
+  let names = scopes.get(scope);
+  if (!names) {
+    names = new Set();
+    scopes.set(scope, names);
+  }
+  collectPatternBindingNames(pattern, names);
+}
+
+function collectSvelteScriptBindingScopes(program) {
+  const scopes = new Map([[program, new Set()]]);
+  traverseAstWithAncestors(program, (node, ancestors) => {
+    if (isFunctionScopeNode(node) && !scopes.has(node)) {
+      scopes.set(node, new Set());
+    }
+
+    if (node?.type === "ImportDeclaration") {
+      const scope = nearestAstScope(ancestors, scopes);
+      for (const specifier of node.specifiers ?? []) {
+        addPatternBindingsToScope(scopes, scope, specifier.local);
+      }
+      return;
+    }
+
+    if (node?.type === "VariableDeclarator") {
+      addPatternBindingsToScope(
+        scopes,
+        nearestAstScope(ancestors, scopes),
+        node.id,
+      );
+      return;
+    }
+
+    if (node?.type === "FunctionDeclaration") {
+      addPatternBindingsToScope(
+        scopes,
+        nearestAstScope(ancestors, scopes),
+        node.id,
+      );
+      for (const param of node.params ?? []) {
+        addPatternBindingsToScope(scopes, node, param);
+      }
+      return;
+    }
+
+    if (
+      node?.type === "FunctionExpression" ||
+      node?.type === "ArrowFunctionExpression"
+    ) {
+      if (node.type === "FunctionExpression") {
+        addPatternBindingsToScope(scopes, node, node.id);
+      }
+      for (const param of node.params ?? []) {
+        addPatternBindingsToScope(scopes, node, param);
+      }
+      return;
+    }
+
+    if (node?.type === "CatchClause") {
+      addPatternBindingsToScope(
+        scopes,
+        nearestAstScope(ancestors, scopes),
+        node.param,
+      );
+    }
+  });
+  return scopes;
+}
+
+function isSvelteDollarIdentifierShadowed(name, ancestors, scopes) {
+  for (let i = ancestors.length - 1; i >= 0; i--) {
+    if (scopes.get(ancestors[i])?.has(name)) return true;
+  }
+  return false;
+}
+
+function isNonReferenceIdentifier(node, ancestors) {
+  const parent = ancestors.at(-1);
+  if (!parent) return false;
+  if (
+    parent.type === "MemberExpression" &&
+    parent.property === node &&
+    !parent.computed
+  ) {
+    return true;
+  }
+  if (parent.type === "Property" && parent.key === node && !parent.computed) {
+    return parent.value !== node;
+  }
+  if (parent.type === "LabeledStatement" && parent.label === node) return true;
+  if (
+    (parent.type === "BreakStatement" || parent.type === "ContinueStatement") &&
+    parent.label === node
+  ) {
+    return true;
+  }
+  return false;
+}
+
 const VUE_APP_FACTORY_NAMES = new Set(["createApp", "createSSRApp"]);
 const VUE_APP_RETURNING_METHODS = new Set([
   "component",
@@ -684,6 +854,51 @@ function collectLocalSvelteActionBindings(
         bindingName,
         bindingSource: filePath,
         bindingKind: "local-const-function",
+        line: lineOf(src, startOffset + (declaration.start ?? node.start ?? 0)),
+        sfcBlockKind: blockKind,
+      });
+    }
+  }
+  return out;
+}
+
+function collectLocalSvelteStoreBindings(
+  program,
+  src,
+  startOffset,
+  filePath,
+  blockKind,
+  imports,
+) {
+  const factoryBindings = new Set();
+  for (const record of imports?.values?.() ?? []) {
+    if (
+      record.bindingSource === "svelte/store" &&
+      SVELTE_STORE_FACTORY_IMPORTS.has(record.importedName ?? record.bindingName)
+    ) {
+      factoryBindings.add(record.bindingName);
+    }
+  }
+  if (factoryBindings.size === 0) return new Map();
+
+  const out = new Map();
+  for (const node of program.body ?? []) {
+    if (node?.type !== "VariableDeclaration" || node.kind !== "const") {
+      continue;
+    }
+    for (const declaration of node.declarations ?? []) {
+      const bindingName = identifierName(declaration.id);
+      const calleeName =
+        declaration.init?.type === "CallExpression"
+          ? identifierName(declaration.init.callee)
+          : null;
+      if (!bindingName || !calleeName || !factoryBindings.has(calleeName)) {
+        continue;
+      }
+      out.set(bindingName, {
+        bindingName,
+        bindingSource: filePath,
+        bindingKind: "local-store-factory",
         line: lineOf(src, startOffset + (declaration.start ?? node.start ?? 0)),
         sfcBlockKind: blockKind,
       });
@@ -846,6 +1061,9 @@ const NUXT_LAYER_EXTENDS_UNAVAILABLE_REASON =
   "sfc-framework-nuxt-layer-extends-unavailable";
 const NUXT_MODULE_PACKAGE_UNAVAILABLE_REASON =
   "sfc-framework-nuxt-module-package-unavailable";
+const SVELTE_STORE_SUBSCRIPTION_REASON =
+  "sfc-framework-svelte-store-subscription";
+const SVELTE_STORE_FACTORY_IMPORTS = new Set(["writable", "readable", "derived"]);
 const NUXT_CUSTOM_RESOLVER_HOOKS = new Set([
   "components:dirs",
   "components:extend",
@@ -1734,6 +1952,36 @@ function svelteActionDirectiveRecord({
   };
 }
 
+function svelteStoreSubscriptionRecord({
+  filePath,
+  subscriptionName,
+  storeName,
+  binding,
+  line,
+  blockKind,
+}) {
+  return {
+    framework: "svelte",
+    conventionKind: "store-auto-subscription",
+    consumerFile: filePath,
+    subscriptionName,
+    storeName,
+    bindingName: binding.bindingName,
+    bindingSource: binding.bindingSource,
+    fromSpec: binding.bindingSource,
+    bindingKind: binding.bindingKind,
+    ...(binding.importedName ? { importedName: binding.importedName } : {}),
+    source: SVELTE_STORE_SUBSCRIPTION_REASON,
+    confidence: "framework-convention-observed",
+    eligibleForFanIn: false,
+    eligibleForSafeFix: false,
+    status: "muted",
+    reason: SVELTE_STORE_SUBSCRIPTION_REASON,
+    line,
+    sfcBlockKind: blockKind,
+  };
+}
+
 function vueMacroRegistrationRecord({
   filePath,
   macroName,
@@ -1968,6 +2216,110 @@ function parseSvelteActionDirectiveTags(
           blockKind,
         }),
       );
+    }
+  }
+  return out;
+}
+
+function svelteStoreBindingForName(storeName, bindings) {
+  const binding =
+    bindings.localStores?.get(storeName) ??
+    bindings.exposedNames.get(storeName) ??
+    bindings.imports.get(storeName);
+  if (
+    binding?.bindingSource === "svelte/store" &&
+    SVELTE_STORE_FACTORY_IMPORTS.has(binding.importedName ?? binding.bindingName)
+  ) {
+    return null;
+  }
+  return binding ?? null;
+}
+
+function pushSvelteStoreSubscription({
+  out,
+  seen,
+  storeName,
+  binding,
+  filePath,
+  line,
+  blockKind,
+}) {
+  if (!storeName || !binding || !Number.isFinite(line)) return;
+  const subscriptionName = `$${storeName}`;
+  const key = `${filePath}|${subscriptionName}|${line}|${blockKind}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push(
+    svelteStoreSubscriptionRecord({
+      filePath,
+      subscriptionName,
+      storeName,
+      binding,
+      line,
+      blockKind,
+    }),
+  );
+}
+
+function parseSvelteStoreSubscriptionsInScript(
+  script,
+  { filePath, fileSource, startOffset, blockKind, parserLang, bindings, seen },
+) {
+  const out = [];
+  const program = parseScriptAst(script, filePath, parserLang);
+  if (!program) return out;
+  const scopes = collectSvelteScriptBindingScopes(program);
+  traverseAstWithAncestors(program, (node, ancestors) => {
+    const name = identifierName(node);
+    if (!name || !name.startsWith("$") || name.startsWith("$$")) return;
+    if (
+      isNonReferenceIdentifier(node, ancestors) ||
+      isSvelteDollarIdentifierShadowed(name, ancestors, scopes)
+    ) {
+      return;
+    }
+    const storeName = name.slice(1);
+    const binding = svelteStoreBindingForName(storeName, bindings);
+    pushSvelteStoreSubscription({
+      out,
+      seen,
+      storeName,
+      binding,
+      filePath,
+      line: lineOf(fileSource, startOffset + (node.start ?? 0)),
+      blockKind,
+    });
+  });
+  return out;
+}
+
+function parseSvelteStoreSubscriptionsInTemplate(
+  template,
+  { filePath, fileSource, startOffset, blockKind, bindings, seen },
+) {
+  const out = [];
+  const cleaned = stripHtmlComments(template);
+  const expressionRe = /\{([^{}]*)\}/g;
+  let expressionMatch;
+  while ((expressionMatch = expressionRe.exec(cleaned))) {
+    const expression = expressionMatch[1] ?? "";
+    const storeRe = /\$(?!\$)([A-Za-z_$][\w$]*)/g;
+    let storeMatch;
+    while ((storeMatch = storeRe.exec(expression))) {
+      const storeName = storeMatch[1];
+      const binding = svelteStoreBindingForName(storeName, bindings);
+      pushSvelteStoreSubscription({
+        out,
+        seen,
+        storeName,
+        binding,
+        filePath,
+        line: lineOf(
+          fileSource,
+          startOffset + expressionMatch.index + 1 + storeMatch.index,
+        ),
+        blockKind,
+      });
     }
   }
   return out;
@@ -2288,6 +2640,7 @@ function collectScriptComponentBindings(src, filePath) {
   const namespaceImports = new Map();
   const exposedNames = new Map();
   const localActions = new Map();
+  const localStores = new Map();
   const lang = sfcLanguageForFile(filePath);
 
   for (const block of extractScriptBlocks(src, filePath)) {
@@ -2366,10 +2719,20 @@ function collectScriptComponentBindings(src, filePath) {
       )) {
         localActions.set(bindingName, record);
       }
+      for (const [bindingName, record] of collectLocalSvelteStoreBindings(
+        program,
+        src,
+        block.startOffset,
+        filePath,
+        block.kind,
+        blockImports,
+      )) {
+        localStores.set(bindingName, record);
+      }
     }
   }
 
-  return { imports, namespaceImports, exposedNames, localActions };
+  return { imports, namespaceImports, exposedNames, localActions, localStores };
 }
 
 function pascalFromKebab(value) {
@@ -2730,6 +3093,13 @@ export function collectSfcFrameworkConventionComponents({
     }),
   );
   out.push(
+    ...collectSfcSvelteStoreSubscriptionConventions({
+      root: resolvedRoot,
+      includeTests,
+      exclude,
+    }),
+  );
+  out.push(
     ...collectSfcVueMacroRegistrationConventions({
       root: resolvedRoot,
       includeTests,
@@ -2898,6 +3268,59 @@ function collectSfcSvelteActionDirectiveConventions({
           startOffset: block.startOffset,
           blockKind: block.kind,
           bindings,
+        }),
+      );
+    }
+  }
+
+  return out;
+}
+
+function collectSfcSvelteStoreSubscriptionConventions({
+  root,
+  includeTests = true,
+  exclude = [],
+}) {
+  const out = [];
+  const files = collectFiles(root, {
+    includeTests,
+    exclude,
+    languages: ["svelte"],
+  });
+
+  for (const filePath of files) {
+    let src;
+    try {
+      src = readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    const bindings = collectScriptComponentBindings(src, filePath);
+    const seen = new Set();
+    for (const block of extractScriptBlocks(src, filePath)) {
+      if (!block.kind.startsWith("svelte-")) continue;
+      out.push(
+        ...parseSvelteStoreSubscriptionsInScript(block.content, {
+          filePath,
+          fileSource: src,
+          startOffset: block.startOffset,
+          blockKind: block.kind,
+          parserLang: block.parserLang,
+          bindings,
+          seen,
+        }),
+      );
+    }
+    for (const block of extractTemplateBlocks(src, filePath)) {
+      if (block.sfcLanguage !== "svelte") continue;
+      out.push(
+        ...parseSvelteStoreSubscriptionsInTemplate(block.content, {
+          filePath,
+          fileSource: src,
+          startOffset: block.startOffset,
+          blockKind: block.kind,
+          bindings,
+          seen,
         }),
       );
     }

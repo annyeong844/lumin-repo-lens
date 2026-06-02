@@ -1,9 +1,10 @@
 // _lib/function-clone-artifact.mjs - deterministic function clone cues.
 //
 // This artifact intentionally does NOT claim semantic equivalence. It
-// fingerprints top-level exported functions/helpers and surfaces exact body
-// or same-structure groups for the model to inspect with source file:line
-// evidence.
+// fingerprints top-level functions/helpers and surfaces exact body or
+// same-structure groups for the model to inspect with source file:line
+// evidence. Exported functions remain the public surface; file-local top-level
+// helpers are included as review-only pre-write cues.
 
 import { createHash } from 'node:crypto';
 import path from 'node:path';
@@ -88,22 +89,54 @@ function exportedAliases(program) {
   }
 
   for (const stmt of program?.body ?? []) {
-    if (stmt?.type !== 'ExportNamedDeclaration' || stmt.source || stmt.declaration) continue;
-    for (const spec of stmt.specifiers ?? []) {
-      if (spec?.type !== 'ExportSpecifier') continue;
-      add(spec.local?.name, spec.exported?.name ?? spec.local?.name);
+    if (stmt?.type === 'ExportDefaultDeclaration' && stmt.declaration?.type === 'Identifier') {
+      add(stmt.declaration.name, 'default');
+      continue;
+    }
+
+    if (stmt?.type === 'ExportNamedDeclaration' && !stmt.source && !stmt.declaration) {
+      for (const spec of stmt.specifiers ?? []) {
+        if (spec?.type !== 'ExportSpecifier') continue;
+        add(spec.local?.name, spec.exported?.name ?? spec.local?.name);
+      }
     }
   }
   return aliases;
 }
 
-function topLevelExportedFunctions(program) {
+function topLevelFunctions(program) {
   const out = [];
   const aliases = exportedAliases(program);
 
-  function addEntry({ fn, localName, exportedName, declarationKind }) {
+  function addEntry({
+    fn,
+    localName,
+    exportedName,
+    declarationKind,
+    visibility = 'exported',
+    exported = true,
+  }) {
     if (!fn || !exportedName) return;
-    out.push({ fn, localName: localName ?? exportedName, exportedName, declarationKind });
+    out.push({
+      fn,
+      localName: localName ?? exportedName,
+      exportedName,
+      declarationKind,
+      visibility,
+      exported,
+    });
+  }
+
+  function addFileLocal({ fn, localName, declarationKind }) {
+    if (!fn || !localName) return;
+    addEntry({
+      fn,
+      localName,
+      exportedName: localName,
+      declarationKind,
+      visibility: 'file-local',
+      exported: false,
+    });
   }
 
   for (const stmt of program?.body ?? []) {
@@ -145,9 +178,12 @@ function topLevelExportedFunctions(program) {
     if (stmt?.type === 'FunctionDeclaration') {
       const localName = stmt.id?.name;
       const exportedNames = aliases.get(localName);
-      if (!exportedNames) continue;
-      for (const exportedName of exportedNames) {
-        addEntry({ fn: stmt, localName, exportedName, declarationKind: stmt.type });
+      if (exportedNames) {
+        for (const exportedName of exportedNames) {
+          addEntry({ fn: stmt, localName, exportedName, declarationKind: stmt.type });
+        }
+      } else {
+        addFileLocal({ fn: stmt, localName, declarationKind: stmt.type });
       }
       continue;
     }
@@ -156,12 +192,19 @@ function topLevelExportedFunctions(program) {
       for (const decl of stmt.declarations ?? []) {
         if (!isFunctionishVariableDeclarator(decl)) continue;
         const exportedNames = aliases.get(decl.id.name);
-        if (!exportedNames) continue;
-        for (const exportedName of exportedNames) {
-          addEntry({
+        if (exportedNames) {
+          for (const exportedName of exportedNames) {
+            addEntry({
+              fn: decl.init,
+              localName: decl.id.name,
+              exportedName,
+              declarationKind: stmt.kind ?? 'VariableDeclaration',
+            });
+          }
+        } else {
+          addFileLocal({
             fn: decl.init,
             localName: decl.id.name,
-            exportedName,
             declarationKind: stmt.kind ?? 'VariableDeclaration',
           });
         }
@@ -287,7 +330,14 @@ function collectCallTokens(body) {
 }
 
 function buildFunctionFact({ entry, src, ownerFile, lineStarts, scope }) {
-  const { fn, exportedName, localName, declarationKind } = entry;
+  const {
+    fn,
+    exportedName,
+    localName,
+    declarationKind,
+    visibility = 'exported',
+    exported = true,
+  } = entry;
   const body = functionBodyNode(fn);
   if (!body) return null;
 
@@ -307,6 +357,8 @@ function buildFunctionFact({ entry, src, ownerFile, lineStarts, scope }) {
     identity,
     exportedName,
     localName,
+    visibility,
+    exported,
     ownerFile,
     line: startLine,
     endLine,
@@ -379,7 +431,7 @@ export function extractFunctionCloneFilePayload({ src, relFile, scope }) {
 
   const lineStarts = computeLineStarts(src);
   const facts = [];
-  for (const entry of topLevelExportedFunctions(parsed.program)) {
+  for (const entry of topLevelFunctions(parsed.program)) {
     const fact = buildFunctionFact({
       entry,
       src,
@@ -434,6 +486,7 @@ function groupFacts(facts, key, {
       identities: sorted.map((m) => m.identity),
       ownerFiles: [...new Set(sorted.map((m) => m.ownerFile))].sort(),
       exportedNames: [...new Set(sorted.map((m) => m.exportedName))].sort(),
+      visibilities: [...new Set(sorted.map((m) => m.visibility ?? 'exported'))].sort(),
       lines: sorted.map((m) => ({ identity: m.identity, file: m.ownerFile, line: m.line })),
       bodyLocRange: [
         Math.min(...sorted.map((m) => m.bodyLoc ?? 0)),
@@ -469,6 +522,8 @@ function groupSignatureFacts(facts, { minSize = FUNCTION_CLONE_NEAR_THRESHOLDS.m
       .slice()
       .sort((a, b) => a.identity.localeCompare(b.identity));
     const generatedOnly = sorted.every((m) => !!m.generatedFile);
+    const visibilities = [...new Set(sorted.map((m) => m.visibility ?? 'exported'))].sort();
+    const hasFileLocal = visibilities.includes('file-local');
     groups.push({
       kind: 'function-signature-group',
       hash: signatureHash,
@@ -479,8 +534,11 @@ function groupSignatureFacts(facts, { minSize = FUNCTION_CLONE_NEAR_THRESHOLDS.m
       identities: sorted.map((m) => m.identity),
       ownerFiles: [...new Set(sorted.map((m) => m.ownerFile))].sort(),
       exportedNames: [...new Set(sorted.map((m) => m.exportedName))].sort(),
+      visibilities,
       lines: sorted.map((m) => ({ identity: m.identity, file: m.ownerFile, line: m.line })),
-      reason: 'same normalized exported function type signature; review cue only; not proof of semantic equivalence or a merge recommendation',
+      reason: hasFileLocal
+        ? 'same normalized function type signature; file-local helpers are review cues only; not import/reuse proof or a merge recommendation'
+        : 'same normalized exported function type signature; review cue only; not proof of semantic equivalence or a merge recommendation',
     });
   }
 
@@ -735,6 +793,8 @@ export function assembleFunctionCloneArtifact({
       ...(incremental ? { incremental } : {}),
       supports: {
         exportedTopLevelFunctions: true,
+        fileLocalTopLevelFunctions: true,
+        functionFactVisibility: true,
         exportedConstArrowFunctions: true,
         defaultFunctionExports: true,
         exactBodyHash: true,

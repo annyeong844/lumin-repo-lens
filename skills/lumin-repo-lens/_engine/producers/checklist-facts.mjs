@@ -852,7 +852,7 @@ const artifact = {
     { item: 'A1', reason: 'summary of A2-A6 — synthesize after reading sub-items' },
     { item: 'A3', reason: 'helper zoo — needs per-file export fan-in map; symbols.json currently emits only topSymbolFanIn (top 50)' },
     { item: 'A4', reason: 'over-split — needs per-file fanIn/fanOut; topology.json currently emits only top lists' },
-    { item: 'B1', reason: 'broader duplicate implementation still requires LLM review; B1_duplicate_implementation covers exported top-level exact body, same-structure, same-signature, and near function clone cues only' },
+    { item: 'B1', reason: 'broader duplicate implementation still requires LLM review; B1_duplicate_implementation covers top-level exported and file-local exact body, same-structure, same-signature, and near function clone cues only' },
     { item: 'B2', reason: 'broader shared-shape drift still requires domain/vocab judgment; nearShapeCandidates are artifact-backed review cues only' },
     { item: 'B4', reason: 'pipeline duplication — semantic comparison across script entry points' },
     { item: 'C1', reason: 'cohesion / SRP — LLM reads file name vs body alignment' },

@@ -189,7 +189,7 @@ inputs are available. If an optional artifact is still absent, `[확인
 
 ### B1. 중복 구현, 복붙, 유사 로직의 병렬 유지가 존재하는가?
 
-**Evidence sources:** `checklist-facts.json.B1B2_shape_drift` when `shape-index.json` is present (exact exported type shape plus near-shape review cues), `checklist-facts.json.B1_duplicate_implementation` when `function-clones.json` is present, `shape-index.json` for raw groups, `function-clones.json` for exported top-level function-body clone cues, `call-graph.json.semiDeadList[]` (imports never called) for post-refactor duplicates, and `level2-methods.json.topMethods` with the same signature across multiple files for duplicate API surface.
+**Evidence sources:** `checklist-facts.json.B1B2_shape_drift` when `shape-index.json` is present (exact exported type shape plus near-shape review cues), `checklist-facts.json.B1_duplicate_implementation` when `function-clones.json` is present, `shape-index.json` for raw groups, `function-clones.json` for top-level exported and file-local function-body clone cues, `call-graph.json.semiDeadList[]` (imports never called) for post-refactor duplicates, and `level2-methods.json.topMethods` with the same signature across multiple files for duplicate API surface.
 **LLM judgment:** yes — `shape-index.json` supports exact and near type-shape evidence; `function-clones.json` supports exact-body, same-structure, and near-function candidate cues. These cues are not proof of semantic equivalence. Read the cited source ranges before calling helpers duplicated, and never recommend merge/refactor from clone artifacts alone.
 
 ### B2. shared shape가 여러 곳에 흩어져 함께 썩는 구조는 아닌가?

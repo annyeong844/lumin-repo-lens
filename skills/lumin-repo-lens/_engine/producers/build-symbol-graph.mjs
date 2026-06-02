@@ -805,6 +805,8 @@ function addSfcFrameworkConventionComponent(use) {
       : {}),
     ...(use.directiveName ? { directiveName: use.directiveName } : {}),
     ...(use.actionName ? { actionName: use.actionName } : {}),
+    ...(use.subscriptionName ? { subscriptionName: use.subscriptionName } : {}),
+    ...(use.storeName ? { storeName: use.storeName } : {}),
     ...(use.macroName ? { macroName: use.macroName } : {}),
     ...(use.optionName ? { optionName: use.optionName } : {}),
     ...(use.hookName ? { hookName: use.hookName } : {}),

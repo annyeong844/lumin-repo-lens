@@ -463,7 +463,7 @@ function artifactMapLines({ manifest, checklistFacts, fixPlan, topology, discipl
     lines.push('- `shape-index.json`: exact shape-hash facts for full-profile B1/B2 review.');
   }
   if (functionClones || produced.has('function-clones.json')) {
-    lines.push('- `function-clones.json`: exported top-level function-body clone cues; candidates require source review before merge advice.');
+    lines.push('- `function-clones.json`: top-level exported and file-local function-body clone cues; candidates require source review before merge advice.');
   }
   if (produced.has('barrels.json')) {
     lines.push('- `barrels.json`: barrel discipline evidence for full-profile C7 review.');
