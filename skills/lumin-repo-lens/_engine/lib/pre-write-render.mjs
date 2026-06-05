@@ -610,16 +610,17 @@ export function renderMarkdown(advisory) {
     out.push('');
   }
 
-  if ((advisory.intentWarnings?.length ?? 0) > 0) {
+  const intentWarningLines = (advisory.intentWarnings ?? [])
+    // Compact intents default missing array keys; keep that in JSON, not noisy Markdown.
+    .filter((warning) => warning?.kind !== 'missing-intent-key-defaulted')
+    .flatMap((warning) => [
+      `- Intent warning: \`${warning?.kind ?? 'unknown'}\`.`,
+      '  [grounded, pre-write intent schema normalization]',
+    ]);
+  if (intentWarningLines.length > 0) {
     out.push('### Intent schema notes');
     out.push('');
-    const keys = advisory.intentWarnings
-      .filter((w) => w.kind === 'missing-intent-key-defaulted')
-      .map((w) => w.key);
-    if (keys.length > 0) {
-      out.push(`- Missing top-level intent keys defaulted to empty arrays: ${keys.map((k) => `\`${k}\``).join(', ')}.`);
-      out.push('  [grounded, pre-write intent schema normalization]');
-    }
+    out.push(...intentWarningLines);
     out.push('');
   }
 
