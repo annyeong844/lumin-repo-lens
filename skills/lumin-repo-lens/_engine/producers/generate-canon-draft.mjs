@@ -168,7 +168,7 @@ if (source === 'helper-registry') {
   // Resolver wrapper — normalizes sentinels to null (only real file paths
   // count as "resolved" for helper-owner attribution).
   const repoMode = detectRepoMode(ROOT);
-  const aliasMap = buildAliasMap(ROOT, repoMode);
+  const aliasMap = buildAliasMap(ROOT, repoMode, { exclude: args.exclude });
   const rawResolver = makeResolver(ROOT, aliasMap);
   function resolveSpecifier(fromFile, spec) {
     const r = rawResolver(fromFile, spec);

@@ -44,7 +44,7 @@ if (repoMode.mode === 'single-package') {
 }
 
 // ─── Monorepo path ────────────────────────────────────────
-const aliasMap = buildAliasMap(ROOT, repoMode);
+const aliasMap = buildAliasMap(ROOT, repoMode, { exclude: cli.exclude });
 const rootBarrelSpecs = new Set();
 const subpathPrefixes = new Set();
 

@@ -275,7 +275,7 @@ export function buildEntrySurfaceArtifact({
   includeTests = true,
   exclude = [],
 }) {
-  const aliasMap = buildAliasMap(root, repoMode);
+  const aliasMap = buildAliasMap(root, repoMode, { exclude });
   const resolve = makeResolver(root, aliasMap);
   const submoduleOf = buildSubmoduleResolver(root, repoMode);
   const knownFiles = collectKnownFiles({ root, symbolsData, includeTests, exclude });

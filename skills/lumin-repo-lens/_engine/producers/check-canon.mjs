@@ -121,7 +121,7 @@ function dispatchHelperRegistry() {
     exclude: cli.exclude,
   });
   const repoMode = detectRepoMode(cli.root);
-  const aliasMap = buildAliasMap(cli.root, repoMode);
+  const aliasMap = buildAliasMap(cli.root, repoMode, { exclude: cli.exclude });
   const rawResolver = makeResolver(cli.root, aliasMap);
   function resolveSpecifier(fromFile, spec) {
     const r = rawResolver(fromFile, spec);

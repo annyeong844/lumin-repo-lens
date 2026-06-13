@@ -61,27 +61,38 @@ if (verbose) console.error(`[m2s1] root: ${root}`);
 const repoMode = detectRepoMode(root);
 if (verbose) console.error(`[m2s1] mode: ${repoMode.mode}, workspaces: ${repoMode.workspaceDirs.length}`);
 
-const aliasMap = buildAliasMap(root, repoMode);
+const aliasMap = buildAliasMap(root, repoMode, { exclude: cli.exclude });
 if (verbose) console.error(`[m2s1] alias entries: ${aliasMap.size}`);
 
 const resolve = makeResolver(root, aliasMap);
-const pyEnabled = isPythonAvailable();
-const tsEnabled = await isTreeSitterAvailable();
-const langList = [...JS_FAMILY_LANGS];
-if (pyEnabled) langList.push('py');
-if (tsEnabled) langList.push('go');
-const files = phaseTimer.runPhase('collect-files', () => collectFiles(root, {
+const candidateLangList = [...JS_FAMILY_LANGS, 'py', 'go'];
+const candidateFiles = phaseTimer.runPhase('collect-files', () => collectFiles(root, {
   includeTests: cli.includeTests,
   exclude: cli.exclude,
-  languages: langList,
+  languages: candidateLangList,
 }));
+const pyCandidates = candidateFiles.filter((f) => f.endsWith('.py'));
+const goCandidates = candidateFiles.filter((f) => f.endsWith('.go'));
+const pyEnabled = pyCandidates.length > 0 ? isPythonAvailable() : false;
+const tsEnabled = goCandidates.length > 0 ? await isTreeSitterAvailable() : false;
+const files = candidateFiles.filter((f) => {
+  if (f.endsWith('.py')) return pyEnabled;
+  if (f.endsWith('.go')) return tsEnabled;
+  return true;
+});
 phaseTimer.setCounter('filesCollected', files.length);
-const pyTotal = files.filter((f) => f.endsWith('.py')).length;
-const goTotal = files.filter((f) => f.endsWith('.go')).length;
+const pyTotal = pyCandidates.length;
+const goTotal = goCandidates.length;
+const pythonStatus = pyTotal === 0
+  ? 'skipped, 0 .py'
+  : `${pyEnabled ? 'on' : 'off'}, ${pyTotal} .py`;
+const goStatus = goTotal === 0
+  ? 'skipped, 0 .go'
+  : `${tsEnabled ? 'on' : 'off'}, ${goTotal} .go`;
 console.error(
-  `[m2s1] scanning ${files.length} files (python=${pyEnabled ? `on, ${pyTotal} .py` : 'off'}, go=${tsEnabled ? `on, ${goTotal} .go` : 'off'}) ...`
+  `[m2s1] scanning ${files.length} files (python=${pythonStatus}, go=${goStatus}) ...`
 );
-const goModule = goTotal > 0 ? findGoModule(root) : null;
+const goModule = goTotal > 0 && tsEnabled ? findGoModule(root) : null;
 if (goTotal > 0 && verbose) console.error(`[m2s1] go.mod: ${goModule?.moduleName ?? 'none'}`);
 
 // ─── per-file processor (pure: file → {loc, edges, externalCount, unresolvedCount, parseError}) ─
@@ -92,11 +103,18 @@ if (goTotal > 0 && verbose) console.error(`[m2s1] go.mod: ${goModule?.moduleName
 let pyResults = new Map();
 let tsResults = new Map(); // tree-sitter results (go, future: rust, java...)
 const scannerRiskCounts = new Map();
+const scannerFallbackExamples = new Map();
+const SCANNER_FALLBACK_EXAMPLE_LIMIT = 5;
 
-function incrementScannerRisk(reason) {
+function recordScannerFallbackRisk(reason, file) {
   const key = String(reason ?? 'unknown');
   scannerRiskCounts.set(key, (scannerRiskCounts.get(key) ?? 0) + 1);
   phaseTimer.incrementCounter(`scannerRisk_${key}`);
+  const examples = scannerFallbackExamples.get(key) ?? [];
+  if (examples.length < SCANNER_FALLBACK_EXAMPLE_LIMIT) {
+    examples.push(relPath(root, file));
+    scannerFallbackExamples.set(key, examples);
+  }
 }
 
 function resolveTopologyEdge(fromFile, source, flags, edgesOut) {
@@ -192,7 +210,7 @@ function processFileTs(f) {
     };
   }
   phaseTimer.incrementCounter('scannerFallbackFiles');
-  for (const reason of scanned.risk ?? []) incrementScannerRisk(reason);
+  for (const reason of scanned.risk ?? []) recordScannerFallbackRisk(reason, f);
 
   // v0.6.8 FP-18 sync-back: dynamic `import('./x')` edges must surface in
   // topology — SKILL.md promises dynamic imports are ALWAYS in both the
@@ -471,6 +489,8 @@ const artifact = {
       scannerFallbackFiles: phaseTimer.counters.scannerFallbackFiles ?? 0,
       scannerMs: phaseTimer.counters.scannerMs ?? 0,
       scannerRiskCounts: Object.fromEntries([...scannerRiskCounts.entries()].sort(([a], [b]) =>
+        a.localeCompare(b))),
+      scannerFallbackExamples: Object.fromEntries([...scannerFallbackExamples.entries()].sort(([a], [b]) =>
         a.localeCompare(b))),
       oxcParseCalls: phaseTimer.counters.oxcParseCalls ?? 0,
       oxcParseErrors: phaseTimer.counters.oxcParseErrors ?? 0,

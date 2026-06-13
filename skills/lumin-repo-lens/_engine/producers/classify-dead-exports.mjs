@@ -122,7 +122,7 @@ if (candidateLimitApplied) {
 // dependents may import from it, so the internal-use count is misleading.
 // This block owns the graph walk; policies.mjs stays pure.
 const repoMode = detectRepoMode(ROOT);
-const aliasMap = buildAliasMap(ROOT, repoMode);
+const aliasMap = buildAliasMap(ROOT, repoMode, { exclude });
 const resolve = makeResolver(ROOT, aliasMap);
 const submoduleOf = buildSubmoduleResolver(ROOT, repoMode);
 const isVitePress = detectVitePress(repoMode.rootPkgJson, repoMode.workspaceDirs);

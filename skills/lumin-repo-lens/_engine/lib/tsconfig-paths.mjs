@@ -43,23 +43,28 @@
 import { readdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { buildExcludeRules, isExcludedPath } from './scan-excludes.mjs';
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next',
   'out', 'coverage', '.turbo', '.cache', 'vendor',
 ]);
 
-function walk(root, acc) {
+function walk(root, acc, options = {}) {
+  const scanRoot = options.scanRoot ?? root;
+  const excludeRules = options.excludeRules ?? [];
   let entries;
   try { entries = readdirSync(root, { withFileTypes: true }); }
   catch { return; }
   for (const e of entries) {
+    const full = path.join(root, e.name);
     if (e.isDirectory()) {
       if (SKIP_DIRS.has(e.name)) continue;
-      walk(path.join(root, e.name), acc);
+      if (isExcludedPath(scanRoot, full, excludeRules, { directory: true })) continue;
+      walk(full, acc, options);
     } else if (e.isFile()) {
       if (e.name === 'tsconfig.json' || /^tsconfig\..+\.json$/.test(e.name)) {
-        acc.push(path.join(root, e.name));
+        if (!isExcludedPath(scanRoot, full, excludeRules)) acc.push(full);
       }
     }
   }
@@ -119,8 +124,8 @@ const toFwdSlash = (p) => (typeof p === 'string' ? p.replace(/\\/g, '/') : p);
  *
  * Path-shaped fields are always forward-slash (even on Windows).
  */
-export function discoverScopedTsconfigPaths(root) {
-  return discoverScopedTsconfigResolution(root).paths;
+export function discoverScopedTsconfigPaths(root, options = {}) {
+  return discoverScopedTsconfigResolution(root, options).paths;
 }
 
 /**
@@ -131,9 +136,10 @@ export function discoverScopedTsconfigPaths(root) {
  * list so the resolver can treat missing files as local blindness, while
  * ordinary package names such as `react` still fall through as external.
  */
-export function discoverScopedTsconfigResolution(root) {
+export function discoverScopedTsconfigResolution(root, options = {}) {
   const files = [];
-  walk(root, files);
+  const excludeRules = buildExcludeRules(options.exclude ?? []);
+  walk(root, files, { scanRoot: root, excludeRules });
   const pathEntries = [];
   const baseUrlEntries = [];
   const declarationDirEntries = [];

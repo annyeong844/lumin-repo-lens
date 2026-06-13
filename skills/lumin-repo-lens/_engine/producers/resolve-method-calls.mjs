@@ -20,7 +20,7 @@ const { root: ROOT, output, verbose } = cli;
 const focusClass = cli.raw['focus-class'];
 
 const repoMode = detectRepoMode(ROOT);
-const aliasMap = buildAliasMap(ROOT, repoMode);
+const aliasMap = buildAliasMap(ROOT, repoMode, { exclude: cli.exclude });
 
 // Build tsc paths from aliasMap entries (filter exact only for simplicity)
 const tscPaths = {};

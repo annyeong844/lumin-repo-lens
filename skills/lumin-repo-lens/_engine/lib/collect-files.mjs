@@ -15,6 +15,7 @@ import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { isTestLikePath } from './test-paths.mjs';
 import { JS_FAMILY_LANGS } from './lang.mjs';
+import { buildExcludeRules, isExcludedPath } from './scan-excludes.mjs';
 
 const CANONICAL_MARKERS = new Set([
   'src', 'lib', 'bin', 'types', 'apps', 'packages',
@@ -47,56 +48,6 @@ function normalizeCollectOptions(opts) {
     extSet: new Set(languages.map((e) => '.' + e)),
     excludeRules: buildExcludeRules(exclude),
   };
-}
-
-function normalizeExcludePattern(pattern) {
-  return String(pattern ?? '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^\*\//, '')
-    .replace(/\/\*$/, '')
-    .replace(/^\.\//, '')
-    .replace(/^\/+/, '')
-    .replace(/\/+$/, '');
-}
-
-function buildExcludeRules(exclude) {
-  // User-supplied exclude patterns are intentionally conservative:
-  //   --exclude build       prunes a `build/` directory segment
-  //   --exclude src/a.ts    excludes that exact path suffix
-  //   --exclude skip-me.js  excludes files with that basename
-  //
-  // This preserves the original directory-boundary behavior (so
-  // `build-index.ts` is not removed by `--exclude build`) while making
-  // explicit file-path excludes work as users expect.
-  return exclude
-    .map((p) => normalizeExcludePattern(p))
-    .filter(Boolean)
-    .map((pattern) => {
-      const lastSegment = pattern.split('/').at(-1) ?? pattern;
-      const fileLike = /\.[^/]+$/.test(lastSegment);
-      return fileLike
-        ? { kind: 'file', pattern }
-        : { kind: 'directory', needle: '/' + pattern + '/' };
-    });
-}
-
-function boundedRelativePath(root, full, { directory = false } = {}) {
-  const rel = path.relative(root, full).split(path.sep).join('/');
-  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) {
-    const normalized = full.replace(/\\/g, '/').replace(/^\/+/, '');
-    return '/' + normalized + (directory ? '/' : '');
-  }
-  return '/' + rel + (directory ? '/' : '');
-}
-
-function isExcludedPath(root, full, excludeRules, { directory = false } = {}) {
-  const normalized = boundedRelativePath(root, full, { directory });
-  return excludeRules.some((rule) => {
-    if (rule.kind === 'directory') return normalized.includes(rule.needle);
-    if (directory) return false;
-    return normalized.endsWith('/' + rule.pattern);
-  });
 }
 
 function readDirOrNull(dir) {

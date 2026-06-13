@@ -219,7 +219,7 @@ function collectRisk(code) {
   return risk;
 }
 
-function collectDynamicImportEdges({ code, strings, templates, edges, risk, lineAtIndex }) {
+function collectDynamicImportEdges({ code, strings, edges, risk, lineAtIndex }) {
   const dynamicRe = /\bimport\s*\(\s*([^)\s,]+)(\s*,)?/g;
   for (const match of code.matchAll(dynamicRe)) {
     const arg = match[1];
@@ -236,12 +236,6 @@ function collectDynamicImportEdges({ code, strings, templates, edges, risk, line
       continue;
     }
     risk.add('non-literal-dynamic-import');
-  }
-
-  for (const [id, template] of templates.entries()) {
-    if (template.interpolated && code.includes(`__TPL${id}__`)) {
-      risk.add('scanner-state-ambiguous');
-    }
   }
 }
 
@@ -280,12 +274,12 @@ function collectExportEdges({ code, strings, edges, lineAtIndex }) {
 export function scanJsModuleEdgesFast(source, options = {}) {
   const src = String(source ?? '');
   const sourceLineAt = createLineLookup(src);
-  const { code, strings, templates, risk } = tokenizeForModuleScanner(src, sourceLineAt);
+  const { code, strings, risk } = tokenizeForModuleScanner(src, sourceLineAt);
   const codeLineAt = createLineLookup(code);
   for (const item of collectRisk(code)) risk.add(item);
 
   const edges = [];
-  collectDynamicImportEdges({ code, strings, templates, edges, risk, lineAtIndex: codeLineAt });
+  collectDynamicImportEdges({ code, strings, edges, risk, lineAtIndex: codeLineAt });
   collectImportEdges({ code, strings, edges, lineAtIndex: codeLineAt });
   collectExportEdges({ code, strings, edges, lineAtIndex: codeLineAt });
 

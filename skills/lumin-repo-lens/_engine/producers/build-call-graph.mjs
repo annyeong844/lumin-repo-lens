@@ -29,7 +29,7 @@ const phaseTimer = createProducerPhaseTimer({
 });
 
 const repoMode = detectRepoMode(ROOT);
-const aliasMap = buildAliasMap(ROOT, repoMode);
+const aliasMap = buildAliasMap(ROOT, repoMode, { exclude: cli.exclude });
 const _resolveRaw = makeResolver(ROOT, aliasMap);
 const resolveSpecifier = (from, spec) => {
   const r = _resolveRaw(from, spec);

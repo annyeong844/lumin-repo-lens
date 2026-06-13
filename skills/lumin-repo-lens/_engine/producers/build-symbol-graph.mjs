@@ -109,7 +109,7 @@ const languageSupport = {
 };
 
 const repoMode = detectRepoMode(ROOT);
-const aliasMap = buildAliasMap(ROOT, repoMode);
+const aliasMap = buildAliasMap(ROOT, repoMode, { exclude: cli.exclude });
 const _resolveRaw = makeResolver(ROOT, aliasMap);
 // Extension-aware resolver: Python files use the Python module resolver;
 // anything else falls through to the TS/JS alias-aware resolver. EXTERNAL

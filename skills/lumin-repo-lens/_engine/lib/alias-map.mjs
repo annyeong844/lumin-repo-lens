@@ -746,10 +746,12 @@ function addHashImports(map, pkgDir, pkgJson) {
   }
 }
 
-export function buildAliasMap(root, repoMode) {
+export function buildAliasMap(root, repoMode, options = {}) {
   const map = new Map();
   const packages = listPackageDirs(root, repoMode);
-  const tsconfigResolution = discoverScopedTsconfigResolution(root);
+  const tsconfigResolution = discoverScopedTsconfigResolution(root, {
+    exclude: options.exclude ?? [],
+  });
 
   for (const pkgDir of packages) {
     // readJsonFile returns null on missing OR malformed — either way we
