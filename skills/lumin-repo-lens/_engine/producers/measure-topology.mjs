@@ -2,9 +2,11 @@
 // m2s1-topology.mjs — File-level import graph (parameterized)
 //
 // Usage:
-//   node m2s1-topology.mjs --root <repo> [--output <dir>] [--include-tests] [--verbose]
+//   node measure-topology.mjs --root <repo> [--output <dir>] [--include-tests] \
+//        [--include-type-edges] [--cache-root <dir>] [--no-incremental] \
+//        [--clear-incremental-cache] [--verbose]
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { parseOxcOrThrow } from '../lib/parse-oxc.mjs';
@@ -27,6 +29,10 @@ import {
   cacheBanner,
 } from '../lib/incremental.mjs';
 import {
+  clearIncrementalCache,
+  openIncrementalCacheStore,
+} from '../lib/incremental-cache-store.mjs';
+import {
   isPythonAvailable,
   extractPythonBatch,
   resolvePythonImport,
@@ -40,7 +46,9 @@ import {
 import { createProducerPhaseTimer } from '../lib/producer-phase-timing.mjs';
 
 const cli = parseCliArgs({
-  incremental: { type: 'boolean', default: false },
+  'no-incremental': { type: 'boolean', default: false },
+  'cache-root': { type: 'string' },
+  'clear-incremental-cache': { type: 'boolean', default: false },
   'include-type-edges': { type: 'boolean', default: false },
 });
 const { root, output, verbose } = cli;
@@ -48,7 +56,15 @@ const phaseTimer = createProducerPhaseTimer({
   producer: 'measure-topology.mjs',
   output,
 });
-const isIncremental = !!cli.raw.incremental;
+const isIncremental = cli.raw['no-incremental'] !== true;
+const cacheStore = openIncrementalCacheStore({
+  root,
+  cacheRoot: cli.raw['cache-root'],
+});
+if (cli.raw['clear-incremental-cache'] === true) {
+  clearIncrementalCache(cacheStore);
+}
+const topologyCacheDir = path.join(cacheStore.repoCacheDir, 'legacy');
 // Two lenses for SCC analysis:
 //   default (runtime lens) — type-only imports excluded; tracks what actually
 //     ships to production. `import type {X}` is erased at compile.
@@ -293,7 +309,7 @@ function processFile(f) {
 }
 
 // ─── incremental-aware processing loop ───────────────────
-const cache = isIncremental ? loadCache(output, 'topology') : { version: 1, entries: {} };
+const cache = isIncremental ? loadCache(topologyCacheDir, 'topology') : { version: 1, entries: {} };
 const { changed, unchanged, dropped, nextCache } = isIncremental
   ? pickChangedFiles(files, cache)
   : { changed: files, unchanged: [], dropped: [], nextCache: { version: 1, entries: {} } };
@@ -373,7 +389,10 @@ if (isIncremental) {
   }
 }
 
-if (isIncremental) saveCache(output, 'topology', nextCache);
+if (isIncremental) {
+  mkdirSync(topologyCacheDir, { recursive: true });
+  saveCache(topologyCacheDir, 'topology', nextCache);
+}
 
 const fanIn = new Map();
 const fanOut = new Map();

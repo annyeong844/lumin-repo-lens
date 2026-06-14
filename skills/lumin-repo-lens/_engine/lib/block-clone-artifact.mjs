@@ -604,6 +604,66 @@ function containsSpan(outer, inner) {
   );
 }
 
+function finiteGroupLimit(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return Infinity;
+  return Math.max(0, Math.floor(number));
+}
+
+function groupContainsInstances(group, instances) {
+  const groupInstances = Array.isArray(group?.instances) ? group.instances : [];
+  return instances.every((instance) =>
+    groupInstances.some((otherInstance) => containsSpan(otherInstance, instance)),
+  );
+}
+
+function containmentProbe(index, instances) {
+  let selected = null;
+  for (const instance of instances) {
+    const entries = index.get(instance.file) ?? [];
+    if (!selected || entries.length < selected.entries.length) {
+      selected = { instance, entries };
+    }
+  }
+  return selected;
+}
+
+function addGroupToContainmentIndex(index, group) {
+  for (const instance of group.instances ?? []) {
+    if (!instance?.file) continue;
+    const entries = index.get(instance.file) ?? [];
+    entries.push({ group, instance });
+    index.set(instance.file, entries);
+  }
+}
+
+export function pruneContainedBlockCloneGroups(groups, { maxGroups } = {}) {
+  const limit = finiteGroupLimit(maxGroups);
+  if (limit === 0) return [];
+  const kept = [];
+  const containmentIndex = new Map();
+
+  for (const group of [...(Array.isArray(groups) ? groups : [])].sort(
+    blockCloneGroupRank,
+  )) {
+    const instances = Array.isArray(group?.instances) ? group.instances : [];
+    const probe = containmentProbe(containmentIndex, instances);
+    const contained =
+      probe?.entries.some(
+        (entry) =>
+          containsSpan(entry.instance, probe.instance) &&
+          groupContainsInstances(entry.group, instances),
+      ) ?? false;
+    if (contained) continue;
+
+    kept.push(group);
+    addGroupToContainmentIndex(containmentIndex, group);
+    if (kept.length >= limit) break;
+  }
+
+  return kept;
+}
+
 function filterNonOverlapping(instances, limit) {
   const sorted = [...instances].sort(
     (a, b) =>
@@ -682,31 +742,9 @@ function extractGroups(values, meta, thresholds) {
     });
   }
 
-  const subsetIds = new Set();
-  for (const candidate of groups) {
-    for (const other of groups) {
-      if (candidate === other) continue;
-      if (other.tokenCount < candidate.tokenCount) continue;
-      if (
-        other.tokenCount === candidate.tokenCount &&
-        other.id.localeCompare(candidate.id) >= 0
-      )
-        continue;
-      const contained = candidate.instances.every((instance) =>
-        other.instances.some((otherInstance) =>
-          containsSpan(otherInstance, instance),
-        ),
-      );
-      if (contained) {
-        subsetIds.add(candidate.id);
-        break;
-      }
-    }
-  }
-
-  return groups
-    .filter((group) => !subsetIds.has(group.id))
-    .sort(blockCloneGroupRank);
+  return pruneContainedBlockCloneGroups(groups, {
+    maxGroups: thresholds.maxCandidateGroups + 1,
+  });
 }
 
 function isTestFile(file) {

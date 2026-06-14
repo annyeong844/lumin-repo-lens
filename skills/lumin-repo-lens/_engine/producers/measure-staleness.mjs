@@ -20,24 +20,45 @@
 // Usage:
 //   node measure-staleness.mjs --root <repo> --output <dir> \
 //        [--max-age-days 365] [--stale-age-days 90] \
-//        [--since "5 years ago"] [--skip-pickaxe]
+//        [--since "5 years ago"] [--skip-pickaxe] \
+//        [--cache-root <dir>] [--no-incremental] [--clear-incremental-cache]
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { atomicWrite } from '../lib/atomic-write.mjs';
 import { parseCliArgs } from '../lib/cli.mjs';
+import {
+  clearIncrementalCache,
+  openIncrementalCacheStore,
+} from '../lib/incremental-cache-store.mjs';
 
 const cli = parseCliArgs({
   'max-age-days': { type: 'string', default: '365' },
   'stale-age-days': { type: 'string', default: '90' },
   since: { type: 'string', default: '5 years ago' },
   'skip-pickaxe': { type: 'boolean', default: false },
+  'no-incremental': { type: 'boolean', default: false },
+  'cache-root': { type: 'string' },
+  'clear-incremental-cache': { type: 'boolean', default: false },
 });
 const { root: ROOT, output, verbose } = cli;
 const maxAgeDays = Number(cli.raw['max-age-days'] ?? 365);
 const staleAgeDays = Number(cli.raw['stale-age-days'] ?? 90);
 const sinceArg = cli.raw.since ?? '5 years ago';
 const skipPickaxe = !!cli.raw['skip-pickaxe'];
+const isIncremental = cli.raw['no-incremental'] !== true;
+const cacheStore = openIncrementalCacheStore({
+  root: ROOT,
+  cacheRoot: cli.raw['cache-root'],
+});
+if (cli.raw['clear-incremental-cache'] === true) {
+  clearIncrementalCache(cacheStore);
+}
+const stalenessCacheDir = path.join(cacheStore.repoCacheDir, 'staleness');
+const stalenessCachePath = path.join(stalenessCacheDir, 'staleness.cache.json');
+const STALENESS_CACHE_SCHEMA_VERSION = 1;
 
 // ─── git sanity ──────────────────────────────────────────
 function isGitRepo() {
@@ -64,9 +85,11 @@ if (!existsSync(symbolsPath)) {
 }
 const symbolsData = JSON.parse(readFileSync(symbolsPath, 'utf8'));
 const deadList = symbolsData.deadProdList ?? [];
-
-console.log(`[staleness] ${deadList.length} dead candidates — measuring git history ...`);
-if (verbose) console.error(`[staleness] thresholds: max=${maxAgeDays}d stale=${staleAgeDays}d since="${sinceArg}"`);
+const deadCandidatesByFile = new Map();
+for (const entry of deadList) {
+  if (!entry?.file) continue;
+  deadCandidatesByFile.set(entry.file, (deadCandidatesByFile.get(entry.file) ?? 0) + 1);
+}
 
 // ─── git helpers ─────────────────────────────────────────
 // v0.6.8 Issue 7 fix: argv-array invocation avoids shell parsing entirely.
@@ -88,6 +111,128 @@ function git(argv) {
   }
 }
 
+const gitHead = git(['rev-parse', 'HEAD']).trim() || null;
+
+function sha256(value) {
+  return `sha256:${createHash('sha256').update(value).digest('hex')}`;
+}
+
+function stalenessCacheKey() {
+  const observedDate = new Date().toISOString().slice(0, 10);
+  return sha256(JSON.stringify({
+    schemaVersion: STALENESS_CACHE_SCHEMA_VERSION,
+    gitHead,
+    observedDate,
+    thresholds: { maxAgeDays, staleAgeDays, since: sinceArg },
+    skipPickaxe,
+    deadList: deadList.map((entry) => ({
+      file: entry.file ?? null,
+      line: entry.line ?? null,
+      symbol: entry.symbol ?? null,
+      identity: entry.identity ?? null,
+    })),
+  }));
+}
+
+function emptyStalenessCache(loadStatus = 'empty') {
+  return {
+    schemaVersion: STALENESS_CACHE_SCHEMA_VERSION,
+    meta: { loadStatus },
+    entries: {},
+  };
+}
+
+function loadStalenessCache() {
+  if (!existsSync(stalenessCachePath)) return emptyStalenessCache();
+  try {
+    const parsed = JSON.parse(readFileSync(stalenessCachePath, 'utf8'));
+    if (
+      parsed?.schemaVersion !== STALENESS_CACHE_SCHEMA_VERSION ||
+      !parsed.entries ||
+      typeof parsed.entries !== 'object'
+    ) {
+      return emptyStalenessCache('ignored-incompatible');
+    }
+    return {
+      schemaVersion: STALENESS_CACHE_SCHEMA_VERSION,
+      meta: { loadStatus: 'ok' },
+      entries: parsed.entries,
+    };
+  } catch {
+    return emptyStalenessCache('ignored-malformed');
+  }
+}
+
+function saveStalenessCache(cache) {
+  mkdirSync(stalenessCacheDir, { recursive: true });
+  const stableEntries = Object.fromEntries(
+    Object.entries(cache.entries ?? {}).sort(([a], [b]) => a.localeCompare(b))
+  );
+  atomicWrite(stalenessCachePath, `${JSON.stringify({
+    schemaVersion: STALENESS_CACHE_SCHEMA_VERSION,
+    entries: stableEntries,
+  }, null, 2)}\n`);
+}
+
+function zeroPerformanceCounters() {
+  return {
+    deadCandidatesProcessed: 0,
+    fileTouchGitCalls: 0,
+    lineBlameGitCalls: 0,
+    lineBlameCacheHits: 0,
+    lineBlameCacheMisses: 0,
+    symbolPickaxeGitCalls: 0,
+  };
+}
+
+const performance = zeroPerformanceCounters();
+
+function incrementalMeta({ reusedResult, reason, cacheKey }) {
+  return {
+    enabled: isIncremental,
+    reusedResult,
+    reason,
+    cacheRoot: cacheStore.cacheRoot,
+    repoFingerprint: cacheStore.repoFingerprint,
+    cacheSchemaVersion: STALENESS_CACHE_SCHEMA_VERSION,
+    cacheKey,
+  };
+}
+
+const cacheKey = isIncremental ? stalenessCacheKey() : null;
+const stalenessCache = isIncremental ? loadStalenessCache() : emptyStalenessCache('disabled');
+if (isIncremental) {
+  const cached = stalenessCache.entries?.[cacheKey]?.artifact;
+  if (cached) {
+    const artifact = {
+      ...cached,
+      meta: {
+        ...(cached.meta ?? {}),
+        generated: new Date().toISOString(),
+        root: ROOT,
+        gitHead,
+        symbolsSource: symbolsPath,
+        incremental: incrementalMeta({
+          reusedResult: true,
+          reason: 'cache-hit',
+          cacheKey,
+        }),
+      },
+      summary: {
+        ...(cached.summary ?? {}),
+        performance: zeroPerformanceCounters(),
+      },
+    };
+    const outPath = path.join(output, 'staleness.json');
+    writeFileSync(outPath, JSON.stringify(artifact, null, 2));
+    console.log(`[staleness] reused cached result → ${outPath}`);
+    process.exit(0);
+  }
+}
+
+console.log(`[staleness] ${deadList.length} dead candidates — measuring git history ...`);
+if (verbose) console.error(`[staleness] thresholds: max=${maxAgeDays}d stale=${staleAgeDays}d since="${sinceArg}"`);
+
 const now = Math.floor(Date.now() / 1000);
 const daysSince = (ts) => (ts ? Math.floor((now - ts) / 86400) : null);
 
@@ -98,6 +243,7 @@ const isSafeIdent = (s) => /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(s);
 const fileTouchCache = new Map();
 function fileLastTouched(relFile) {
   if (fileTouchCache.has(relFile)) return fileTouchCache.get(relFile);
+  performance.fileTouchGitCalls++;
   const out = git(['log', '-1', '--format=%at', '--follow', '--', relFile]).trim();
   const ts = out ? Number(out) : null;
   fileTouchCache.set(relFile, ts);
@@ -105,14 +251,59 @@ function fileLastTouched(relFile) {
 }
 
 // ─── per-line blame ──────────────────────────────────────
+const lineBlameCache = new Map();
+function parseLineBlameTimes(out) {
+  const times = new Map();
+  let currentFinalLine = null;
+  let currentAuthorTime = null;
+  for (const line of out.split(/\r?\n/)) {
+    const header = line.match(/^[0-9a-f^]{7,64}\s+\d+\s+(\d+)(?:\s+\d+)?$/);
+    if (header) {
+      currentFinalLine = Number(header[1]);
+      currentAuthorTime = null;
+      continue;
+    }
+    const authorTime = line.match(/^author-time (\d+)$/);
+    if (authorTime) {
+      currentAuthorTime = Number(authorTime[1]);
+      continue;
+    }
+    if (line.startsWith('\t')) {
+      if (Number.isFinite(currentFinalLine) && Number.isFinite(currentAuthorTime)) {
+        times.set(currentFinalLine, currentAuthorTime);
+      }
+      currentFinalLine = null;
+      currentAuthorTime = null;
+    }
+  }
+  return times;
+}
+
+function lineBlameTimes(relFile) {
+  if (lineBlameCache.has(relFile)) {
+    performance.lineBlameCacheHits++;
+    return lineBlameCache.get(relFile);
+  }
+  performance.lineBlameCacheMisses++;
+  performance.lineBlameGitCalls++;
+  const out = git(['blame', '--line-porcelain', '--', relFile]);
+  const times = parseLineBlameTimes(out);
+  lineBlameCache.set(relFile, times);
+  return times;
+}
+
 function lineLastTouched(relFile, line) {
   // v1.3.0: defensive coercion — symbols.json is generated by our own
   // scripts but a damaged artifact shouldn't blow up staleness. Fall back
   // to line 1 if the input is non-numeric.
   const safeLine = Number.isFinite(Number(line)) ? Number(line) : 1;
-  const out = git(['blame', '--porcelain', '-L', `${safeLine},${safeLine}`, '--', relFile]);
-  const m = out.match(/^author-time (\d+)/m);
-  return m ? Number(m[1]) : null;
+  if ((deadCandidatesByFile.get(relFile) ?? 0) <= 1) {
+    performance.lineBlameGitCalls++;
+    const out = git(['blame', '--porcelain', '-L', `${safeLine},${safeLine}`, '--', relFile]);
+    const m = out.match(/^author-time (\d+)/m);
+    return m ? Number(m[1]) : null;
+  }
+  return lineBlameTimes(relFile).get(safeLine) ?? null;
 }
 
 // ─── symbol name global last-mention (pickaxe) ───────────
@@ -134,6 +325,7 @@ function symbolLastMention(symbol) {
   const argv = ['log'];
   if (sinceArg) argv.push(`--since=${sinceArg}`);
   argv.push(`-S${symbol}`, '--format=%at', '-1');
+  performance.symbolPickaxeGitCalls++;
   const out = git(argv).trim();
   const result = out ? { status: 'warm', ts: Number(out) } : { status: 'cold', ts: null };
   symbolMentionCache.set(symbol, result);
@@ -195,6 +387,7 @@ for (let i = 0; i < deadList.length; i++) {
     console.error(`[staleness] ${i + 1}/${deadList.length}`);
   }
 
+  performance.deadCandidatesProcessed++;
   const fileTs = fileLastTouched(d.file);
   const lineTs = lineLastTouched(d.file, d.line);
   const mention = symbolLastMention(d.symbol);
@@ -258,7 +451,6 @@ if (recentRisky.length) {
 }
 
 // ─── save artifact ───────────────────────────────────────
-const gitHead = git(['rev-parse', 'HEAD']).trim() || null;
 const artifact = {
   meta: {
     generated: new Date().toISOString(),
@@ -268,15 +460,26 @@ const artifact = {
     symbolsSource: symbolsPath,
     thresholds: { maxAgeDays, staleAgeDays, since: sinceArg },
     skipPickaxe,
+    incremental: incrementalMeta({
+      reusedResult: false,
+      reason: isIncremental ? 'cache-miss' : 'disabled',
+      cacheKey,
+    }),
   },
   summary: {
     total: enriched.length,
     byTier,
     byGrounding,
     pickaxeCacheSize: symbolMentionCache.size,
+    performance,
   },
   enriched,
 };
+
+if (isIncremental && cacheKey) {
+  stalenessCache.entries[cacheKey] = { artifact };
+  saveStalenessCache(stalenessCache);
+}
 
 const outPath = path.join(output, 'staleness.json');
 writeFileSync(outPath, JSON.stringify(artifact, null, 2));

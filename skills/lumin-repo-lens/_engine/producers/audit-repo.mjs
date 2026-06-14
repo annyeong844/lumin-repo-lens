@@ -302,6 +302,8 @@ if (values['clear-incremental-cache'] === true) {
 const commandsRun = [];
 const skipped = [];
 const INCREMENTAL_PRODUCER_STEPS = new Set([
+  'measure-topology.mjs',
+  'measure-staleness.mjs',
   'build-symbol-graph.mjs',
   'build-shape-index.mjs',
   'build-function-clone-index.mjs',
