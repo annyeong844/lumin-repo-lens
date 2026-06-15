@@ -20,6 +20,7 @@ import { parseCliArgs } from "../lib/cli.mjs";
 import {
   buildContextFingerprint,
   buildRepoSnapshot,
+  hashBytes,
   hashJson,
   STRICT_IDENTITY_MODE,
 } from "../lib/incremental-snapshot.mjs";
@@ -140,7 +141,12 @@ function cacheKeyForSnapshot(snapshotEntries) {
   });
 }
 
-function incrementalMeta({ reusedResult, reason, cacheKey }) {
+function incrementalMeta({
+  reusedResult,
+  reason,
+  cacheKey,
+  snapshotContentChangedFiles = [],
+}) {
   if (!incrementalEnabled) {
     return {
       enabled: false,
@@ -158,6 +164,9 @@ function incrementalMeta({ reusedResult, reason, cacheKey }) {
     cacheKey,
     reusedResult,
     reason,
+    ...(snapshotContentChangedFiles.length > 0
+      ? { snapshotContentChangedFiles: [...snapshotContentChangedFiles].sort() }
+      : {}),
   };
 }
 
@@ -243,39 +252,60 @@ if (incrementalEnabled) {
 }
 
 const tokenized = phaseTimer.runPhase("tokenize-files", () =>
-  snapshotEntries.map((entry) => {
-    if (!entry.readable) return readErrorTokenPayload(entry);
-    let src = "";
-    try {
-      src = readFileSync(entry.absPath, "utf8");
-    } catch (error) {
-      return {
-        relFile: entry.relPath,
-        tokens: [],
-        skipped: null,
-        diagnostics: [
-          {
-            file: entry.relPath,
-            kind: "read-error",
-            message: error?.message ?? String(error),
-          },
-        ],
-      };
-    }
-    return tokenizeBlockCloneSource({ root: ROOT, filePath: entry.absPath, src });
-  }),
+  {
+    const snapshotContentChangedFiles = new Set();
+    const files = snapshotEntries.map((entry) => {
+      if (!entry.readable) return readErrorTokenPayload(entry);
+      let bytes = null;
+      try {
+        bytes = readFileSync(entry.absPath);
+      } catch (error) {
+        snapshotContentChangedFiles.add(entry.relPath);
+        return {
+          relFile: entry.relPath,
+          tokens: [],
+          skipped: null,
+          diagnostics: [
+            {
+              file: entry.relPath,
+              kind: "read-error",
+              message: error?.message ?? String(error),
+            },
+          ],
+        };
+      }
+      const contentHash = hashBytes(bytes);
+      if (entry.contentHash && contentHash !== entry.contentHash) {
+        snapshotContentChangedFiles.add(entry.relPath);
+      }
+      const src = bytes.toString("utf8");
+      return tokenizeBlockCloneSource({
+        root: ROOT,
+        filePath: entry.absPath,
+        src,
+      });
+    });
+    return {
+      files,
+      snapshotContentChangedFiles: [...snapshotContentChangedFiles].sort(),
+    };
+  },
 );
-phaseTimer.setCounter("tokenizedFiles", tokenized.length);
+phaseTimer.setCounter("tokenizedFiles", tokenized.files.length);
+phaseTimer.setCounter(
+  "snapshotContentChangedFiles",
+  tokenized.snapshotContentChangedFiles.length,
+);
 phaseTimer.setCounter(
   "tokenCount",
-  tokenized.reduce((sum, file) => sum + (file.tokens?.length ?? 0), 0),
+  tokenized.files.reduce((sum, file) => sum + (file.tokens?.length ?? 0), 0),
 );
 
 const artifact = restampArtifact(
   phaseTimer.runPhase("assemble-artifact", () =>
     assembleBlockCloneArtifact({
       root: ROOT,
-      files: tokenized,
+      files: tokenized.files,
       includeTests: cli.includeTests,
       exclude: cli.exclude ?? [],
       generated: producerMetaBase({
@@ -286,12 +316,18 @@ const artifact = restampArtifact(
   ),
   incrementalMeta({
     reusedResult: false,
-    reason: incrementalEnabled ? "cache-miss" : "disabled-by-flag",
+    reason:
+      incrementalEnabled && tokenized.snapshotContentChangedFiles.length > 0
+        ? "snapshot-content-changed"
+        : incrementalEnabled
+          ? "cache-miss"
+          : "disabled-by-flag",
     cacheKey,
+    snapshotContentChangedFiles: tokenized.snapshotContentChangedFiles,
   }),
 );
 
-if (incrementalEnabled) {
+if (incrementalEnabled && tokenized.snapshotContentChangedFiles.length === 0) {
   saveBlockCloneCache({
     schemaVersion: CACHE_SCHEMA_VERSION,
     entries: {
