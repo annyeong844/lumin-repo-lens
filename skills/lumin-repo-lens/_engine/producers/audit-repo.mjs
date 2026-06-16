@@ -262,7 +262,13 @@ const PRE_WRITE_ONLY =
   !values['canon-draft'] &&
   !values['check-canon'] &&
   !EMIT_SARIF;
-const RUN_BASE_PIPELINE = !PRE_POST_MUTEX && !PRE_WRITE_ONLY;
+const POST_WRITE_ONLY =
+  values['post-write'] &&
+  !values['pre-write'] &&
+  !values['canon-draft'] &&
+  !values['check-canon'] &&
+  !EMIT_SARIF;
+const RUN_BASE_PIPELINE = !PRE_POST_MUTEX && !PRE_WRITE_ONLY && !POST_WRITE_ONLY;
 const AUTO_EXCLUDES = values['no-self-audit-excludes']
   ? []
   : detectMaintainerSelfAuditExcludes(ROOT);
@@ -627,7 +633,9 @@ console.log(`[audit-repo] profile=${PROFILE}  root=${ROOT}  output=${OUT}`);
 if (!RUN_BASE_PIPELINE) {
   const baseSkipReason = PRE_POST_MUTEX
     ? '--pre-write and --post-write are mutually exclusive'
-    : 'pre-write-only mode uses intent-shaped cold-cache instead of full quick audit';
+    : POST_WRITE_ONLY
+      ? 'post-write-only mode uses post-write delta instead of full quick audit'
+      : 'pre-write-only mode uses intent-shaped cold-cache instead of full quick audit';
   skipped.push({
     step: 'base-audit-profile',
     reason: baseSkipReason,
